@@ -1,0 +1,336 @@
+# APF Architecture
+
+Created: 2026-08-08  Updated: 2026-08-08
+
+**Status:** draft — under review
+
+---
+
+## 1. Component Responsibilities
+
+### `apf-policy-service` — Policy Administration Point (PAP)
+
+The cloud-side authority for policy. Compiles, signs, stores, and serves policy bundles. Never evaluates requests.
+
+| Responsibility | Detail |
+|---|---|
+| Compile | Transforms `PolicyRule` documents → substrate projections via `compiler/` pipeline |
+| Sign | Signs bundles via `BundleSigner` (default Ed25519; optional private backend) |
+| Store + serve | `PolicySource` (HttpBundleSource, LocalBundleSource) serves compiled projections |
+| gRPC surface | `PolicyService`: `Health`, `GetDocument`, `ListDocuments` |
+| HTTP surface | `/health*`, `/v1/documents/*`, `/v1/refresh`, `GET /.well-known/jwks.json` |
+| Provenance | Mints JWT (`provenance_token`) on every `GetDocument` response via `DocumentSigner` |
+| Variant selection | `PolicyResolver` maps caller runtime context → bundle variant (e.g. `"governed-rw"`) |
+
+### `apf-policy-gateway` — local Policy Decision Point (PDP)
+
+Host-side enforcement anchor. Fetches and verifies bundles locally, evaluates every request in-process. Never reaches the cloud on the hot path.
+
+| Responsibility | Detail |
+|---|---|
+| Fetch | Calls `apf-policy-service` via `apf-policy-client` (`GetDocument`) |
+| Verify | Runs `apf-bundle::verify_bundle`: signature, manifest hashes, expiry, `runtime_compatibility`, monotonic counter |
+| Evaluate | Builds `CedarEvaluator` from bundle; hot-swaps via `arc-swap` on bundle refresh |
+| gRPC surface | `EvaluationService`: `rpc Evaluate` over UDS |
+| Provenance trust | Verifies `provenance_token` JWT from `GetDocument`; rotates key via JWKS watcher |
+| Audit | Bundle lifecycle events; evaluation events (wired in M5 audit milestone) |
+
+### `runtimes/openshell` — OpenShell Runtime Adapter
+
+The only place OpenShell types appear. Provides the `OpenShellProjector` which lowers APF policy IR into OpenShell-native projections at compile time, and enforces policy at runtime. Never imported by `crates/` or `components/`.
+
+| Responsibility | Detail |
+|---|---|
+| `OpenShellProjector` | Lowers `CanonicalPolicy` IR → `openshell.sandbox.v1` proto bytes and other OpenShell surfaces; registered at `apf-policy-service` startup |
+| Gateway interceptor | At sandbox admission (OpenShell control plane): fetches pre-compiled `SandboxPolicy` projection from gateway via `GetDocument`; decodes proto bytes and injects as `apf.nvidia.com/*` annotations |
+| Supervisor middleware | Per-request (OpenShell data plane): calls `EvaluationService/Evaluate` on gateway; enforces decision (allow/deny, body patches, header mutations, findings) |
+| Projection consumption | Does **not** do runtime lowering — decodes and applies already-compiled bytes only |
+
+### `apf-tool-gateway` — Tool Invocation and Relay
+
+Routes agent tool calls to host tools (CLI processes, remote MCP servers). Calls `apf-policy-gateway` for evaluation decisions before invoking a tool.
+
+| Responsibility | Detail |
+|---|---|
+| Tool relay | Receives MCP tool calls from agent; routes to `HostTool` definitions |
+| Policy check | Calls `EvaluationService/Evaluate` on gateway before each tool invocation |
+| HostTool registry | `hosttool-core`, `hosttool-runtime`, `hosttool-remote-mcp` |
+| Credential (today) | `hosttool-vault` handles credential fetch; boundary to be extracted to `apf-cred-proxy` |
+
+### `apf-cred-proxy` — Credential Procurement and Injection *(planned)*
+
+See §5 for the planned design. Handles credential lifecycle separately from policy decisions — different trust profile, different availability domain.
+
+---
+
+## 2. Component Diagram
+
+```
+  Policy Author ────────▶  apf-policy-service (PAP)
+                           • compile / sign / serve
+                           • PolicyService gRPC
+                           • JWKS endpoint
+                                    │ GetDocument (poll)
+                                    ▼
+                           apf-policy-gateway (PDP)
+                           • verify bundle (apf-bundle)
+                           • CedarEvaluator (arc-swap)
+                           • EvaluationService/Evaluate (UDS)
+                           • JWKS trust verification
+                          ┌─────────┴──────────────┐
+                          │ Evaluate (UDS)          │ SandboxPolicy projection
+                          ▼                         ▼
+              runtimes/openshell          runtimes/openshell
+              supervisor middleware       gateway interceptor
+              [OpenShell data plane]      [OpenShell control plane]
+              per-request egress          sandbox admission
+                          │
+                          ▼
+                    Agent egress
+                    (tool calls, HTTP requests)
+                          │ tool invoke
+                          ▼
+              apf-tool-gateway ──────▶ apf-cred-proxy (planned)
+              (tool relay)
+```
+
+---
+
+## 3. Positioning within OpenShell
+
+OpenShell is the first supported runtime. APF integrates at two seams:
+
+```
+OpenShell
+│
+├── Gateway Interceptor  ◀────── runtimes/openshell interceptor
+│   [OpenShell control plane]     fetches SandboxPolicy projection once per sandbox
+│   (sandbox admission)           injects as apf.nvidia.com/* annotations
+│
+└── Supervisor Middleware ◀────── runtimes/openshell middleware
+    [OpenShell data plane]        calls apf-policy-gateway EvaluationService/Evaluate
+    (per-request egress)          enforces: allow/deny, body patches, header mutations
+```
+
+The two seams map onto different OpenShell planes. APF's own control/data distinction is orthogonal: APF's control plane is policy distribution (service → gateway); both OpenShell seams sit on APF's data plane since in both cases APF is serving a decision or a projection, not distributing policy.
+
+**OpenShell owns:** sandbox lifecycle, network namespace, transport. APF does not dictate how sandboxes run.
+
+**APF owns:** what policy applies, whether a request is permitted, what the response looks like.
+
+The boundary is the `EvaluationService/Evaluate` RPC and the `SandboxPolicy` projection. A future runtime (e.g. another sandbox runtime) adds `runtimes/<runtime>/` and implements the same two seams without touching `crates/` or `components/`.
+
+---
+
+## 4. Sequence Diagrams
+
+### 4.1 Control plane — bundle distribution and hot-swap
+
+```
+Policy Author          apf-policy-service        apf-policy-gateway
+     │                        │                         │
+     │  compile + publish      │                         │
+     │───────────────────────▶│                         │
+     │                        │ sign bundle              │
+     │                        │ (BundleSigner/Ed25519)   │
+     │                        │ store in PolicySource    │
+     │                        │                         │
+     │                        │◀── GetDocument (poll) ──│  digest_watcher
+     │                        │                         │
+     │                        │  digest unchanged?       │
+     │                        │  ──── 304 / same ──────▶│  no-op
+     │                        │                         │
+     │                        │  digest changed:         │
+     │                        │── GetDocumentResponse ──▶│
+     │                        │  body + provenance_token │
+     │                        │                         │
+     │                        │                    verify_bundle()
+     │                        │                    • BundleVerifier (sig)
+     │                        │                    • manifest hashes
+     │                        │                    • expiry
+     │                        │                    • runtime_compatibility
+     │                        │                    • monotonic counter
+     │                        │                         │
+     │                        │                    verify provenance_token JWT
+     │                        │                    (JWKS-cached Ed25519 key)
+     │                        │                         │
+     │                        │                    build CedarEvaluator
+     │                        │                    arc-swap (lock-free)
+     │                        │                         │
+     │                        │                    ✓ new bundle live
+```
+
+### 4.2 Data plane — sandbox admission (gateway interceptor, OpenShell control plane)
+
+The `SandboxPolicy` bytes served here are compiled by `OpenShellProjector` inside
+`apf-policy-service` from APF `CanonicalPolicy` IR. The interceptor decodes pre-compiled
+bytes — no runtime lowering happens in `runtimes/openshell`.
+
+```
+Agent          OpenShell Gateway     runtimes/openshell     apf-policy-gateway
+  │                   │               interceptor                  │
+  │  spawn sandbox    │                    │                       │
+  │──────────────────▶│                    │                       │
+  │                   │── interceptor ────▶│                       │
+  │                   │   hook fires        │                       │
+  │                   │                    │── GetDocument ────────▶│
+  │                   │                    │   (SandboxPolicy)      │
+  │                   │                    │◀── body +              │
+  │                   │                    │    provenance_token ───│
+  │                   │                    │                       │
+  │                   │                    │  verify provenance_token
+  │                   │                    │  check digest, spec-digest
+  │                   │                    │                       │
+  │                   │                    │  inject annotations:
+  │                   │                    │  apf.nvidia.com/policy-digest
+  │                   │                    │  apf.nvidia.com/provenance-token
+  │                   │                    │                       │
+  │                   │◀── admit sandbox ──│                       │
+  │◀── sandbox ready ─│                    │                       │
+```
+
+### 4.3 Data plane — per-request evaluation (supervisor middleware)
+
+```
+Agent        OpenShell Supervisor    runtimes/openshell      apf-policy-gateway
+              Middleware              middleware adapter            (PDP)
+  │                │                       │                        │
+  │  tool call /   │                       │                        │
+  │  egress req ──▶│                       │                        │
+  │                │── middleware hook ───▶│                        │
+  │                │                       │── EvaluateHttpRequest ─▶│
+  │                │                       │   (verb, resource,     │
+  │                │                       │    args, context)      │
+  │                │                       │                        │
+  │                │                       │                  CedarEvaluator
+  │                │                       │                  .evaluate(input)
+  │                │                       │                        │
+  │                │                       │◀── EvaluateResponse ───│
+  │                │                       │    decision + obligations
+  │                │                       │    body_patches
+  │                │                       │    header_mutations
+  │                │                       │    findings
+  │                │                       │                        │
+  │                │                       │  enforce:
+  │                │                       │  DENY → reject request
+  │                │                       │  ALLOW → apply patches/mutations
+  │                │                       │                        │
+  │                │◀── enforced response ─│                        │
+  │◀── response ───│                        │                        │
+```
+
+---
+
+## 5. Planned extensions
+
+### 5.1 OpenShell response path hooks *(RFC 0009 protocol-extensions appendix)*
+
+OpenShell RFC 0009 v1 defines one hook (`PRE_CREDENTIALS`, documented in §4.3). The
+protocol-extensions appendix names two future response-path hooks. Neither is implemented
+or scheduled; they exist to validate that v1's shape is forward-compatible.
+
+**`HttpResponse/before_return`** — fires after the upstream responds, before the response
+reaches the sandbox. Allows inspection **and mutation** (e.g. redaction of upstream
+response content). This is the meaningful response hook for APF: content policy applied
+on the return path, not just on the request path.
+
+**`HttpResponse/completed`** — fires after the upstream request completes. Notification-only:
+no body, no transformation, no allow/deny. Carries metadata: status, content length,
+selected route/model, model token usage. Intended for budget-style reconciliation and
+post-call audit.
+
+**Full future sequence with all hooks:**
+
+```
+Agent        OpenShell Supervisor    runtimes/openshell      apf-policy-gateway
+              Middleware              middleware adapter
+  │                │                       │                        │
+  │  egress req ──▶│                       │                        │
+  │                │  [PRE_CREDENTIALS]     │                        │
+  │                │── hook fires ────────▶│── EvaluateHttpRequest ─▶│
+  │                │                       │◀── decision + mutations─│
+  │                │◀── enforced req ──────│   (allow/deny, patches, │
+  │                │   (credentials        │    header mutations)    │
+  │                │    injected after)    │                        │
+  │                │                       │                        │
+  │                │  (upstream call)      │                        │
+  │                │                       │                        │
+  │                │  [HttpResponse/before_return — planned]        │
+  │                │── hook fires ────────▶│── EvaluateHttpRequest ─▶│
+  │                │                       │◀── mutations ───────────│
+  │                │◀── redacted response ─│   (response redaction,  │
+  │                │                       │    header mutations)    │
+  │                │                       │                        │
+  │                │  [HttpResponse/completed — planned]            │
+  │                │── notification ──────▶│                        │
+  │                │                       │  status, token usage,   │
+  │                │                       │  route/model → audit   │
+  │◀── response ───│                       │                        │
+```
+
+**APF intended use:**
+
+| Hook | APF use |
+|---|---|
+| `PRE_CREDENTIALS` (v1) | Allow/deny + request redaction + content inspection |
+| `HttpResponse/before_return` (planned) | Response redaction; upstream content policy |
+| `HttpResponse/completed` (planned) | Budget reconciliation; post-call audit with token usage |
+
+### 5.2 `apf-cred-proxy` *(partially implemented — Spike 2 pending)*
+
+**Role:** sits between the in-sandbox agent and upstream MCP servers (Slack, GitLab, Outlook, etc.). Three responsibilities:
+
+1. **Credential swap** — looks up a vaulted OAuth token for the `(subject, service)` pair; the agent never sees raw tokens
+2. **Policy consultation** — calls `apf-policy-gateway EvaluationService/Evaluate` per call; forwards only on ALLOW
+3. **Audit capture** — emits audit events with full request context
+
+Direct sandbox egress to corporate hosts is blocked at the network namespace; cred-proxy is the only permitted path out.
+
+**Data plane position:**
+
+```
+Agent (in sandbox)
+  │  MCP tool call to external service
+  ▼
+apf-cred-proxy  ──Evaluate──▶  apf-policy-gateway
+  │                            (decision + obligations)
+  │  ALLOW:
+  │  look up vaulted token (CredentialStore)
+  │  apply redaction obligations
+  ▼
+Upstream MCP server (Slack, GitLab, etc.)
+```
+
+**Current implementation state:**
+- `CredentialStore` trait (`hosttool-vault`) — implemented. `LocalFileCredentialStore` (dev), Vault KV v2 (production target).
+- `CredentialDocument`: versioned `BTreeMap<CredentialFieldName, Zeroizing<String>>` with CAS revision.
+- Per-call MCP proxy layer (token swap + policy consultation in-line) — **deferred to Spike 2, not yet built.**
+
+**Separation rationale:**
+- Different trust profile — holds secrets; policy-gateway holds only policy data
+- Different availability domain — credential outage ≠ deny-all egress decision
+- Different lifecycle — credentials rotate independently of bundle updates
+
+**Integration roadmap with OpenShell:**
+
+| Phase | Mechanism | OpenShell changes |
+|---|---|---|
+| Short-term (v0) | `apf-tool-gateway` calls `apf-cred-proxy` directly before tool invoke | None |
+| Medium-term | Declare `apf-cred-proxy` as `token_grant` endpoint in provider profile YAML; OpenShell's existing flow calls it at sandbox create | None |
+| Long-term | gRPC `ProviderPlugin` interface — `apf-cred-proxy` registers as a named credential source at runtime | OpenShell RFC required |
+
+**Future interface:** `CredentialBackend` trait in `crates/apf-types`. Tool-gateway will call cred-proxy over a local contract for credential injection on the hosttool path too.
+
+
+---
+
+## 6. Control plane vs data plane summary
+
+| | Control plane | Data plane |
+|---|---|---|
+| **What flows** | Policy bundles and projections | Agent requests and decisions |
+| **Initiator** | Policy author → service; service → gateway (poll) | Agent → OpenShell → gateway |
+| **Latency tolerance** | Seconds to minutes (background) | Sub-millisecond (hot path) |
+| **Cloud dependency** | Required (service is the PAP) | None after bundle loaded |
+| **APF components** | `apf-policy-service`, `apf-policy-gateway` (fetch/verify) | `apf-policy-gateway` (evaluate), `runtimes/openshell`, `apf-tool-gateway` |
+| **Failure mode** | Gateway holds last known good bundle | Deny-safe: gateway denies if evaluator unavailable |
