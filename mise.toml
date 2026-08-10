@@ -1,0 +1,11 @@
+[tasks.lint]
+run = "cargo fmt --check && cargo clippy -- -D warnings && cargo deny check"
+
+[tasks.test]
+run = "cargo nextest run"
+
+[tasks.dag-guard]
+run = "cargo xtask dag-guard"
+
+[tasks.buf-lint]
+run = "buf lint contracts/"
