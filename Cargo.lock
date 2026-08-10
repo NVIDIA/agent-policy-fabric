@@ -50,6 +50,7 @@ dependencies = [
 name = "apf-policy-eval"
 version = "0.1.0"
 dependencies = [
+ "apf-proto",
  "cedar-policy",
  "regex",
  "serde_json",

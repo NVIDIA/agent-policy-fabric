@@ -7,16 +7,16 @@
 //! time — one Cedar `PolicySet` (plus optional `Schema`) per rule — and
 //! evaluates each request against all rules. Rules carry a `role`:
 //!
-//! * **`Capability`** rules grant access to specific tools. Cedar
+//! * **`Grant`** rules grant access to specific tools. Cedar
 //!   default-deny (no permit matched) means the rule is not applicable —
 //!   the evaluator skips it and continues. An explicit `forbid` always stops
-//!   evaluation. For MCP tool calls, at least one Capability rule must fire a
+//!   evaluation. For MCP tool calls, at least one Grant rule must fire a
 //!   permit; if none do, the request is denied.
 //! * **`Control`** rules enforce content policy for all traffic. Their
 //!   permits (including a baseline-allow) pass traffic through and may carry
 //!   `@apf_effect` annotations. Default-deny is still a skip; only an
 //!   explicit `forbid` stops evaluation. A Control permit does NOT count
-//!   toward the Capability requirement for MCP calls.
+//!   toward the Grant requirement for MCP calls.
 //!
 //! After all rules, effects from fired permits accumulate and are applied.
 //!
@@ -57,22 +57,8 @@ pub use effect::{
 };
 use schema::CompiledRule;
 
-/// Role of a `PolicyRule` in the evaluator's multi-rule loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PolicyRuleRole {
-    /// Grants specific capabilities to specific tools. The evaluator skips this
-    /// rule when Cedar default-denies (no permit matched) — the rule is simply
-    /// not applicable to the request. At least one `Capability` rule must fire
-    /// a permit for an MCP tool call to be allowed.
-    #[default]
-    Capability,
-    /// Controls traffic for all requests (MCP and non-MCP). Explicit forbids
-    /// stop evaluation immediately. Permits (including the baseline-allow) pass
-    /// traffic through for content inspection. A `Control` rule's permits do
-    /// NOT count toward the "at least one capability fired" requirement, so
-    /// they cannot rescue an ungranted MCP call.
-    Control,
-}
+/// Re-export so callers don't need to depend on apf-proto directly.
+pub use apf_proto::ir::PolicyRuleRole;
 
 /// One `PolicyRule` document as handed to the evaluator: a name, an optional
 /// Cedar schema, the policy statements, an opaque contributor data document,
@@ -183,10 +169,10 @@ impl Evaluator for CedarEvaluator {
         // rule bundle order and policy order within each rule.
         let mut fired_effects: Vec<String> = Vec::new();
         let mut fired_findings: Vec<String> = Vec::new();
-        // Tracks whether at least one Capability rule fired a permit. Required
+        // Tracks whether at least one Grant rule fired a permit. Required
         // for MCP tool calls; non-MCP requests bypass this check.
         let mut any_capability_fired = false;
-        // Name of the first Capability rule that covers this tool (contains the
+        // Name of the first Grant rule that covers this tool (contains the
         // tool name in its rule name) but still default-denied — used to build
         // a more specific deny message when conditions didn't match.
         let mut grant_rule_near_miss: Option<String> = None;
@@ -219,11 +205,11 @@ impl Evaluator for CedarEvaluator {
                 // Default-deny (reason() empty) means this rule is not
                 // applicable to the request — skip it and continue.
                 if response.diagnostics().reason().next().is_none() {
-                    // Record a near-miss for Capability rules whose name
+                    // Record a near-miss for Grant rules whose name
                     // contains the tool name (e.g. "slack-grants" for "slack").
                     // This distinguishes "grant rule exists but conditions failed"
                     // from "no rule covers this tool at all".
-                    if rule.role == PolicyRuleRole::Capability
+                    if rule.role == PolicyRuleRole::Grant
                         && grant_rule_near_miss.is_none()
                         && !tool_name_str.is_empty()
                         && rule.name.contains(tool_name_str)
@@ -243,9 +229,9 @@ impl Evaluator for CedarEvaluator {
                     ..EvalResult::default()
                 });
             }
-            // Cedar allow: Capability permits count toward the MCP grant check;
+            // Cedar allow: Grant permits count toward the MCP grant check;
             // Control permits do not (they handle content, not access grants).
-            if rule.role == PolicyRuleRole::Capability {
+            if rule.role == PolicyRuleRole::Grant {
                 any_capability_fired = true;
             }
             let mut refs: Vec<&effect::PolicyRefs> = response
@@ -260,7 +246,7 @@ impl Evaluator for CedarEvaluator {
             }
         }
 
-        // MCP tool calls require at least one Capability rule to have granted access.
+        // MCP tool calls require at least one Grant rule to have granted access.
         if has_tool_name && !any_capability_fired {
             let action_id = match (&input.tool, &input.capability) {
                 (Some(t), Some(c)) => format!("{t}::{c}"),
@@ -389,7 +375,7 @@ permit(
             schema: Some(OUTLOOK_SCHEMA.to_string()),
             definition: OUTLOOK_POLICIES.to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         }
     }
 
@@ -541,7 +527,7 @@ forbid(principal, action, resource) when {
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let ev = evaluator(&[rule]);
         let r = ev
@@ -565,7 +551,7 @@ forbid(principal, action, resource) when {
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let ev = evaluator(&[rule]);
         let r = ev
@@ -582,7 +568,7 @@ forbid(principal, action, resource) when {
             schema: None,
             definition: "permit(principal, action, resource);".to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let deny_first = PolicyRuleDoc {
             name: "first-deny".to_string(),
@@ -593,7 +579,7 @@ forbid(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let deny_second = PolicyRuleDoc {
             name: "second-deny".to_string(),
@@ -604,7 +590,7 @@ forbid(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
 
         let ev = evaluator(&[allow_all.clone(), deny_first, deny_second]);
@@ -629,7 +615,7 @@ forbid(principal, action, resource);
             schema: None,
             definition: "permit(principal action resource".to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[rule], &[], &[], &[]).expect_err("must fail");
         assert!(err.to_string().contains("broken"), "got: {err}");
@@ -642,7 +628,7 @@ forbid(principal, action, resource);
             schema: None,
             definition: format!("{OUTLOOK_SCHEMA}\n{OUTLOOK_POLICIES}"),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[rule], &[], &[], &[]).expect_err("must fail");
         assert!(err.to_string().contains("`schema` field"), "got: {err}");
@@ -655,7 +641,7 @@ forbid(principal, action, resource);
             schema: Some("entity User {".to_string()),
             definition: "permit(principal, action, resource);".to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[rule], &[], &[], &[]).expect_err("must fail");
         assert!(err.to_string().contains("bad-schema"), "got: {err}");
@@ -677,7 +663,7 @@ permit(
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[rule], &[], &[], &[]).expect_err("must fail");
         assert!(err.to_string().contains("mismatch"), "got: {err}");
@@ -716,7 +702,7 @@ forbid(principal, action, resource) when {
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let ev = CedarEvaluator::from_policy_rules(&[rule], &[secret_annotator()], &[], &[])
             .expect("evaluator builds");
@@ -765,7 +751,7 @@ forbid(principal, action, resource) when {
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let ev = CedarEvaluator::from_policy_rules(&[rule], &[annotator], &[], &[])
             .expect("evaluator builds");
@@ -857,7 +843,7 @@ permit(principal, action, resource) when {
             schema: None,
             definition: SECRET_STAGES_RULE.to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         CedarEvaluator::from_policy_rules(
             &[rule],
@@ -929,7 +915,7 @@ permit(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let effect = PolicyEffectDoc {
             name: "tag".to_string(),
@@ -973,7 +959,7 @@ permit(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let mk = |name: &str, verdict: crate::Verdict, header: &str| PolicyEffectDoc {
             name: name.to_string(),
@@ -1034,7 +1020,7 @@ forbid(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(
             &[rule],
@@ -1060,7 +1046,7 @@ permit(principal, action, resource);
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[effect_rule], &[], &[], &[])
             .expect_err("must fail");
@@ -1081,7 +1067,7 @@ forbid(principal, action, resource) when { context.args.folder == "archive" };
 "#
             .to_string(),
             data: serde_json::json!({}),
-            role: PolicyRuleRole::default(),
+            role: PolicyRuleRole::Grant,
         };
         let err = CedarEvaluator::from_policy_rules(&[finding_rule], &[], &[], &[])
             .expect_err("must fail");
