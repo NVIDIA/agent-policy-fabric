@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// APF policy serving surface.
+// Served by apf-policy-service over a Unix Domain Socket.
+// Substrates and gateways call this service to retrieve governed documents
+// and check service liveness.
+
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy_service.v1alpha1;
+
+import "nvidia/agent_policy_fabric/runtime/v1alpha1/runtime.proto";
+
+// PolicyService vends compiled policy documents and answers liveness probes.
+// Substrates call GetDocument on a configured freshness interval to refresh
+// their working copy of each document.
+service PolicyService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc GetDocument(GetDocumentRequest) returns (GetDocumentResponse);
+  rpc ListDocuments(ListDocumentsRequest) returns (ListDocumentsResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  HealthState state = 1;
+  // Human-readable diagnostic detail when state is not OK.
+  string detail = 2;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  // Ready to serve documents.
+  HEALTH_STATE_OK          = 1;
+  // Draining; not accepting new requests.
+  HEALTH_STATE_DRAIN       = 2;
+}
+
+// GetDocumentRequest identifies the document the caller wants and provides the
+// runtime context the server uses to select the correct artifact variant.
+message GetDocumentRequest {
+  // Surface ID of the document, e.g. "openshell.sandbox.v1".
+  string kind = 1;
+  // Logical document name within the surface, e.g. "default".
+  string name = 2;
+  // Caller identity used for variant selection and audit.
+  nvidia.agent_policy_fabric.runtime.v1alpha1.RuntimeContext runtime_context = 3;
+}
+
+// GetDocumentResponse carries the compiled artifact the substrate loads into
+// its enforcement runtime.
+message GetDocumentResponse {
+  // Substrate-native serialized artifact bytes.
+  bytes  body             = 1;
+  // Hex SHA-256 of body. Callers MUST verify this before loading.
+  string digest           = 2;
+  // Monotonically increasing version from the source bundle.
+  uint64 version          = 3;
+  // field 4 reserved (signature removed; provenance carried in JWT below)
+  // Unix epoch milliseconds after which the caller must re-fetch. Zero means
+  // no expiry declared by this server.
+  uint64 valid_until_ms   = 5;
+  // Compact EdDSA/Ed25519 JWT minted at serve time. Empty when the daemon
+  // has no signing key configured.
+  string provenance_token = 6;
+}
+
+message ListDocumentsRequest {
+  // Surface ID to enumerate, e.g. "openshell.sandbox.v1".
+  string kind = 1;
+}
+
+message ListDocumentsResponse {
+  repeated string names = 1;
+}

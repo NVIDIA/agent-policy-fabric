@@ -1,0 +1,15 @@
+[package]
+name = "apf-proto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+prost       = "0.13"
+prost-types = "0.13"
+tonic       = { version = "0.12", features = ["channel"] }
+
+[build-dependencies]
+tonic-build = "0.12"

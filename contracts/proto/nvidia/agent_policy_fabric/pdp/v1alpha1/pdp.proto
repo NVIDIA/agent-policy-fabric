@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// APF local Policy Decision Point surface.
+// Served by apf-policy-gateway over a Unix Domain Socket.
+// Callers that co-locate with the gateway (OpenShell middleware, the network egress gateway)
+// call this directly in-process or over UDS without a cloud round-trip.
+
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.pdp.v1alpha1;
+
+import "nvidia/agent_policy_fabric/runtime/v1alpha1/runtime.proto";
+
+// EvaluationService is the per-request decision surface.
+service EvaluationService {
+  // Evaluate decides a single per-request authorization query against the
+  // bundle currently loaded by the gateway.
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+}
+
+message EvaluateRequest {
+  // Verb the caller wants to perform, e.g. "create", "connect", "send".
+  string verb = 1;
+  // What is being acted on.
+  Resource resource = 2;
+  // Verb-specific arguments. Opaque to the engine; consumed by policy.
+  map<string, string> args = 3;
+  // Runtime context identifying the subject making the request.
+  nvidia.agent_policy_fabric.runtime.v1alpha1.RuntimeContext context = 4;
+}
+
+// Resource identifies the object being acted on in an evaluate request.
+message Resource {
+  // Stable identifier within the class, e.g. a tool name.
+  string id    = 1;
+  // Resource class — policy-defined namespace, e.g. "outlook".
+  string class = 2;
+  // Free-form policy-relevant attributes.
+  map<string, string> attributes = 3;
+}
+
+message EvaluateResponse {
+  // Policy decision for this request. Always set; callers MUST act on this.
+  Decision decision = 1;
+  // Obligations the enforcement point must apply alongside the decision.
+  repeated Obligation obligations = 2;
+  // Hex SHA-256 digest of the bundle in force when this decision was made.
+  string policy_digest_hex = 3;
+  // Human-readable reason chain. Intended for audit logs, not end-user display.
+  string reason = 4;
+  // Set on hard evaluation failures (engine error, lock failure). Empty on a
+  // normal policy decision.
+  repeated string rejection_reasons = 5;
+}
+
+// Decision is the policy outcome for a single evaluated request.
+enum Decision {
+  DECISION_UNSPECIFIED     = 0;
+  DECISION_ALLOW           = 1;
+  DECISION_DENY            = 2;
+  DECISION_REQUIRE_REVIEW  = 3;
+  DECISION_REQUIRE_STEP_UP = 4;
+  DECISION_QUARANTINE      = 5;
+  DECISION_STOP_SESSION    = 6;
+}
+
+// Obligation is an action the enforcement point must apply in addition to
+// acting on the Decision. The kind field names the obligation type;
+// params carry kind-specific configuration.
+message Obligation {
+  string kind = 1;
+  map<string, string> params = 2;
+}

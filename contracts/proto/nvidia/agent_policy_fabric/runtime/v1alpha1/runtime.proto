@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Shared runtime identity types used across APF wire surfaces.
+
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.runtime.v1alpha1;
+
+// RuntimeContext carries caller identity and audit metadata on every request.
+// The platform oneof selects the substrate-specific identity block; the
+// audit_context map carries freeform key-value pairs forwarded verbatim to
+// audit events.
+message RuntimeContext {
+  oneof platform {
+    OpenShellContext openshell = 1;
+  }
+  // Freeform key-value pairs forwarded to audit events without modification.
+  // Well-known keys: correlation_id, gateway_id, agent_id, session_id.
+  map<string, string> audit_context = 2;
+}
+
+// OpenShellContext is the runtime identity for requests arriving from an
+// OpenShell gateway. The sandbox_id and user_subject are attested by the
+// gateway; agent_type is informational.
+message OpenShellContext {
+  // Stable identifier for the sandbox making the request.
+  string sandbox_id   = 1;
+  // Authenticated subject the sandbox is running on behalf of.
+  string user_subject = 2;
+  // Agent type running in the sandbox, e.g. "claude-code", "cursor".
+  string agent_type   = 3;
+}
