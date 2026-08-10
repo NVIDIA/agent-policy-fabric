@@ -1,0 +1,16 @@
+[package]
+name = "apf-policy-eval"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cedar-policy = "4"
+regex = "1"
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+serde_yaml = "0.9"
