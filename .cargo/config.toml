@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --package xtask --"
+
 [registries.artifactory]
 index = "sparse+https://REDACTED-REGISTRY/index/"
 credential-provider = "cargo:token"
