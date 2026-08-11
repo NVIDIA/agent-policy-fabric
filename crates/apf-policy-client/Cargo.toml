@@ -1,0 +1,15 @@
+[package]
+name = "apf-policy-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+apf-proto  = { path = "../apf-proto" }
+tokio      = { version = "1", features = ["full"] }
+tonic      = { version = "0.12", features = ["channel"] }
+thiserror  = "2"
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower      = "0.5"

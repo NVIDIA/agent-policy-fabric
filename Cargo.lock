@@ -138,6 +138,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "apf-policy-client"
+version = "0.1.0"
+dependencies = [
+ "apf-proto",
+ "hyper-util",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tower 0.5.3",
+]
+
+[[package]]
 name = "apf-policy-eval"
 version = "0.1.0"
 dependencies = [
@@ -147,6 +159,32 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror",
+]
+
+[[package]]
+name = "apf-policy-gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "apf-bundle",
+ "apf-policy-client",
+ "apf-policy-eval",
+ "apf-proto",
+ "apf-types",
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "jsonwebtoken",
+ "nix",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
