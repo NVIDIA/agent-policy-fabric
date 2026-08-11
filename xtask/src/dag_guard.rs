@@ -37,13 +37,20 @@ pub fn run() -> Result<(), String> {
 
     // Classify each workspace package.
     //
-    // dir:        "crates" | "runtimes" | "xtask" | "other"
-    // is_service: in crates/ AND has a [[bin]] target AND publish = false
+    // Kinds (mutually exclusive, checked in order):
+    //   service  — [[bin]] + publish = false  (deployable binary)
+    //   adapter  — name starts with "apf-openshell-"  (substrate adapter; no library imports these)
+    //   library  — everything else in crates/
+    //   xtask    — the xtask crate
     struct Pkg {
         name: String,
-        dir: &'static str,
         is_service: bool,
+        is_adapter: bool,
+        in_crates: bool,
     }
+
+    // Adapter name prefixes — extend when adding new substrate adapters.
+    const ADAPTER_PREFIXES: &[&str] = &["apf-openshell-"];
 
     let root_str = workspace_root.to_string_lossy();
 
@@ -57,15 +64,7 @@ pub fn run() -> Result<(), String> {
                 .unwrap_or(manifest)
                 .trim_start_matches('/');
 
-            let dir: &'static str = if rel.starts_with("crates/") {
-                "crates"
-            } else if rel.starts_with("runtimes/") {
-                "runtimes"
-            } else if rel.starts_with("xtask/") {
-                "xtask"
-            } else {
-                "other"
-            };
+            let in_crates = rel.starts_with("crates/");
 
             // Service: [[bin]] target AND publish = false (empty array in metadata)
             let has_bin = p["targets"].as_array().is_some_and(|ts| {
@@ -77,34 +76,40 @@ pub fn run() -> Result<(), String> {
             });
             let publish_false =
                 matches!(p["publish"].as_array(), Some(arr) if arr.is_empty());
-            let is_service = dir == "crates" && has_bin && publish_false;
+            let is_service = in_crates && has_bin && publish_false;
 
-            Pkg { name, dir, is_service }
+            // Adapter: name matches a known substrate adapter prefix.
+            let is_adapter = in_crates
+                && !is_service
+                && ADAPTER_PREFIXES.iter().any(|pfx| name.starts_with(pfx));
+
+            Pkg { name, in_crates, is_service, is_adapter }
         })
         .collect();
 
-    // Name → (dir, is_service) lookup for checking dependencies.
-    let pkg_map: HashMap<&str, (&str, bool)> = classified
+    // Name → (is_service, is_adapter) lookup for checking dependencies.
+    let pkg_map: HashMap<&str, (bool, bool)> = classified
         .iter()
-        .map(|p| (p.name.as_str(), (p.dir, p.is_service)))
+        .map(|p| (p.name.as_str(), (p.is_service, p.is_adapter)))
         .collect();
 
     let mut errors: Vec<String> = Vec::new();
 
-    // Rule 1 & 2: path-dep DAG checks.
+    // DAG rules:
+    //   Rule 1 — service → service
+    //   Rule 2 — library → service or library → adapter
+    //   Rule 3 — adapter → adapter
     for (pkg, raw) in classified.iter().zip(packages.iter()) {
         let deps = raw["dependencies"].as_array().map_or(&[][..], |v| v);
         for dep in deps {
-            // Path dep: source is null in cargo metadata.
             if !dep["source"].is_null() {
                 continue;
             }
             let dep_name = dep["name"].as_str().unwrap_or("");
-            let Some(&(dep_dir, dep_is_service)) = pkg_map.get(dep_name) else {
+            let Some(&(dep_is_service, dep_is_adapter)) = pkg_map.get(dep_name) else {
                 continue;
             };
 
-            // Rule 1 — service → service
             if pkg.is_service && dep_is_service {
                 errors.push(format!(
                     "dag-guard: FAIL service→service: {} depends on {} via path",
@@ -112,30 +117,37 @@ pub fn run() -> Result<(), String> {
                 ));
             }
 
-            // Rule 2 — library → service or library → runtime
-            if pkg.dir == "crates" && !pkg.is_service {
+            let is_library = pkg.in_crates && !pkg.is_service && !pkg.is_adapter;
+            if is_library {
                 if dep_is_service {
                     errors.push(format!(
                         "dag-guard: FAIL library→service: {} depends on {} via path",
                         pkg.name, dep_name,
                     ));
                 }
-                if dep_dir == "runtimes" {
+                if dep_is_adapter {
                     errors.push(format!(
-                        "dag-guard: FAIL library→runtime: {} depends on {} via path",
+                        "dag-guard: FAIL library→adapter: {} depends on {} via path",
                         pkg.name, dep_name,
                     ));
                 }
             }
+
+            if pkg.is_adapter && dep_is_adapter {
+                errors.push(format!(
+                    "dag-guard: FAIL adapter→adapter: {} depends on {} via path",
+                    pkg.name, dep_name,
+                ));
+            }
         }
     }
 
-    // Rule 3 — no openshell_ or runtimes:: imports in library crate source.
+    // Rule 4 — no openshell_ imports in library crate source.
     //
-    // Collect service crate names so we can skip their src dirs.
-    let service_names: Vec<&str> = classified
+    // Collect non-library crate names so we can skip their src dirs.
+    let non_library_names: Vec<&str> = classified
         .iter()
-        .filter(|p| p.is_service)
+        .filter(|p| p.is_service || p.is_adapter)
         .map(|p| p.name.as_str())
         .collect();
 
@@ -150,12 +162,12 @@ pub fn run() -> Result<(), String> {
             if o.status.success() {
                 let matches = String::from_utf8_lossy(&o.stdout);
                 for line in matches.lines() {
-                    let in_service = service_names.iter().any(|svc| {
+                    let in_non_library = non_library_names.iter().any(|svc| {
                         line.contains(&format!("crates/{svc}/"))
                     });
-                    if !in_service {
+                    if !in_non_library {
                         errors.push(format!(
-                            "dag-guard: FAIL openshell_/runtimes:: in library: {line}"
+                            "dag-guard: FAIL openshell_ import in library: {line}"
                         ));
                     }
                 }
@@ -190,7 +202,7 @@ pub fn run() -> Result<(), String> {
     // Best-effort: flag any workspace dependency whose source contains "nvidia"
     // and has no crates.io fallback.
     for (pkg, raw) in classified.iter().zip(packages.iter()) {
-        if pkg.dir != "crates" || pkg.is_service {
+        if !pkg.in_crates || pkg.is_service || pkg.is_adapter {
             continue;
         }
         let deps = raw["dependencies"].as_array().map_or(&[][..], |v| v);
