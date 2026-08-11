@@ -44,6 +44,7 @@ pub use nvidia::agent_policy_fabric::policy_service::v1alpha1 as policy_service_
 pub use openshell::sandbox::v1 as openshell_sandbox;
 
 pub mod json;
+pub mod spec_digest;
 
 pub use pdp_v1alpha1::evaluation_service_client;
 pub use pdp_v1alpha1::evaluation_service_server;

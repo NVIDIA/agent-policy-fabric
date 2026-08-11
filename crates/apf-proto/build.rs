@@ -56,9 +56,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", contracts.display());
 
+    let descriptor_path = out_dir.join("descriptor.bin");
+
     tonic_build::configure()
         .build_client(true)
         .build_server(true)
+        .file_descriptor_set_path(&descriptor_path)
         .compile_protos(
             &all_protos.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
             &[
