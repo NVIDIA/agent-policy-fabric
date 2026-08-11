@@ -16,12 +16,13 @@ AI agents may do and enforces those decisions at the network, tool, and credenti
 | `apf-proto` | lib | Generated gRPC bindings from `contracts/proto/` |
 | `apf-policy-client` | lib | gRPC client for `PolicyService` |
 | `apf-policy-service` | **service** | PAP — compile, sign, store, serve bundles. Never evaluates requests. |
-| `apf-policy-gateway` | **service** | Local PDP — fetch, verify, evaluate. Serves `EvaluationService/Evaluate` over UDS. |
-| `apf-tool-gateway` | **service** | Tool relay — calls gateway for decisions before invoking host tools. |
-| `apf-cred-proxy` | **service** | Credential procurement and injection (stub). |
-| `runtimes/openshell` | adapter | OpenShell interceptor + middleware. Only place OpenShell types appear. |
+| `apf-policy-gateway` | **service** | Host-side policy agent — sandbox policy projection and local PDP. |
+| `apf-openshell-projector` | **adapter** | Compiles APF policy IR into OpenShell-native projections; registered in `apf-policy-service`. |
+| `apf-openshell-interceptor` | **adapter** | OpenShell gateway interceptor; runs inside `apf-policy-gateway` at sandbox admission. |
+| `apf-openshell-middleware` | **adapter** | OpenShell supervisor middleware; runs inside `apf-policy-gateway` per egress request. |
 
-**Service** = `[[bin]]` target AND `publish = false` in `Cargo.toml`.
+**Service** = `[[bin]]` target AND `publish = false` in `Cargo.toml`.  
+**Adapter** = name prefix `apf-openshell-` (or `apf-<runtime>-*` for future runtimes). Library crates cannot depend on adapters; service binaries can.
 
 ---
 
@@ -31,7 +32,7 @@ AI agents may do and enforces those decisions at the network, tool, and credenti
 |---|---|
 | Any crate or wire contract | `docs/architecture.md` — component responsibilities, data flow, control/data plane split |
 | `contracts/proto/` | `docs/architecture.md` §4 (sequence diagrams) and the `buf lint` / `buf breaking` rules below |
-| `runtimes/openshell/` | `runtimes/openshell/AGENTS.md` |
+| `crates/apf-openshell-*` | `docs/architecture.md` §3 — OpenShell seams and adapter responsibilities |
 | Any service crate | Run `cargo xtask dag-guard` after changes |
 
 ---
@@ -50,19 +51,21 @@ buf lint contracts/          # proto contracts
 
 ## DAG invariants
 
-Dependency direction: `contracts/ → crates/<lib> → crates/<service> → runtimes/*`
+Dependency direction: `contracts/ → crates/<lib> → crates/<service> → crates/<adapter>`
 
 **Forbidden — dag-guard fails the pull request:**
 - Service crate path-depending on another service crate
-- Library crate path-depending on any service or runtime crate
-- `openshell_*` or `runtimes::` imports in library crate source
+- Library crate path-depending on any service or adapter crate
+- `openshell_*` imports in library crate source
 - `yaml_sigil_*` imports outside `apf-policy-service/src/signing/yaml_sigil_backend.rs`
 
 ---
 
 ## Key invariants
 
-**OpenShell is a runtime adapter.** OpenShell types live exclusively in `runtimes/openshell/`. Adding a second runtime is `runtimes/foo/` — no changes to libraries or services.
+**OpenShell adapter crates.** OpenShell types appear only in `crates/apf-openshell-*`.
+Adding a second runtime means adding `crates/apf-<runtime>-*` adapter crates —
+no changes to shared library or service crates are needed.
 
 **Signing seam.** All signing goes through `BundleSigner`/`BundleVerifier` (in `apf-types`). Default Ed25519 impl is in `apf-bundle`. The yaml-sigil private backend is the only exception and stays feature-gated in `apf-policy-service`.
 

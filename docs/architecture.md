@@ -35,16 +35,21 @@ Host-side enforcement anchor. Fetches and verifies bundles locally, evaluates ev
 | Provenance trust | Verifies `provenance_token` JWT from `GetDocument`; rotates key via JWKS watcher |
 | Audit | Bundle lifecycle events; evaluation events (wired in M5 audit milestone) |
 
-### `runtimes/openshell` — OpenShell Runtime Adapter
+### OpenShell — substrate adapter
 
-The only place OpenShell types appear. Provides the `OpenShellProjector` which lowers APF policy IR into OpenShell-native projections at compile time, and enforces policy at runtime. Never imported by `crates/` or `components/`.
+APF integrates with OpenShell through three adapter crates (`apf-openshell-*`).
+Each is scoped to a single concern; together they cover the full lifecycle from
+bundle compilation through runtime enforcement.
 
-| Responsibility | Detail |
-|---|---|
-| `OpenShellProjector` | Lowers `CanonicalPolicy` IR → `openshell.sandbox.v1` proto bytes and other OpenShell surfaces; registered at `apf-policy-service` startup |
-| Gateway interceptor | At sandbox admission (OpenShell control plane): fetches pre-compiled `SandboxPolicy` projection from gateway via `GetDocument`; decodes proto bytes and injects as `apf.nvidia.com/*` annotations |
-| Supervisor middleware | Per-request (OpenShell data plane): calls `EvaluationService/Evaluate` on gateway; enforces decision (allow/deny, body patches, header mutations, findings) |
-| Projection consumption | Does **not** do runtime lowering — decodes and applies already-compiled bytes only |
+| Crate | Service | Role |
+|---|---|---|
+| `apf-openshell-projector` | policy-service | Compiles APF policy IR into OpenShell-native projections (`SandboxPolicy`, provider profiles) at bundle load time |
+| `apf-openshell-interceptor` | policy-gateway | At sandbox admission: delivers the compiled `SandboxPolicy` to OpenShell and establishes the sandbox's network egress rules |
+| `apf-openshell-middleware` | policy-gateway | At each egress request: enforces the active policy decision (allow/deny, redaction, header mutations) via the OpenShell supervisor hook |
+
+The interceptor and middleware run inside the `apf-policy-gateway` process.
+Adding a second runtime substrate means adding a new set of `apf-<runtime>-*`
+adapter crates — no changes to the shared library or service crates are required.
 
 ### `apf-tool-gateway` — Tool Invocation and Relay
 
@@ -78,20 +83,16 @@ See §5 for the planned design. Handles credential lifecycle separately from pol
                            • EvaluationService/Evaluate (UDS)
                            • JWKS trust verification
                           ┌─────────┴──────────────┐
-                          │ Evaluate (UDS)          │ SandboxPolicy projection
+                          │ Evaluate (in-process)   │ SandboxPolicy projection
                           ▼                         ▼
-              runtimes/openshell          runtimes/openshell
-              supervisor middleware       gateway interceptor
-              [OpenShell data plane]      [OpenShell control plane]
-              per-request egress          sandbox admission
+              apf-openshell-middleware   apf-openshell-interceptor
+              [OpenShell data plane]     [OpenShell control plane]
+              per-request egress         sandbox admission
+              (inside gateway process)   (inside gateway process)
                           │
                           ▼
                     Agent egress
                     (tool calls, HTTP requests)
-                          │ tool invoke
-                          ▼
-              apf-tool-gateway ──────▶ apf-cred-proxy (planned)
-              (tool relay)
 ```
 
 ---
@@ -103,12 +104,12 @@ OpenShell is the first supported runtime. APF integrates at two seams:
 ```
 OpenShell
 │
-├── Gateway Interceptor  ◀────── runtimes/openshell interceptor
+├── Gateway Interceptor  ◀────── apf-openshell-interceptor  (runs inside apf-policy-gateway)
 │   [OpenShell control plane]     fetches SandboxPolicy projection once per sandbox
 │   (sandbox admission)           injects as apf.nvidia.com/* annotations
 │
-└── Supervisor Middleware ◀────── runtimes/openshell middleware
-    [OpenShell data plane]        calls apf-policy-gateway EvaluationService/Evaluate
+└── Supervisor Middleware ◀────── apf-openshell-middleware   (runs inside apf-policy-gateway)
+    [OpenShell data plane]        calls EvaluationService/Evaluate in-process
     (per-request egress)          enforces: allow/deny, body patches, header mutations
 ```
 
@@ -118,7 +119,7 @@ The two seams map onto different OpenShell planes. APF's own control/data distin
 
 **APF owns:** what policy applies, whether a request is permitted, what the response looks like.
 
-The boundary is the `EvaluationService/Evaluate` RPC and the `SandboxPolicy` projection. A future runtime (e.g. another sandbox runtime) adds `runtimes/<runtime>/` and implements the same two seams without touching `crates/` or `components/`.
+The boundary is the `EvaluationService/Evaluate` RPC and the `SandboxPolicy` projection. A future runtime (e.g. another sandbox runtime) adds `crates/apf-<runtime>-*` adapter crates following the same pattern.
 
 ---
 
@@ -162,13 +163,16 @@ Policy Author          apf-policy-service        apf-policy-gateway
 
 ### 4.2 Data plane — sandbox admission (gateway interceptor, OpenShell control plane)
 
-The `SandboxPolicy` bytes served here are compiled by `OpenShellProjector` inside
-`apf-policy-service` from APF `CanonicalPolicy` IR. The interceptor decodes pre-compiled
-bytes — no runtime lowering happens in `runtimes/openshell`.
+The `SandboxPolicy` bytes are compiled by `apf-openshell-projector` (running inside
+`apf-policy-service`) from APF `CanonicalPolicy` IR. The interceptor decodes
+pre-compiled bytes — no runtime lowering happens at admission time.
+
+`apf-openshell-interceptor` runs as a gRPC server task **inside the
+`apf-policy-gateway` process**; it is not a separate binary.
 
 ```
-Agent          OpenShell Gateway     runtimes/openshell     apf-policy-gateway
-  │                   │               interceptor                  │
+Agent          OpenShell Gateway    apf-openshell-interceptor   apf-policy-service
+  │                   │             (inside apf-policy-gateway)        │
   │  spawn sandbox    │                    │                       │
   │──────────────────▶│                    │                       │
   │                   │── interceptor ────▶│                       │
@@ -192,8 +196,8 @@ Agent          OpenShell Gateway     runtimes/openshell     apf-policy-gateway
 ### 4.3 Data plane — per-request evaluation (supervisor middleware)
 
 ```
-Agent        OpenShell Supervisor    runtimes/openshell      apf-policy-gateway
-              Middleware              middleware adapter            (PDP)
+Agent        OpenShell Supervisor    apf-openshell-middleware    apf-policy-gateway
+              Middleware              (inside apf-policy-gateway)      (PDP)
   │                │                       │                        │
   │  tool call /   │                       │                        │
   │  egress req ──▶│                       │                        │
@@ -242,8 +246,8 @@ post-call audit.
 **Full future sequence with all hooks:**
 
 ```
-Agent        OpenShell Supervisor    runtimes/openshell      apf-policy-gateway
-              Middleware              middleware adapter
+Agent        OpenShell Supervisor    apf-openshell-middleware    apf-policy-gateway
+              Middleware              (inside apf-policy-gateway)
   │                │                       │                        │
   │  egress req ──▶│                       │                        │
   │                │  [PRE_CREDENTIALS]     │                        │
@@ -332,5 +336,5 @@ Upstream MCP server (Slack, GitLab, etc.)
 | **Initiator** | Policy author → service; service → gateway (poll) | Agent → OpenShell → gateway |
 | **Latency tolerance** | Seconds to minutes (background) | Sub-millisecond (hot path) |
 | **Cloud dependency** | Required (service is the PAP) | None after bundle loaded |
-| **APF components** | `apf-policy-service`, `apf-policy-gateway` (fetch/verify) | `apf-policy-gateway` (evaluate), `runtimes/openshell`, `apf-tool-gateway` |
+| **APF components** | `apf-policy-service`, `apf-policy-gateway` (fetch/verify) | `apf-policy-gateway` (evaluate), `apf-openshell-interceptor`, `apf-openshell-middleware` |
 | **Failure mode** | Gateway holds last known good bundle | Deny-safe: gateway denies if evaluator unavailable |
