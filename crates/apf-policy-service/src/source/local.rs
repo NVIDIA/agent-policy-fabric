@@ -65,7 +65,7 @@ mod tests {
                 audit_metadata: BundleAuditMetadata::from_counter_and_digest(0, ""),
             },
             projections,
-            verifier_identity: None,
+            document_signer: None,
             audit: PolicyServiceAudit::disabled(),
         })
     }

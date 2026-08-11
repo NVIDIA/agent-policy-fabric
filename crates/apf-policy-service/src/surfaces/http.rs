@@ -249,7 +249,7 @@ struct JwkEntry {
 
 async fn jwks(State(s): State<HttpState>) -> Json<JwksResponse> {
     let mut keys = Vec::new();
-    if let Some(ref vi) = s.core.verifier_identity {
+    if let Some(ref vi) = s.core.document_signer {
         let pk = vi.signing_key.verifying_key();
         keys.push(JwkEntry {
             kty: "OKP".to_string(),

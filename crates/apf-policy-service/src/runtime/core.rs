@@ -27,6 +27,6 @@ pub struct PolicyServiceCore {
     /// Vended projection bytes keyed by `(kind, name)`.
     pub projections: BTreeMap<(String, String), Vec<u8>>,
     /// Present when the daemon signs vended documents.
-    pub verifier_identity: Option<Arc<DocumentSigner>>,
+    pub document_signer: Option<Arc<DocumentSigner>>,
     pub audit: PolicyServiceAudit,
 }
