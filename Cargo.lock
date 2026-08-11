@@ -47,6 +47,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "apf-compiler"
+version = "0.1.0"
+dependencies = [
+ "apf-bundle",
+ "apf-policy-eval",
+ "apf-proto",
+ "hex",
+ "prost",
+ "prost-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "apf-policy-eval"
 version = "0.1.0"
 dependencies = [
@@ -64,6 +83,7 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "prost-types",
+ "serde_json",
  "tonic",
  "tonic-build",
 ]
