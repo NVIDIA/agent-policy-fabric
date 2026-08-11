@@ -85,15 +85,23 @@ struct Cli {
     // ── OpenShell adapter flags ────────────────────────────────────────────────
     // Read by apf-openshell-interceptor and apf-openshell-middleware when registered.
 
-    /// OpenShell gateway gRPC endpoint (e.g. `http://localhost:7001`).
-    /// Required to enable the apf-openshell-interceptor adapter.
-    #[arg(long, env = "APF_OPENSHELL_GATEWAY_ENDPOINT")]
-    openshell_gateway_endpoint: Option<String>,
+    /// URL of the OpenShell gateway gRPC server to connect to
+    /// (e.g. `http://localhost:7001`). Used for outbound calls: provider
+    /// profile reconciliation and sandbox policy refresh.
+    #[arg(long, env = "APF_OPENSHELL_GATEWAY_URL")]
+    openshell_gateway_url: Option<String>,
 
-    /// Address for the OpenShell supervisor middleware surface.
-    /// Required to enable the apf-openshell-middleware adapter.
-    #[arg(long, env = "APF_MIDDLEWARE_ADDR")]
-    middleware_addr: Option<String>,
+    /// Address to bind the GatewayInterceptor gRPC surface on
+    /// (e.g. `0.0.0.0:18099`). The OpenShell gateway connects here to call
+    /// Describe/Evaluate at sandbox admission time.
+    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_ADDR")]
+    openshell_interceptor_addr: Option<String>,
+
+    /// Address to bind the SupervisorMiddleware gRPC surface on
+    /// (e.g. `0.0.0.0:9099`). The OpenShell supervisor calls
+    /// EvaluateHttpRequest here for per-request enforcement.
+    #[arg(long, env = "APF_OPENSHELL_MIDDLEWARE_ADDR")]
+    openshell_middleware_addr: Option<String>,
 }
 
 fn build_evaluator_from_members(
@@ -145,23 +153,26 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => warn!(error = %e, "policy-service health check failed"),
     }
 
-    if let Some(ref url) = args.jwks_url {
-        info!(url = %url, "fetching Ed25519 verifying key from JWKS");
-        let key = fetch_ed25519_key_from_jwks(url).await
-            .with_context(|| format!("fetch JWKS from {url}"))?;
-        let shared = Arc::new(std::sync::RwLock::new(key));
-        if args.jwks_refresh_interval_secs > 0 {
-            spawn_jwks_watcher(
-                JwksWatcherConfig {
-                    jwks_url: url.clone(),
-                    interval: Duration::from_secs(args.jwks_refresh_interval_secs),
-                },
-                Arc::clone(&shared),
-            );
-        }
-    } else {
-        warn!("--jwks-url not set; provenance token verification disabled");
-    }
+    let verifying_key: Option<Arc<std::sync::RwLock<ed25519_dalek::VerifyingKey>>> =
+        if let Some(ref url) = args.jwks_url {
+            info!(url = %url, "fetching Ed25519 verifying key from JWKS");
+            let key = fetch_ed25519_key_from_jwks(url).await
+                .with_context(|| format!("fetch JWKS from {url}"))?;
+            let shared = Arc::new(std::sync::RwLock::new(key));
+            if args.jwks_refresh_interval_secs > 0 {
+                spawn_jwks_watcher(
+                    JwksWatcherConfig {
+                        jwks_url: url.clone(),
+                        interval: Duration::from_secs(args.jwks_refresh_interval_secs),
+                    },
+                    Arc::clone(&shared),
+                );
+            }
+            Some(shared)
+        } else {
+            warn!("--jwks-url not set; provenance token verification disabled");
+            None
+        };
 
     let vk = trust_store.get(&args.document_key_id).cloned()
         .ok_or_else(|| anyhow::anyhow!("no trust root for key id '{}'", args.document_key_id))?;
@@ -208,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let eval_svc = EvaluationServiceServer::new(EvaluationServiceImpl {
-        evaluator: eval_rx,
+        evaluator: eval_rx.clone(),
     });
 
     if args.socket.exists() {
@@ -241,19 +252,75 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => Some(Err(e)),
     });
 
-    // OpenShell adapter stubs — replaced by real implementations in P-7.
-    if args.openshell_gateway_endpoint.is_some() {
-        warn!("--openshell-gateway-endpoint set but apf-openshell-interceptor not yet registered");
-    }
-    if args.middleware_addr.is_some() {
-        warn!("--middleware-addr set but apf-openshell-middleware not yet registered");
+    let mut tasks = tokio::task::JoinSet::new();
+
+    // EvaluationService — always started.
+    let gated_arc = gated;
+    tasks.spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(eval_svc)
+            .serve_with_incoming(gated_arc)
+            .await
+            .map_err(|e| anyhow::anyhow!("EvaluationService error: {e}"))
+    });
+
+    // OpenShell gateway interceptor — enabled when both --openshell-interceptor-addr
+    // (inbound bind) and --openshell-gateway-url (outbound connect) are set.
+    if let Some(interceptor_bind) = args.openshell_interceptor_addr.clone() {
+        use apf_openshell_interceptor::server::{GatewayInterceptorService, InterceptorConfig};
+        use apf_proto::gateway_interceptor_v1::gateway_interceptor_server::GatewayInterceptorServer;
+
+        let verifying_key = verifying_key.ok_or_else(|| {
+            anyhow::anyhow!("--jwks-url required when --openshell-interceptor-addr is set")
+        })?;
+
+        let config = InterceptorConfig {
+            document_kind: args.document_kind.clone(),
+            document_name: args.document_name.clone(),
+            signing_key_id: args.document_key_id.clone(),
+            verifying_key: Arc::clone(&verifying_key),
+        };
+        let interceptor_svc = GatewayInterceptorService {
+            policy_service: policy_client.clone(),
+            config,
+        };
+
+        let bind_addr = interceptor_bind.parse()
+            .context("parse --openshell-interceptor-addr")?;
+        info!(
+            bind = %interceptor_bind,
+            gateway_url = ?args.openshell_gateway_url,
+            "OpenShell gateway interceptor enabled"
+        );
+        tasks.spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(GatewayInterceptorServer::new(interceptor_svc))
+                .serve(bind_addr)
+                .await
+                .map_err(|e| anyhow::anyhow!("interceptor server error: {e}"))
+        });
     }
 
-    tonic::transport::Server::builder()
-        .add_service(eval_svc)
-        .serve_with_incoming(gated)
-        .await
-        .context("EvaluationService server error")?;
+    // OpenShell supervisor middleware — optional, enabled by --openshell-middleware-addr.
+    if let Some(ref addr) = args.openshell_middleware_addr {
+        use apf_openshell_middleware::SupervisorMiddlewareService;
+        use apf_proto::supervisor_middleware_v1::supervisor_middleware_server::SupervisorMiddlewareServer;
+
+        let mw_svc = SupervisorMiddlewareService::new(eval_rx.clone());
+        info!(addr = %addr, "OpenShell supervisor middleware enabled");
+        let addr_parsed = addr.parse().context("parse --openshell-middleware-addr")?;
+        tasks.spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(SupervisorMiddlewareServer::new(mw_svc))
+                .serve(addr_parsed)
+                .await
+                .map_err(|e| anyhow::anyhow!("middleware server error: {e}"))
+        });
+    }
+
+    while let Some(res) = tasks.join_next().await {
+        res??;
+    }
 
     Ok(())
 }

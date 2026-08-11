@@ -11,8 +11,9 @@ name = "apf-policy-service"
 path = "src/main.rs"
 
 [dependencies]
-apf-bundle    = { path = "../apf-bundle" }
-apf-compiler  = { path = "../apf-compiler" }
+apf-bundle               = { path = "../apf-bundle" }
+apf-compiler             = { path = "../apf-compiler" }
+apf-openshell-projector  = { path = "../apf-openshell-projector" }
 apf-proto     = { path = "../apf-proto" }
 apf-types     = { path = "../apf-types" }
 

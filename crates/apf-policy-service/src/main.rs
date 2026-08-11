@@ -359,9 +359,9 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         "bundle verified and loaded"
     );
 
-    // Projectors registered here at startup.
-    // OpenShellProjector from runtimes/openshell is added in P-7.
-    let compiler = Compiler::new(vec![]);
+    let compiler = Compiler::new(vec![
+        Box::new(apf_openshell_projector::OpenShellProjector),
+    ]);
 
     let parsed_bundle = apf_bundle::parse_bundle(&bundle_bytes)
         .map_err(|e| anyhow::anyhow!("parse verified bundle: {e}"))?;
