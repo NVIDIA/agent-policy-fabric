@@ -12,11 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 apf-bundle        = { path = "../apf-bundle" }
+apf-compiler      = { path = "../apf-compiler" }
 apf-policy-eval   = { path = "../apf-policy-eval" }
 apf-proto         = { path = "../apf-proto" }
 apf-types         = { path = "../apf-types" }
 apf-policy-client = { path = "../apf-policy-client" }
 
+arc-swap           = "1"
 tokio              = { version = "1", features = ["full"] }
 tonic              = { version = "0.12", features = ["channel"] }
 anyhow             = "1"

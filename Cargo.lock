@@ -167,10 +167,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "apf-bundle",
+ "apf-compiler",
  "apf-policy-client",
  "apf-policy-eval",
  "apf-proto",
  "apf-types",
+ "arc-swap",
  "base64",
  "clap",
  "ed25519-dalek",
@@ -256,6 +258,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
 dependencies = [
  "object",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
