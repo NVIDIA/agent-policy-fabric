@@ -1,0 +1,24 @@
+[package]
+name = "apf-compile"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "apf-compile"
+path = "src/main.rs"
+
+[dependencies]
+apf-bundle    = { path = "../apf-bundle" }
+apf-compiler  = { path = "../apf-compiler" }
+apf-types     = { path = "../apf-types" }
+
+anyhow         = "1"
+ed25519-dalek  = { version = "2", features = ["rand_core"] }
+base64    = "0.22"
+clap      = { version = "4", features = ["derive"] }
+hex       = "0.4"
+serde_yaml = "0.9"
+sha2      = "0.10"

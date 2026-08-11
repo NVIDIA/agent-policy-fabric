@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["xtask", "crates/apf-types", "crates/apf-bundle", "crates/apf-policy-eval", "crates/apf-proto", "crates/apf-compiler", "crates/apf-policy-service"]
+members = ["xtask", "crates/apf-types", "crates/apf-bundle", "crates/apf-policy-eval", "crates/apf-proto", "crates/apf-compiler", "crates/apf-policy-service", "crates/apf-compile"]
 
 [workspace.package]
 edition = "2024"

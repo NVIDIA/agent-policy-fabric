@@ -10,18 +10,6 @@ publish = false
 name = "apf-policy-service"
 path = "src/main.rs"
 
-[[bin]]
-name = "apf-compile"
-path = "src/bin/compile.rs"
-
-[[bin]]
-name = "apf-genfixture"
-path = "src/bin/genfixture.rs"
-
-[[bin]]
-name = "apf-keygen"
-path = "src/bin/keygen.rs"
-
 [dependencies]
 apf-bundle    = { path = "../apf-bundle" }
 apf-compiler  = { path = "../apf-compiler" }

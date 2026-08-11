@@ -103,6 +103,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "apf-compile"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "apf-bundle",
+ "apf-compiler",
+ "apf-types",
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "hex",
+ "serde_yaml",
+ "sha2",
+]
+
+[[package]]
 name = "apf-compiler"
 version = "0.1.0"
 dependencies = [
