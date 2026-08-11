@@ -138,6 +138,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "apf-openshell-interceptor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "apf-policy-client",
+ "apf-proto",
+ "apf-types",
+ "base64",
+ "ed25519-dalek",
+ "hex",
+ "jsonwebtoken",
+ "prost",
+ "prost-types",
+ "rand",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "apf-openshell-middleware"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "apf-policy-eval",
+ "apf-proto",
+ "base64",
+ "hex",
+ "prost",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "apf-openshell-projector"
+version = "0.1.0"
+dependencies = [
+ "apf-bundle",
+ "apf-compiler",
+ "apf-policy-eval",
+ "apf-proto",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "apf-policy-client"
 version = "0.1.0"
 dependencies = [
@@ -2500,11 +2563,22 @@ version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
+ "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -3252,8 +3326,10 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost",
+ "rustls-pemfile",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower 0.4.13",
  "tower-layer",
