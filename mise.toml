@@ -9,3 +9,66 @@ run = "cargo xtask dag-guard"
 
 [tasks.buf-lint]
 run = "buf lint contracts/"
+
+[tasks.sign-bundle]
+description = "Re-sign examples/demo-bundle after policy changes"
+run = """
+cargo build --release -p apf-compile
+./target/release/apf-compile genfixture \
+  --template examples/demo-bundle/demo-bundle.template.yaml \
+  --base-dir examples/demo-bundle \
+  --key examples/dev-keys/apf-dev.seed \
+  --out examples/demo-bundle/demo-bundle.yaml
+"""
+
+[tasks.dev]
+description = "Build images and start the APF dev stack (policy-service + policy-gateway)"
+run = "docker compose -f deploy/docker-compose.yml up --build -d"
+
+[tasks.dev-logs]
+description = "Tail logs from the APF dev stack"
+run = "docker compose -f deploy/docker-compose.yml logs -f"
+
+[tasks.dev-down]
+description = "Stop and remove the APF dev stack"
+run = "docker compose -f deploy/docker-compose.yml down"
+
+[tasks.dev-native]
+description = "Run policy-service and policy-gateway natively (no Docker; requires cargo build)"
+run = """
+cargo build --release -p apf-policy-service -p apf-policy-gateway -p apf-compile
+
+# Ensure bundle is signed
+[[ -f examples/demo-bundle/demo-bundle.yaml ]] || mise run sign-bundle
+
+SOCK_DIR=$(mktemp -d /tmp/apf-dev.XXXXXX)
+trap 'kill $(jobs -p) 2>/dev/null; rm -rf $SOCK_DIR' EXIT
+
+./target/release/apf-policy-service serve \
+  --socket "${SOCK_DIR}/policy-service.sock" \
+  --http-addr 127.0.0.1:19200 \
+  --bundle-path examples/demo-bundle/demo-bundle.yaml \
+  --trust-root-dir examples/dev-keys \
+  --counter-store "${SOCK_DIR}/counter" \
+  --document-key-id apf-dev \
+  --policy-source local &
+
+# Wait for policy-service
+until curl -sf http://127.0.0.1:19200/healthz >/dev/null 2>&1; do sleep 0.2; done
+
+./target/release/apf-policy-gateway \
+  --gateway-socket "${SOCK_DIR}/policy-gateway.sock" \
+  --policy-service-socket "${SOCK_DIR}/policy-service.sock" \
+  --trust-root-dir examples/dev-keys \
+  --counter-store "${SOCK_DIR}/gw-counter" \
+  --document-key-id apf-dev \
+  --jwks-url "http://127.0.0.1:19200/.well-known/jwks.json" \
+  --openshell-interceptor-addr 127.0.0.1:18202 \
+  --openshell-middleware-addr 127.0.0.1:9099 &
+
+echo "APF dev stack running. Ctrl-C to stop."
+echo "  policy-service:  http://127.0.0.1:19200"
+echo "  interceptor gRPC: 127.0.0.1:18202"
+echo "  middleware gRPC:  127.0.0.1:9099"
+wait
+"""

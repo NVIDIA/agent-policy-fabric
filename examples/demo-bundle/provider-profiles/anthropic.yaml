@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Anthropic API — Anthropic Messages protocol.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: anthropic
+  title: Anthropic
+  description: Anthropic Messages API.
+spec:
+  type: anthropic
+  endpoints:
+    - host: integrate.api.nvidia.com
+      port: 443
+      protocol: rest
+      access: read-write
+      enforcement: enforce
+  credentials:
+    - name: api_key
+      envVars:
+        - ANTHROPIC_API_KEY
+      required: true
+      style: header
+      header: x-api-key
+      source:
+        kind: host-env
+        name: INFERENCE_API_KEY

@@ -11,12 +11,12 @@ use tower::service_fn;
 
 pub use apf_proto::policy_service_v1alpha1 as proto;
 
+use apf_proto::runtime_v1alpha1::RuntimeContext;
 use proto::policy_service_client::PolicyServiceClient;
 use proto::{
     GetDocumentRequest, GetDocumentResponse, HealthRequest, HealthResponse, ListDocumentsRequest,
     ListDocumentsResponse,
 };
-use apf_proto::runtime_v1alpha1::RuntimeContext;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyClientError {

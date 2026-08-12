@@ -8,8 +8,8 @@ use sha2::{Digest as Sha2Digest, Sha256};
 
 use apf_proto::gateway_interceptor_v1::JsonPatch;
 use apf_proto::json::json_to_proto_value;
-use apf_proto::policy_service_v1alpha1::GetDocumentResponse;
 use apf_proto::openshell_sandbox::SandboxPolicy;
+use apf_proto::policy_service_v1alpha1::GetDocumentResponse;
 
 /// Decoded claims from the policy-service-minted provenance JWT.
 ///
@@ -67,7 +67,6 @@ pub fn extract_provenance_claims(jwt: &str) -> Option<ProvenanceClaims> {
     let _header = parts.next()?;
     let payload_b64 = parts.next()?;
 
-    #[allow(clippy::items_after_statements)]
     use base64::Engine as _;
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)

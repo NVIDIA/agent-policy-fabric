@@ -28,6 +28,10 @@ pub struct VerifyOutcome {
     pub parsed: bool,
     pub monotonic_counter: u64,
     pub rejection_reasons: Vec<String>,
+    /// Parsed bundle, present whenever signature verification and YAML parsing
+    /// both succeeded (even if a later policy check — expiry, counter — failed).
+    /// `None` only when the artifact could not be verified or parsed at all.
+    pub bundle: Option<Bundle>,
 }
 
 /// Verify a bundle artifact end-to-end.
@@ -58,6 +62,7 @@ pub fn verify_bundle(
                 parsed: false,
                 monotonic_counter: 0,
                 rejection_reasons: vec![format!("signature_invalid: {e}")],
+                bundle: None,
             };
         }
     };
@@ -72,6 +77,7 @@ pub fn verify_bundle(
                 parsed: false,
                 monotonic_counter: 0,
                 rejection_reasons: vec![format!("bundle_parse_failed: {e}")],
+                bundle: None,
             };
         }
     };
@@ -96,6 +102,7 @@ pub fn verify_bundle(
         parsed: true,
         monotonic_counter: bundle.monotonic_counter,
         rejection_reasons: reasons,
+        bundle: Some(bundle),
     }
 }
 
@@ -204,8 +211,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apf_types::BundleSigner;
     use crate::signing::ed25519::Ed25519Signer;
+    use apf_types::BundleSigner;
     use tempfile::TempDir;
 
     fn signer() -> Ed25519Signer {
@@ -241,7 +248,14 @@ runtime_compatibility: {{}}
         let artifact = s.sign(good_bundle_yaml(1).as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
-        let out = verify_bundle(&artifact, &bundle_path, &v, &mut counter, SystemTime::now(), &no_versions());
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &mut counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
         assert!(out.ok, "rejected: {:?}", out.rejection_reasons);
         assert_eq!(out.monotonic_counter, 1);
     }
@@ -256,9 +270,20 @@ runtime_compatibility: {{}}
         *artifact.last_mut().unwrap() ^= 0xff;
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
-        let out = verify_bundle(&artifact, &bundle_path, &v, &mut counter, SystemTime::now(), &no_versions());
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &mut counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
         assert!(!out.ok);
-        assert!(out.rejection_reasons.iter().any(|r| r.starts_with("signature_invalid")));
+        assert!(
+            out.rejection_reasons
+                .iter()
+                .any(|r| r.starts_with("signature_invalid"))
+        );
     }
 
     #[test]
@@ -271,9 +296,20 @@ runtime_compatibility: {{}}
         let artifact = s.sign(yaml.as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
-        let out = verify_bundle(&artifact, &bundle_path, &v, &mut counter, SystemTime::now(), &no_versions());
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &mut counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
         assert!(!out.ok);
-        assert!(out.rejection_reasons.iter().any(|r| r.starts_with("bundle_expired")));
+        assert!(
+            out.rejection_reasons
+                .iter()
+                .any(|r| r.starts_with("bundle_expired"))
+        );
     }
 
     #[test]
@@ -286,9 +322,20 @@ runtime_compatibility: {{}}
         let artifact = s.sign(good_bundle_yaml(5).as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
-        let out = verify_bundle(&artifact, &bundle_path, &v, &mut counter, SystemTime::now(), &no_versions());
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &mut counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
         assert!(!out.ok);
-        assert!(out.rejection_reasons.iter().any(|r| r.starts_with("counter_regression")));
+        assert!(
+            out.rejection_reasons
+                .iter()
+                .any(|r| r.starts_with("counter_regression"))
+        );
     }
 
     #[test]
@@ -306,8 +353,19 @@ runtime_compatibility: {{}}
         std::fs::write(&bundle_path, &artifact).unwrap();
         let mut versions = HashMap::new();
         versions.insert("openshell", "0.1.0");
-        let out = verify_bundle(&artifact, &bundle_path, &v, &mut counter, SystemTime::now(), &versions);
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &mut counter,
+            SystemTime::now(),
+            &versions,
+        );
         assert!(!out.ok);
-        assert!(out.rejection_reasons.iter().any(|r| r.starts_with("runtime_compat_mismatch")));
+        assert!(
+            out.rejection_reasons
+                .iter()
+                .any(|r| r.starts_with("runtime_compat_mismatch"))
+        );
     }
 }

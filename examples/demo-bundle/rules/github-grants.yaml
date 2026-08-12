@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# GitHub tool grants — direct Cedar PolicyRule.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: github-grants
+spec:
+  description: Grants for GitHub tool capabilities. repo_write has no permit (denied by default).
+  language: cedar
+  role: capability
+  definition: |
+    @id("github-grants/repo_read")
+    permit (
+      principal,
+      action == APF::Action::"github::repo_read",
+      resource == APF::Tool::"github"
+    );

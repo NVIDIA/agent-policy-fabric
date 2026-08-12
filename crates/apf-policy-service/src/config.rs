@@ -76,6 +76,7 @@ pub struct ProvenanceConfig {
 /// fields at their compiled default are overridden by the TOML value.
 /// Fields the user explicitly passed on the CLI are left untouched.
 impl ServiceConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_to_args(
         &self,
         socket: &mut PathBuf,
@@ -99,7 +100,7 @@ impl ServiceConfig {
         surfaces: &mut Vec<String>,
     ) {
         if let Some(v) = &self.socket
-            && *socket == PathBuf::from("/run/apf/apf-policy-service.sock")
+            && socket.as_path() == Path::new("/run/apf/apf-policy-service.sock")
         {
             *socket = v.clone();
         }
@@ -107,12 +108,12 @@ impl ServiceConfig {
             *bundle_path = self.bundle_path.clone();
         }
         if let Some(v) = &self.trust_root_dir
-            && *trust_root_dir == PathBuf::from("./trust-roots")
+            && trust_root_dir.as_path() == Path::new("./trust-roots")
         {
             *trust_root_dir = v.clone();
         }
         if let Some(v) = &self.counter_store
-            && *counter_store == PathBuf::from("/tmp/apf-counter")
+            && counter_store.as_path() == Path::new("/tmp/apf-counter")
         {
             *counter_store = v.clone();
         }
@@ -177,6 +178,7 @@ impl ServiceConfig {
 }
 
 /// Build a `ServiceConfig` snapshot from resolved runtime values for --config-dump.
+#[allow(clippy::too_many_arguments)]
 pub fn snapshot(
     socket: &Path,
     bundle_path: &Path,
@@ -286,7 +288,10 @@ oidc_discovery = "https://policy.example.com/.well-known/openid-configuration"
         assert_eq!(config.verifier.key_id.unwrap(), "apf-prod");
         assert_eq!(config.policy_source.backend.unwrap(), "http");
         assert_eq!(
-            config.policy_source.bundle_source_poll_interval_secs.unwrap(),
+            config
+                .policy_source
+                .bundle_source_poll_interval_secs
+                .unwrap(),
             60
         );
         assert_eq!(config.resolver.backend.unwrap(), "claims");

@@ -37,11 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Fetch OpenShell sandbox.proto from git ---
     let os_export = out_dir.join("openshell-proto-export");
     export_openshell(&os_export, OPENSHELL_COMMIT)?;
-    let sandbox_proto           = os_export.join("sandbox.proto");
-    let gateway_interceptor     = os_export.join("gateway_interceptor.proto");
-    let supervisor_middleware   = os_export.join("supervisor_middleware.proto");
-    let datamodel_proto         = os_export.join("datamodel.proto");
-    let openshell_proto         = os_export.join("openshell.proto");
+    let sandbox_proto = os_export.join("sandbox.proto");
+    let gateway_interceptor = os_export.join("gateway_interceptor.proto");
+    let supervisor_middleware = os_export.join("supervisor_middleware.proto");
+    let datamodel_proto = os_export.join("datamodel.proto");
+    let openshell_proto = os_export.join("openshell.proto");
 
     // --- Local wire surface protos ---
     let local_protos: Vec<PathBuf> = [
@@ -54,9 +54,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .collect();
 
     let mut all_protos: Vec<PathBuf> = ir_protos;
-    for p in [&sandbox_proto, &gateway_interceptor, &supervisor_middleware,
-              &datamodel_proto, &openshell_proto] {
-        if p.exists() { all_protos.push(p.clone()); }
+    for p in [
+        &sandbox_proto,
+        &gateway_interceptor,
+        &supervisor_middleware,
+        &datamodel_proto,
+        &openshell_proto,
+    ] {
+        if p.exists() {
+            all_protos.push(p.clone());
+        }
     }
     all_protos.extend(local_protos);
 

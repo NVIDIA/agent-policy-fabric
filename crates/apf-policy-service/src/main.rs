@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use apf_bundle::{CounterStore, Ed25519Verifier, TrustStore, verify_bundle};
+use apf_bundle::{CounterStore, TrustStore, YamlSigilVerifier, verify_bundle};
 use apf_compiler::{Compiler, surfaces_to_projections};
 use apf_proto::policy_service_v1alpha1::policy_service_server::PolicyServiceServer;
 use apf_types::BundleVerifier;
@@ -66,7 +66,11 @@ struct ServeArgs {
     #[arg(long)]
     config_dump: bool,
 
-    #[arg(long, env = "APF_SOCKET", default_value = "/run/apf/policy-service.sock")]
+    #[arg(
+        long,
+        env = "APF_SOCKET",
+        default_value = "/run/apf/policy-service.sock"
+    )]
     socket: PathBuf,
 
     #[arg(long, env = "APF_BUNDLE_PATH")]
@@ -75,7 +79,11 @@ struct ServeArgs {
     #[arg(long, env = "APF_TRUST_ROOT_DIR", default_value = "./trust-roots")]
     trust_root_dir: PathBuf,
 
-    #[arg(long, env = "APF_COUNTER_STORE", default_value = "/var/lib/apf/counter")]
+    #[arg(
+        long,
+        env = "APF_COUNTER_STORE",
+        default_value = "/var/lib/apf/counter"
+    )]
     counter_store: PathBuf,
 
     #[arg(long, env = "APF_DOCUMENT_SIGNING_KEY")]
@@ -174,7 +182,9 @@ fn resolve_bundle_source_token(args: &ServeArgs) -> anyhow::Result<String> {
         return Ok(raw.trim().to_string());
     }
     if let Some(token) = &args.bundle_source_token {
-        warn!("--bundle-source-token is visible in process arguments; prefer --bundle-source-token-file");
+        warn!(
+            "--bundle-source-token is visible in process arguments; prefer --bundle-source-token-file"
+        );
         return Ok(token.clone());
     }
     Ok(String::new())
@@ -205,12 +215,18 @@ fn load_and_verify_bundle(
         .emit_verify_bundle(&runtime_ctx, &metadata, &outcome)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !outcome.ok {
-        anyhow::bail!("bundle verification failed: {:?}", outcome.rejection_reasons);
+        anyhow::bail!(
+            "bundle verification failed: {:?}",
+            outcome.rejection_reasons
+        );
     }
     Ok(LoadedBundle {
         digest_hex: outcome.digest_hex,
         monotonic_counter: outcome.monotonic_counter,
         audit_metadata: metadata,
+        bundle: outcome
+            .bundle
+            .expect("outcome.ok guarantees bundle is present"),
     })
 }
 
@@ -294,22 +310,32 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         info!(path = %config_path.display(), "loaded config");
     }
 
-    let bundle_path = args.bundle_path.clone().ok_or_else(|| {
-        anyhow::anyhow!("--bundle-path (or APF_BUNDLE_PATH) is required")
-    })?;
+    let bundle_path = args
+        .bundle_path
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--bundle-path (or APF_BUNDLE_PATH) is required"))?;
 
     let trust_store = TrustStore::load_from_dir(&args.trust_root_dir).map_err(|e| {
-        anyhow::anyhow!("load trust roots from {}: {e}", args.trust_root_dir.display())
+        anyhow::anyhow!(
+            "load trust roots from {}: {e}",
+            args.trust_root_dir.display()
+        )
     })?;
     if trust_store.is_empty() {
-        anyhow::bail!("trust-root dir {} contains no `*.pub` keys", args.trust_root_dir.display());
+        anyhow::bail!(
+            "trust-root dir {} contains no `*.pub` keys",
+            args.trust_root_dir.display()
+        );
     }
     info!(dir = %args.trust_root_dir.display(), count = trust_store.len(), "loaded trust roots");
 
     let document_signer = if let Some(p) = &args.document_signing_key {
         let sk = load_signing_key(p)?;
         info!(path = %p.display(), key_id = %args.document_key_id, "loaded document signing key");
-        DocumentSigner { key_id: args.document_key_id.clone(), signing_key: sk }
+        DocumentSigner {
+            key_id: args.document_key_id.clone(),
+            signing_key: sk,
+        }
     } else {
         let sk = SigningKey::generate(&mut OsRng);
         let pk_b64 =
@@ -319,7 +345,10 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             public_key = %format!("ed25519:{pk_b64}"),
             "generated ephemeral signing key; register the public key in the gateway trust store"
         );
-        DocumentSigner { key_id: args.document_key_id.clone(), signing_key: sk }
+        DocumentSigner {
+            key_id: args.document_key_id.clone(),
+            signing_key: sk,
+        }
     };
 
     let mut counter_store = CounterStore::load_or_init(&args.counter_store)
@@ -335,11 +364,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
     let bundle_bytes = std::fs::read(&bundle_path)
         .map_err(|e| anyhow::anyhow!("read bundle {}: {e}", bundle_path.display()))?;
 
-    let default_verifier = Ed25519Verifier::new(
-        trust_store.get(&args.document_key_id).cloned().ok_or_else(|| {
-            anyhow::anyhow!("no trust root for key id '{}'", args.document_key_id)
-        })?,
-    );
+    let default_verifier = YamlSigilVerifier::new(trust_store.clone());
 
     let loaded_bundle = load_and_verify_bundle(
         &bundle_bytes,
@@ -359,12 +384,9 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         "bundle verified and loaded"
     );
 
-    let compiler = Compiler::new(vec![
-        Box::new(apf_openshell_projector::OpenShellProjector),
-    ]);
+    let compiler = Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]);
 
-    let parsed_bundle = apf_bundle::parse_bundle(&bundle_bytes)
-        .map_err(|e| anyhow::anyhow!("parse verified bundle: {e}"))?;
+    let parsed_bundle = loaded_bundle.bundle.clone();
     let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("."));
     let members = parsed_bundle
         .load_members(bundle_dir)
@@ -448,14 +470,19 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
 
     let listener = UnixListener::bind(&args.socket)?;
     std::fs::set_permissions(&args.socket, std::fs::Permissions::from_mode(0o600))?;
-    let allowed_uid = args.allowed_uid.unwrap_or_else(|| nix::unistd::getuid().as_raw());
+    let allowed_uid = args
+        .allowed_uid
+        .unwrap_or_else(|| nix::unistd::getuid().as_raw());
     info!(socket = %args.socket.display(), allowed_uid, "policy-service listening");
 
     let gated = UnixListenerStream::new(listener).filter_map(move |result| match result {
         Ok(stream) => match stream.peer_cred() {
             Ok(cred) if cred.uid() == allowed_uid => Some(Ok(stream)),
             Ok(cred) => {
-                warn!(peer_uid = cred.uid(), allowed_uid, "rejecting connection: UID mismatch");
+                warn!(
+                    peer_uid = cred.uid(),
+                    allowed_uid, "rejecting connection: UID mismatch"
+                );
                 None
             }
             Err(e) => {

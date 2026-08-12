@@ -88,7 +88,9 @@ pub fn sandbox_policy_to_json(policy: &SandboxPolicy) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openshell_sandbox::{FilesystemPolicy, LandlockPolicy, ProcessPolicy, SandboxPolicy};
+    use crate::openshell_sandbox::{
+        FilesystemPolicy, LandlockPolicy, ProcessPolicy, SandboxPolicy,
+    };
 
     #[test]
     fn spec_digest_is_64_hex_chars() {

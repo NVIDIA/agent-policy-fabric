@@ -1,0 +1,38 @@
+# apf-policy-service configuration — reference example.
+#
+# All fields are optional. CLI arguments and APF_* environment variables
+# override values set here. Omitted fields use compiled defaults.
+#
+# Usage:
+#   apf-policy-service --config examples/policy-service.toml
+#   apf-policy-service --config examples/policy-service.toml --http-addr 0.0.0.0:9090
+
+socket = "/run/apf/policy-service.sock"
+bundle_path = "examples/governed-rw-bundle/governed-rw-bundle.yaml"
+trust_root_dir = "examples/dev-keys"
+counter_store = "/var/lib/apf/counter"
+audit_log_path = "/var/log/apf/audit.jsonl"
+
+# http_addr = "127.0.0.1:9090"
+# allowed_uid = 501
+# surfaces = ["openshell.sandbox.v1", "openshell.provider-profile.v1"]
+
+[verifier]
+# signing_key = "/etc/apf/keys/verifier.key"
+key_id = "apf-dev"
+
+[policy_source]
+backend = "artifactory"
+artifactory_url = "https://REDACTED-REGISTRY/generic-local/signed-bundles/governed-{variant}/latest.tar.gz"
+artifactory_token_file = "/etc/apf/artifactory-token"
+artifactory_poll_interval_secs = 30
+
+[resolver]
+backend = "claims"
+claims_config = "examples/claims.json"
+
+[provenance]
+signer = "apf-policy-adapter"
+# When --http-addr is set, oidc_discovery defaults to http://<addr>/.well-known/jwks.json
+# Set explicitly for hosted deployments:
+# oidc_discovery = "http://<hostname>/.well-known/jwks.json"

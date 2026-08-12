@@ -188,13 +188,11 @@ async fn refresh_running_sandboxes(
                         correlation_id = %cid,
                         "TAMPER DETECTED: stored provenance token failed verification"
                     );
-                } else if is_expired(&key, token) {
-                    if !accepts_policy_refresh(&sandbox) {
-                        warn!(
-                            sandbox = %metadata.name,
-                            "provenance token expired; sandbox not eligible for policy refresh"
-                        );
-                    }
+                } else if is_expired(&key, token) && !accepts_policy_refresh(&sandbox) {
+                    warn!(
+                        sandbox = %metadata.name,
+                        "provenance token expired; sandbox not eligible for policy refresh"
+                    );
                 }
             }
 
@@ -271,8 +269,7 @@ fn is_expired(_key: &VerifyingKey, jwt: &str) -> bool {
     if parts.len() != 3 {
         return false;
     }
-    let Ok(payload_bytes) =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1])
+    let Ok(payload_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1])
     else {
         return false;
     };

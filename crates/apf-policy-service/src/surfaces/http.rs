@@ -170,13 +170,11 @@ async fn get_document(
     s.check_kind(&kind)?;
 
     let ctx = RuntimeContext {
-        platform: Some(runtime_context::Platform::Openshell(
-            OpenShellContext {
-                sandbox_id: q.sandbox_id.unwrap_or_default(),
-                user_subject: q.user_subject.unwrap_or_default(),
-                agent_type: q.agent_type.unwrap_or_default(),
-            },
-        )),
+        platform: Some(runtime_context::Platform::Openshell(OpenShellContext {
+            sandbox_id: q.sandbox_id.unwrap_or_default(),
+            user_subject: q.user_subject.unwrap_or_default(),
+            agent_type: q.agent_type.unwrap_or_default(),
+        })),
         audit_context: HashMap::new(),
     };
     let resolved = s.resolver.resolve(&name, &ctx);

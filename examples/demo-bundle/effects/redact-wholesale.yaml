@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyEffect
+metadata:
+  name: redact-wholesale
+
+spec:
+  description: Replace full body with a redaction notice and emit a secret finding.
+  verdict: allow
+  reason: secret_pattern_redacted
+  body:
+    replace: '{"apf_redacted": true, "reason": "credential pattern detected"}'
+  headers:
+    - name: x-openshell-middleware-apf-event
+      action: set
+      source: context.annotations.secret_kind
+  finding: secret-detected

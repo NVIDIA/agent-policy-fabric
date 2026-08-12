@@ -2,10 +2,10 @@
 
 use tonic::{Request, Response, Status};
 
-use apf_proto::pdp_v1alpha1::{
-    evaluation_service_server::EvaluationService, Decision, EvaluateRequest, EvaluateResponse,
-};
 use apf_policy_eval::EvalInput;
+use apf_proto::pdp_v1alpha1::{
+    Decision, EvaluateRequest, EvaluateResponse, evaluation_service_server::EvaluationService,
+};
 
 use crate::engine::EvaluatorReceiver;
 

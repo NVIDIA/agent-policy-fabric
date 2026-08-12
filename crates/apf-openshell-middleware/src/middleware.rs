@@ -22,9 +22,8 @@ use serde_json::{Map, Value};
 use tonic::{Request, Response, Status};
 
 use apf_proto::supervisor_middleware_v1::{
-    supervisor_middleware_server::SupervisorMiddleware,
+    self as wire, supervisor_middleware_server::SupervisorMiddleware,
     supervisor_middleware_server::SupervisorMiddlewareServer,
-    self as wire,
 };
 
 const SERVICE_NAME: &str = "apf-content-policy";
@@ -683,9 +682,7 @@ mod tests {
     }
 
     fn make_service(evaluator: impl Evaluator + 'static) -> SupervisorMiddlewareService {
-        let (_, rx) = tokio::sync::watch::channel(
-            Arc::new(evaluator) as Arc<dyn Evaluator>,
-        );
+        let (_, rx) = tokio::sync::watch::channel(Arc::new(evaluator) as Arc<dyn Evaluator>);
         SupervisorMiddlewareService::new(rx)
     }
 
@@ -1142,7 +1139,10 @@ mod tests {
         invalid_phase.phase = wire::SupervisorMiddlewarePhase::Unspecified as i32;
         let mut invalid_config = evaluation(b"plain text");
         invalid_config.config = Some(Struct {
-            fields: std::collections::BTreeMap::from([("unexpected".to_string(), ProtoValue::default())]),
+            fields: std::collections::BTreeMap::from([(
+                "unexpected".to_string(),
+                ProtoValue::default(),
+            )]),
         });
         let mut missing_target = evaluation(b"plain text");
         missing_target.target = None;

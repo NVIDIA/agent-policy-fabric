@@ -63,6 +63,7 @@ mod tests {
                 digest_hex: "abc".to_string(),
                 monotonic_counter: 7,
                 audit_metadata: BundleAuditMetadata::from_counter_and_digest(0, ""),
+                bundle: Default::default(),
             },
             projections,
             document_signer: None,

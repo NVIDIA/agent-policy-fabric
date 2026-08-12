@@ -22,9 +22,9 @@ use sha2::{Digest, Sha256};
 use tracing::{info, trace, warn};
 
 use super::{PolicyProjection, PolicySource};
-use apf_bundle::CounterStore;
 use crate::runtime::audit::{BundleAuditMetadata, PolicyRejectAudit, PolicyServiceAudit};
 use crate::runtime::runtime_context::RuntimeContext;
+use apf_bundle::CounterStore;
 
 /// How the source detects bundle updates.
 #[derive(Debug, Clone)]
@@ -106,7 +106,7 @@ impl HttpBundleSource {
             caches: Arc::new(RwLock::new(BTreeMap::new())),
             http_client,
             counter_store: Mutex::new(None),
-            audit: PolicyServiceAudit::default(),
+            audit: PolicyServiceAudit,
         })
     }
 
@@ -432,14 +432,11 @@ impl HttpBundleSource {
     /// Returns `(projections, monotonic_counter, tar_gz_digest)`.
     /// Projections are returned with pre-computed SHA-256 digests so `get()`
     /// avoids per-call hashing.
+    #[allow(clippy::type_complexity)]
     fn extract_and_compile(
         &self,
         tar_gz: &[u8],
-    ) -> anyhow::Result<(
-        BTreeMap<(String, String), PolicyProjection>,
-        u64,
-        String,
-    )> {
+    ) -> anyhow::Result<(BTreeMap<(String, String), PolicyProjection>, u64, String)> {
         let tar_digest = hex::encode(Sha256::digest(tar_gz));
         let tmp_dir = tempfile::tempdir().map_err(|e| anyhow::anyhow!("create temp dir: {e}"))?;
 

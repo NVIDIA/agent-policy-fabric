@@ -9,12 +9,12 @@ use tokio::sync::broadcast::error::RecvError;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::{info, warn};
 
+use crate::proto::openshell::sandbox::v1::NetworkEndpoint;
 use crate::proto::openshell::v1::{
     ImportProviderProfilesRequest, ProviderProfile, ProviderProfileCredential,
     ProviderProfileDiscovery, ProviderProfileImportItem, UpdateProviderProfilesRequest,
     open_shell_client::OpenShellClient,
 };
-use crate::proto::openshell::sandbox::v1::NetworkEndpoint;
 use apf_policy_client::PolicyClientHandle;
 
 const RECONCILE_ATTEMPTS: u32 = 5;
@@ -144,12 +144,10 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
         binaries: yaml
             .binaries
             .into_iter()
-            .map(
-                |path| crate::proto::openshell::sandbox::v1::NetworkBinary {
-                    path,
-                    ..Default::default()
-                },
-            )
+            .map(|path| crate::proto::openshell::sandbox::v1::NetworkBinary {
+                path,
+                ..Default::default()
+            })
             .collect(),
         inference_capable: yaml.inference_capable,
         discovery: yaml.discovery.map(|d| ProviderProfileDiscovery {
@@ -193,9 +191,10 @@ async fn reconcile_one(
     let id = profile.id.clone();
 
     match client
-        .get_provider_profile(
-            crate::proto::openshell::v1::GetProviderProfileRequest { id: id.clone(), ..Default::default() },
-        )
+        .get_provider_profile(crate::proto::openshell::v1::GetProviderProfileRequest {
+            id: id.clone(),
+            ..Default::default()
+        })
         .await
     {
         Ok(resp) => {
@@ -209,16 +208,19 @@ async fn reconcile_one(
             let mut updated = profile;
             updated.resource_version = existing.resource_version;
             let resp = client
-                .update_provider_profiles(UpdateProviderProfilesRequest {
-                    id: id.clone(),
-                    profile: Some(ProviderProfileImportItem {
-                        profile: Some(updated),
-                        source: "apf-bundle".to_string(),
+                .update_provider_profiles(
+                    #[allow(clippy::needless_update)]
+                    UpdateProviderProfilesRequest {
+                        id: id.clone(),
+                        profile: Some(ProviderProfileImportItem {
+                            profile: Some(updated),
+                            source: "apf-bundle".to_string(),
+                            ..Default::default()
+                        }),
+                        expected_resource_version: existing.resource_version,
                         ..Default::default()
-                    }),
-                    expected_resource_version: existing.resource_version,
-                    ..Default::default()
-                })
+                    },
+                )
                 .await
                 .map_err(|s| format!("update_provider_profiles '{id}': {s}"))?
                 .into_inner();
@@ -231,14 +233,17 @@ async fn reconcile_one(
         }
         Err(status) if status.code() == Code::NotFound => {
             let resp = client
-                .import_provider_profiles(ImportProviderProfilesRequest {
-                    profiles: vec![ProviderProfileImportItem {
-                        profile: Some(profile),
-                        source: "apf-bundle".to_string(),
+                .import_provider_profiles(
+                    #[allow(clippy::needless_update)]
+                    ImportProviderProfilesRequest {
+                        profiles: vec![ProviderProfileImportItem {
+                            profile: Some(profile),
+                            source: "apf-bundle".to_string(),
+                            ..Default::default()
+                        }],
                         ..Default::default()
-                    }],
-                    ..Default::default()
-                })
+                    },
+                )
                 .await
                 .map_err(|s| format!("import_provider_profiles '{id}': {s}"))?
                 .into_inner();
@@ -348,7 +353,10 @@ pub fn spawn_profile_reconciler(
                         .await
                     {
                         Ok(digest) => {
-                            info!(digest, "provider profile reconciliation after bundle change succeeded");
+                            info!(
+                                digest,
+                                "provider profile reconciliation after bundle change succeeded"
+                            );
                         }
                         Err(e) => {
                             warn!(

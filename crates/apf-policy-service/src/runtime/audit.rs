@@ -6,8 +6,8 @@
 //! policy-service (bundle lifecycle) and policy-gateway (evaluation events)
 //! is established.
 
-use apf_bundle::{Bundle, VerifyOutcome};
 use crate::runtime::runtime_context::RuntimeContext;
+use apf_bundle::{Bundle, VerifyOutcome};
 
 /// Bundle identity fields attached to audit records for a policy lifecycle event.
 #[derive(Debug, Clone, Default)]

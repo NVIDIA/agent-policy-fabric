@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Security team — owns this file. Standalone PolicyRule covering content
+# inspection on both the request and result phases. Uses PolicyAnnotator
+# docs (secret-detector, pii-detector) for detection; Cedar decides;
+# PolicyEffect / PolicyFinding handle mutations and audit.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: security-content-gate
+
+spec:
+  description: >
+    Content security gate — deny secret leakage, redact PII. Evaluates for
+    all traffic (MCP and non-MCP). role: control means this rule does not
+    satisfy the MCP capability requirement; it only enforces content policy.
+  language: cedar
+  role: control
+  definition: |
+    // Baseline allow — fires for every request so effects from other permits
+    // in this PolicySet are collected even when no content is flagged.
+    @id("baseline-allow")
+    permit (principal, action, resource);
+
+    // MCP tool calls carrying a detected secret are denied outright.
+    @apf_finding("secret-detected")
+    @id("deny-secret")
+    forbid (principal, action, resource)
+    when { context.has_tool_name && context.annotations.secret_detected };
+
+    // REST requests carrying a secret: replace the full body before forwarding.
+    // httpbin/upstream receives [REDACTED] — the original credential never leaves.
+    @apf_effect("redact-wholesale")
+    @id("redact-secret-rest")
+    permit (principal, action, resource)
+    when { !context.has_tool_name && context.annotations.secret_detected };
+
+    // REST requests with PII in body: patch the /text field before forwarding.
+    // Not applied to MCP requests (no /text in JSON-RPC envelopes).
+    @apf_effect("redact-pii-body")
+    @id("redact-pii-rest")
+    permit (principal, action, resource)
+    when { !context.has_tool_name && context.annotations.pii_detected };
+

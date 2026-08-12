@@ -6,11 +6,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use apf_proto::openshell_sandbox::SandboxPolicy;
 use apf_proto::policy_service_v1alpha1 as wire;
 use apf_proto::runtime_v1alpha1::runtime_context;
-use apf_proto::openshell_sandbox::SandboxPolicy;
 use apf_proto::spec_digest::sandbox_policy_spec_digest;
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use prost::Message;
 use serde::Serialize;
 use tonic::{Request, Response, Status};
@@ -149,6 +149,7 @@ impl PolicyServiceImpl {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn check_kind(&self, kind: &str) -> Result<(), Status> {
         if kind.is_empty() {
             return Err(Status::invalid_argument("kind must be non-empty"));

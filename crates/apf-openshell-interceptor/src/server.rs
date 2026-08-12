@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::reconciler;
-use ed25519_dalek::VerifyingKey;
 use apf_policy_client::PolicyClientHandle;
+use ed25519_dalek::VerifyingKey;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
@@ -46,9 +46,11 @@ pub struct GatewayInterceptorService {
 #[derive(Debug, Default)]
 struct ProvJwtClaims {
     pub jti: String,
+    #[allow(dead_code)]
     pub sub: String,
     pub apf_document_digest: String,
     pub apf_spec_digest: String,
+    #[allow(dead_code)]
     pub apf_bundle_id: String,
 }
 
@@ -111,8 +113,7 @@ fn verify_jwt_internal(key: &VerifyingKey, jwt: &str) -> Result<ProvJwtClaims, (
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1])
         .map_err(|_| ())?;
-    let payload: serde_json::Value =
-        serde_json::from_slice(&payload_bytes).map_err(|_| ())?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|_| ())?;
 
     // Check expiry
     let exp = payload["exp"].as_u64().unwrap_or(0);
@@ -132,7 +133,10 @@ fn verify_jwt_internal(key: &VerifyingKey, jwt: &str) -> Result<ProvJwtClaims, (
             .as_str()
             .unwrap_or("")
             .to_string(),
-        apf_spec_digest: payload["apf/spec-digest"].as_str().unwrap_or("").to_string(),
+        apf_spec_digest: payload["apf/spec-digest"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
         apf_bundle_id: payload["apf/bundle-id"].as_str().unwrap_or("").to_string(),
     })
 }
@@ -461,10 +465,7 @@ impl GatewayInterceptorService {
             }
         }
 
-        info!(
-            correlation_id,
-            sandbox_id, "CreateSandbox VALIDATE allowed"
-        );
+        info!(correlation_id, sandbox_id, "CreateSandbox VALIDATE allowed");
         Ok(Response::new(allow()))
     }
 
@@ -1400,15 +1401,13 @@ mod tests {
         InterceptorEvaluation {
             binding_id: "create-sandbox-post-commit".to_string(),
             method: "CreateSandbox".to_string(),
-            phase: Some(
-                crate::proto::interceptor_evaluation::Phase::PostCommit(
-                    crate::proto::PostCommitEvaluation {
-                        committed_response: Some(ProstStruct {
-                            fields: committed_response,
-                        }),
-                    },
-                ),
-            ),
+            phase: Some(crate::proto::interceptor_evaluation::Phase::PostCommit(
+                crate::proto::PostCommitEvaluation {
+                    committed_response: Some(ProstStruct {
+                        fields: committed_response,
+                    }),
+                },
+            )),
             principal: [("subject".to_string(), "alice@example.com".to_string())]
                 .into_iter()
                 .collect(),
@@ -1455,15 +1454,13 @@ mod tests {
         InterceptorEvaluation {
             binding_id: "config-policy-post-commit".to_string(),
             method: "UpdateConfig".to_string(),
-            phase: Some(
-                crate::proto::interceptor_evaluation::Phase::PostCommit(
-                    crate::proto::PostCommitEvaluation {
-                        committed_response: Some(ProstStruct {
-                            fields: committed_response,
-                        }),
-                    },
-                ),
-            ),
+            phase: Some(crate::proto::interceptor_evaluation::Phase::PostCommit(
+                crate::proto::PostCommitEvaluation {
+                    committed_response: Some(ProstStruct {
+                        fields: committed_response,
+                    }),
+                },
+            )),
             principal: [
                 ("subject".to_string(), "operator-subject".to_string()),
                 ("sandbox_id".to_string(), "sandbox-update-id".to_string()),
@@ -1487,15 +1484,13 @@ mod tests {
         InterceptorEvaluation {
             binding_id: "config-policy-post-commit".to_string(),
             method: "UpdateConfig".to_string(),
-            phase: Some(
-                crate::proto::interceptor_evaluation::Phase::PostCommit(
-                    crate::proto::PostCommitEvaluation {
-                        committed_response: Some(ProstStruct {
-                            fields: committed_response,
-                        }),
-                    },
-                ),
-            ),
+            phase: Some(crate::proto::interceptor_evaluation::Phase::PostCommit(
+                crate::proto::PostCommitEvaluation {
+                    committed_response: Some(ProstStruct {
+                        fields: committed_response,
+                    }),
+                },
+            )),
             principal: [("subject".to_string(), "operator-subject".to_string())]
                 .into_iter()
                 .collect(),
@@ -1541,11 +1536,9 @@ mod tests {
         let service = service();
         let evaluation = InterceptorEvaluation {
             method: "Health".to_string(),
-            phase: Some(
-                crate::proto::interceptor_evaluation::Phase::Validate(
-                    crate::proto::ValidateEvaluation::default(),
-                ),
-            ),
+            phase: Some(crate::proto::interceptor_evaluation::Phase::Validate(
+                crate::proto::ValidateEvaluation::default(),
+            )),
             ..Default::default()
         };
 

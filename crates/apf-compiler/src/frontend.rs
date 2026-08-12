@@ -166,10 +166,11 @@ struct PolicyRuleSpecDef {
     definition: String,
     #[serde(default)]
     data: Option<serde_yaml::Value>,
-    // role is stored in the proto IR (PolicyRuleRole enum); not parsed here
-    // from YAML — use parse_policy_rule_doc(rule) after proto parsing.
-    #[serde(default, skip)]
-    _role: (),
+    // role is parsed from YAML but mapped to the proto IR enum separately
+    // via parse_policy_rule_doc; stored here only to satisfy deny_unknown_fields.
+    #[serde(default)]
+    #[allow(dead_code)]
+    role: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -516,10 +517,7 @@ pub fn effect_to_doc(e: &ir::PolicyEffect) -> apf_policy_eval::PolicyEffectDoc {
                 apf_policy_eval::PatchSpec {
                     op,
                     path: p.path,
-                    value: p
-                        .value
-                        .as_ref()
-                        .map(apf_proto::json::prost_value_to_json),
+                    value: p.value.as_ref().map(apf_proto::json::prost_value_to_json),
                     source: p.source,
                 }
             })
@@ -551,9 +549,7 @@ pub fn effect_to_doc(e: &ir::PolicyEffect) -> apf_policy_eval::PolicyEffectDoc {
             ir::finding_ref::Kind::Reference(r) => apf_policy_eval::FindingSpec::Reference(r),
             ir::finding_ref::Kind::Inline(inline) => {
                 let severity = match ir::Severity::try_from(inline.severity).unwrap_or_default() {
-                    ir::Severity::Unspecified | ir::Severity::Low => {
-                        apf_policy_eval::Severity::Low
-                    }
+                    ir::Severity::Unspecified | ir::Severity::Low => apf_policy_eval::Severity::Low,
                     ir::Severity::Medium => apf_policy_eval::Severity::Medium,
                     ir::Severity::High => apf_policy_eval::Severity::High,
                     ir::Severity::Critical => apf_policy_eval::Severity::Critical,
@@ -1276,7 +1272,7 @@ pub fn build_canonical_policy(
 ) -> Result<crate::backend::CanonicalPolicy, FrontendError> {
     use std::collections::BTreeMap;
     let mut sandbox_policies = BTreeMap::new();
-    let mut sandbox_middleware = BTreeMap::new();
+    let sandbox_middleware = BTreeMap::new();
     for (name, bytes) in &members.sandbox_policies {
         let policy = parse(bytes)?;
         // sandbox_middleware is carried out-of-band (BSR field not yet available)
