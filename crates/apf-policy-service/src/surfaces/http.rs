@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -30,13 +31,11 @@ use crate::source::{PolicyResolver, PolicySource};
 /// Shared state for the HTTP surface handlers.
 #[derive(Clone)]
 pub struct HttpState {
-    pub core: Arc<PolicyServiceCore>,
+    pub core: Arc<ArcSwap<PolicyServiceCore>>,
     pub source: Arc<dyn PolicySource>,
     pub resolver: Arc<dyn PolicyResolver>,
     /// Empty = no restriction; non-empty = only these kinds are served.
     pub allowed_kinds: Arc<HashSet<String>>,
-    /// When set, the `/v1/refresh` endpoint triggers an immediate re-fetch.
-    pub http_source: Option<Arc<crate::source::HttpBundleSource>>,
 }
 
 impl HttpState {
@@ -103,7 +102,7 @@ struct ReadyzBody {
 }
 
 async fn readyz(State(s): State<HttpState>) -> (StatusCode, Json<ReadyzBody>) {
-    if s.core.bundle.digest_hex.is_empty() {
+    if s.core.load().bundle.digest_hex.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ReadyzBody {
@@ -201,31 +200,36 @@ struct RefreshResponse {
     version: u64,
 }
 
+#[derive(Deserialize, Default)]
+struct RefreshRequest {
+    bundle_path: Option<String>,
+}
+
 async fn refresh_policy(
     State(s): State<HttpState>,
+    body: Option<Json<RefreshRequest>>,
 ) -> Result<Json<RefreshResponse>, (StatusCode, String)> {
+    let req = body.map(|b| b.0).unwrap_or_default();
+    let bundle_path = req.bundle_path.as_deref().map(std::path::Path::new);
     tracing::info!("HTTP /v1/refresh triggered by operator");
-    if let Some(ref src) = s.http_source {
-        src.poll_for_update().await.map_err(|e| {
-            tracing::warn!(error = %e, "HTTP /v1/refresh failed");
-            (
+
+    match s.source.refresh(bundle_path).await {
+        Ok(outcome) => {
+            tracing::info!(digest = %outcome.policy_digest, "bundle refreshed via /v1/refresh");
+            Ok(Json(RefreshResponse {
+                status: "refreshed",
+                policy_digest: outcome.policy_digest,
+                version: outcome.version,
+            }))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "bundle refresh failed");
+            Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("refresh failed: {e}"),
-            )
-        })?;
-        let digest = src.current_bundle_digest();
-        let version = src.current_counter();
-        return Ok(Json(RefreshResponse {
-            status: "refreshed",
-            policy_digest: digest,
-            version,
-        }));
+            ))
+        }
     }
-    Ok(Json(RefreshResponse {
-        status: "no_http_source",
-        policy_digest: s.core.bundle.digest_hex.clone(),
-        version: s.core.bundle.monotonic_counter,
-    }))
 }
 
 // --- GET /.well-known/jwks.json ---
@@ -247,7 +251,7 @@ struct JwkEntry {
 
 async fn jwks(State(s): State<HttpState>) -> Json<JwksResponse> {
     let mut keys = Vec::new();
-    if let Some(ref vi) = s.core.document_signer {
+    if let Some(ref vi) = s.core.load().document_signer {
         let pk = vi.signing_key.verifying_key();
         keys.push(JwkEntry {
             kty: "OKP".to_string(),

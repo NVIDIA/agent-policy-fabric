@@ -33,6 +33,7 @@ pub fn to_cedar(input: &EvalInput) -> (EntityUid, EntityUid, EntityUid, Value) {
 
     let action_id = match (&input.tool, &input.capability) {
         (Some(tool), Some(capability)) => format!("{tool}::{capability}"),
+        (Some(tool), None) => tool.clone(),
         _ => ACTION_INVOKE.to_string(),
     };
     let action = entity_uid(ACTION_TYPE, &action_id);

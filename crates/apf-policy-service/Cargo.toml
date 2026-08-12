@@ -18,6 +18,8 @@ apf-proto     = { path = "../apf-proto" }
 apf-types     = { path = "../apf-types" }
 
 anyhow         = "1"
+arc-swap       = "1"
+async-trait    = "0.1"
 axum           = "0.8"
 base64         = "0.22"
 chrono         = { version = "0.4", default-features = false, features = ["std"] }

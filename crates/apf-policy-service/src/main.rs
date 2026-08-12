@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 use std::time::{Duration, SystemTime};
 
 use apf_bundle::{CounterStore, TrustStore, YamlSigilVerifier, verify_bundle};
@@ -51,7 +53,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run the policy service daemon
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Generate an Ed25519 signing keypair for document provenance
     Keygen(KeygenArgs),
 }
@@ -411,14 +413,12 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
     let projections = surfaces_to_projections(compiled.surfaces);
 
     let signer = Arc::new(document_signer);
-    let core = Arc::new(PolicyServiceCore {
+    let core = Arc::new(ArcSwap::new(Arc::new(PolicyServiceCore {
         bundle: loaded_bundle,
         projections,
         document_signer: Some(Arc::clone(&signer)),
         audit: audit.clone(),
-    });
-
-    let mut http_source: Option<Arc<HttpBundleSource>> = None;
+    })));
 
     let source: Arc<dyn PolicySource> = if args.policy_source == POLICY_SOURCE_HTTP {
         let url = args.bundle_source_url.as_ref().ok_or_else(|| {
@@ -432,10 +432,24 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         src.load_initial().await?;
         let arc = Arc::new(src);
         arc.start_polling(Duration::from_secs(args.bundle_source_poll_interval_secs));
-        http_source = Some(Arc::clone(&arc));
         arc
     } else {
-        Arc::new(LocalBundleSource::new(core.clone()))
+        let allowed_surfaces_set: Option<std::collections::BTreeSet<String>> =
+            if args.surfaces.is_empty() {
+                None
+            } else {
+                Some(args.surfaces.iter().cloned().collect())
+            };
+        Arc::new(LocalBundleSource::with_reload(
+            Arc::clone(&core),
+            YamlSigilVerifier::new(trust_store.clone()),
+            CounterStore::load_or_init(&args.counter_store)
+                .map_err(|e| anyhow::anyhow!("counter store for reload: {e}"))?,
+            Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]),
+            Some(Arc::clone(&signer)),
+            allowed_surfaces_set,
+            audit.clone(),
+        ))
     };
 
     let resolver: Arc<dyn PolicyResolver> = match args.resolver.as_str() {
@@ -503,7 +517,6 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             source: Arc::clone(&source),
             resolver: Arc::clone(&resolver),
             allowed_kinds: Arc::clone(&allowed_kinds),
-            http_source,
         };
         let app = http_router(http_state);
         let listener_tcp = tokio::net::TcpListener::bind(addr).await?;

@@ -270,6 +270,8 @@ dependencies = [
  "apf-openshell-projector",
  "apf-proto",
  "apf-types",
+ "arc-swap",
+ "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
  "chrono",
