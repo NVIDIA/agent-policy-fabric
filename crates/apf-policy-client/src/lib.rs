@@ -79,7 +79,7 @@ impl PolicyClientHandle {
         Ok(resp.into_inner())
     }
 
-    /// Returns the named governed document for `kind` (surface ID, e.g. `"openshell.sandbox.v1"`).
+    /// Returns the named governed document for `kind` (surface ID, e.g. `"apf.policy.v1"`).
     pub async fn get_document(
         &mut self,
         kind: impl Into<String>,
@@ -97,7 +97,7 @@ impl PolicyClientHandle {
         Ok(resp.into_inner())
     }
 
-    /// Enumerates governed document names for `kind` (surface ID, e.g. `"openshell.sandbox.v1"`).
+    /// Enumerates governed document names for `kind`.
     pub async fn list_documents(
         &mut self,
         kind: impl Into<String>,

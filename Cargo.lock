@@ -248,6 +248,7 @@ dependencies = [
  "ed25519-dalek",
  "jsonwebtoken",
  "nix",
+ "prost",
  "reqwest",
  "serde",
  "serde_json",
@@ -320,6 +321,7 @@ name = "apf-types"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

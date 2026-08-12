@@ -7,8 +7,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use apf_policy_client::PolicyClientHandle;
-
-use crate::events::{EventSender, InterceptorEvent};
+use apf_types::events::{BundleEvent, BundleEventSender};
 
 /// Configuration for the policy document digest watcher.
 pub struct DigestWatcherConfig {
@@ -29,7 +28,7 @@ pub struct DigestWatcherConfig {
 pub fn spawn_digest_watcher(
     config: DigestWatcherConfig,
     mut policy_service: PolicyClientHandle,
-    tx: EventSender,
+    tx: BundleEventSender,
 ) {
     tokio::spawn(async move {
         let mut last_digest: Option<String> = None;
@@ -65,7 +64,7 @@ pub fn spawn_digest_watcher(
                         valid_until_ms = doc.valid_until_ms,
                         "policy document digest changed; publishing BundleChanged"
                     );
-                    let event = InterceptorEvent::BundleChanged {
+                    let event = BundleEvent::BundleChanged {
                         digest: doc.digest.clone(),
                         valid_until_ms: doc.valid_until_ms,
                     };

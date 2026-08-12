@@ -16,6 +16,9 @@ use crate::proto::openshell::v1::{
     open_shell_client::OpenShellClient,
 };
 use apf_policy_client::PolicyClientHandle;
+use apf_proto::ProviderProfileSet;
+use apf_types::events::{BundleEvent, BundleEventReceiver};
+use prost::Message as _;
 
 const RECONCILE_ATTEMPTS: u32 = 5;
 const RECONCILE_RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -271,36 +274,31 @@ async fn reconcile_all(
     tls: Option<ClientTlsConfig>,
     mut policy_service: PolicyClientHandle,
 ) -> Result<String, String> {
-    let ids = policy_service
-        .list_documents("openshell.provider-profile.v1")
+    let doc = policy_service
+        .get_document("openshell.provider-profile.v1", "default", None)
         .await
-        .map_err(|e| format!("list_documents failed: {e}"))?
-        .names;
+        .map_err(|e| format!("get_document provider-profile set: {e}"))?;
 
-    if ids.is_empty() {
+    let profile_set = ProviderProfileSet::decode(doc.body.as_slice())
+        .map_err(|e| format!("decode ProviderProfileSet: {e}"))?;
+
+    if profile_set.profiles.is_empty() {
         info!("bundle has no provider profiles; nothing to reconcile");
-        return Ok(String::new());
+        return Ok(doc.digest);
     }
 
     let mut client = connect_gateway(gateway_endpoint, tls).await?;
-    let mut last_digest = String::new();
 
-    for id in &ids {
-        let doc = policy_service
-            .get_document("openshell.provider-profile.v1", id, None)
-            .await
-            .map_err(|e| format!("get_document '{id}': {e}"))?;
-        last_digest = doc.digest;
-        let profile =
-            profile_from_yaml(&doc.body).map_err(|e| format!("profile '{id}' YAML: {e}"))?;
+    for (i, bytes) in profile_set.profiles.iter().enumerate() {
+        let profile = profile_from_yaml(bytes).map_err(|e| format!("profile[{i}] YAML: {e}"))?;
         reconcile_one(&mut client, profile).await?;
     }
 
     info!(
-        count = ids.len(),
+        count = profile_set.profiles.len(),
         "provider profile reconciliation complete"
     );
-    Ok(last_digest)
+    Ok(doc.digest)
 }
 
 /// Spawn a background task that reconciles bundle-managed provider profiles with
@@ -311,7 +309,7 @@ pub fn spawn_profile_reconciler(
     gateway_endpoint: String,
     tls: Option<ClientTlsConfig>,
     policy_service: PolicyClientHandle,
-    mut rx: tokio::sync::broadcast::Receiver<()>,
+    mut rx: BundleEventReceiver,
 ) {
     tokio::spawn(async move {
         // Initial reconcile: up to RECONCILE_ATTEMPTS with a fixed retry delay.
@@ -345,16 +343,16 @@ pub fn spawn_profile_reconciler(
             );
         }
 
-        // Event loop: re-reconcile when the digest watcher signals a change.
+        // Event loop: re-reconcile when the digest watcher signals a bundle change.
         loop {
             match rx.recv().await {
-                Ok(_event) => {
+                Ok(BundleEvent::BundleChanged { digest, .. }) => {
                     match reconcile_all(&gateway_endpoint, tls.clone(), policy_service.clone())
                         .await
                     {
-                        Ok(digest) => {
+                        Ok(_) => {
                             info!(
-                                digest,
+                                %digest,
                                 "provider profile reconciliation after bundle change succeeded"
                             );
                         }
@@ -367,8 +365,6 @@ pub fn spawn_profile_reconciler(
                     }
                 }
                 Err(RecvError::Lagged(skipped)) => {
-                    // Slow reconcile caused the broadcast buffer to overflow.
-                    // The next event will trigger another reconcile.
                     warn!(
                         skipped,
                         "profile reconciler lagged; missed bundle-changed events"

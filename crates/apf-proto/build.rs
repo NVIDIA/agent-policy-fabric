@@ -14,14 +14,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let contracts = manifest_dir.join("../../contracts/proto");
 
-    // --- Fetch APF core IR types from BSR ---
+    let v1 = "nvidia/agent_policy_fabric/policy/v1alpha1";
+
+    // --- APF core IR types: fetch from BSR ---
     let apf_export = out_dir.join("apf-core-export");
     export_bsr(APF_CORE_MODULE, &apf_export)?;
 
-    let v1 = "nvidia/agent_policy_fabric/policy/v1alpha1";
     let ir_protos: Vec<PathBuf> = [
         "object_meta.proto",
         "policy_rule.proto",
+        "policy_annotator.proto",
+        "policy_set.proto",
+        "provider_profile_set.proto",
         "sandbox_policy.proto",
         "provider.proto",
         "policy_effect.proto",
