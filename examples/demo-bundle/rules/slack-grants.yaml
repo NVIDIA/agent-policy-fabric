@@ -16,16 +16,16 @@ spec:
   role: capability
   data:
     approved_channel: "C0123456789"
-    max_text_len: 2000
+    max_text_len: 500
   definition: |
     // Allow posting to the approved channel within the text length limit.
     @id("slack-grants/slack_chat_post")
     permit (
       principal,
-      action == APF::Action::"slack::slack_chat_post",
+      action == APF::Action::"slack_chat_post",
       resource
     )
     when {
       context.args.channel == context.data.approved_channel &&
-      context.args.text_len <= context.data.max_text_len
+      context.args.textLen <= context.data.max_text_len
     };

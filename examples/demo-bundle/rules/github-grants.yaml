@@ -12,6 +12,6 @@ spec:
     @id("github-grants/repo_read")
     permit (
       principal,
-      action == APF::Action::"github::repo_read",
-      resource == APF::Tool::"github"
+      action == APF::Action::"github_repo_read",
+      resource
     );

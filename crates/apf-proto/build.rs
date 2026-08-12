@@ -19,10 +19,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let v1 = "nvidia/agent_policy_fabric/policy/v1alpha1";
 
-    // --- APF core IR types: fetch from BSR ---
-    let apf_export = out_dir.join("apf-core-export");
-    export_bsr(APF_CORE_MODULE, &apf_export)?;
-
+    // --- APF core IR types: use vendored copy if present, else fetch from BSR ---
+    // Vendored: run `mise run vendor-proto` once locally, commit contracts/proto-ir/.
+    // Docker builds then work without buf or BSR credentials.
+    let vendor_dir = manifest_dir.join("../../contracts/proto-ir");
+    let apf_export = if vendor_dir.exists() && vendor_dir.join(v1).join("policy_rule.proto").exists() {
+        println!("cargo:warning=apf-proto: using vendored proto-ir (contracts/proto-ir/)");
+        vendor_dir.clone()
+    } else {
+        let d = out_dir.join("apf-core-export");
+        export_bsr(APF_CORE_MODULE, &d)?;
+        d
+    };
     let ir_protos: Vec<PathBuf> = [
         "object_meta.proto",
         "policy_rule.proto",

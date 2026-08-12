@@ -1,0 +1,8 @@
+target/
+.git/
+**/*.md
+docs/
+examples/
+deploy/
+.gitignore
+.cargo/registry

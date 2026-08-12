@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::SystemTime;
 
-use apf_bundle::{BundleMembers, CounterStore, parse_bundle, verify_bundle};
+use apf_bundle::{BundleMembers, CounterStore, verify_bundle};
 use apf_types::BundleVerifier;
 
 /// Verify and parse a raw bundle from `bytes`, returning the members on success.
@@ -32,7 +32,9 @@ pub fn refresh(
             outcome.rejection_reasons
         );
     }
-    let bundle = parse_bundle(bytes).map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
+    // Use the already-parsed Bundle from VerifyOutcome — avoids re-parsing the
+    // raw artifact bytes which contain the yaml-sigil signature carrier.
+    let bundle = outcome.bundle.expect("outcome.ok guarantees bundle is present");
     let members = bundle
         .load_members(path.parent().unwrap_or(Path::new(".")))
         .map_err(|e| anyhow::anyhow!("bundle member load failed: {e}"))?;

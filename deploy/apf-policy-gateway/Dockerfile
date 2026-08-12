@@ -4,27 +4,26 @@
 # Build from repo root:
 #   docker build -f deploy/apf-policy-gateway/Dockerfile -t apf-policy-gateway:dev .
 
-ARG GRPC_HEALTH_PROBE_VERSION=v0.4.36
-
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM rust:1.88-bookworm AS build
+
+ARG BUF_VERSION=1.50.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        protobuf-compiler libprotobuf-dev curl \
+    && ARCH="$(dpkg --print-architecture | sed 's/amd64/x86_64/;s/arm64/aarch64/')" \
+    && curl -sSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-${ARCH}" \
+        -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
+    --mount=type=secret,id=artifactory_token \
+    CARGO_REGISTRIES_ARTIFACTORY_TOKEN=$(cat /run/secrets/artifactory_token 2>/dev/null || true) \
     cargo build --release -p apf-policy-gateway && \
     cp target/release/apf-policy-gateway /apf-policy-gateway
-
-# ── grpc-health-probe ─────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS probe-fetch
-ARG GRPC_HEALTH_PROBE_VERSION
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    ARCH="$(dpkg --print-architecture)" && \
-    curl -fsSL "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-${ARCH}" \
-        -o /grpc_health_probe && \
-    chmod +x /grpc_health_probe
 
 # ── runtime ───────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -34,7 +33,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /apf-policy-gateway /usr/local/bin/apf-policy-gateway
-COPY --from=probe-fetch /grpc_health_probe /usr/local/bin/grpc_health_probe
 
 RUN mkdir -p /run/apf /run/apf-gateway /var/lib/apf /data/keys /etc/apf
 

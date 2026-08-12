@@ -10,6 +10,13 @@ run = "cargo xtask dag-guard"
 [tasks.buf-lint]
 run = "buf lint contracts/"
 
+[tasks.vendor-proto]
+description = "Export APF IR proto types from BSR into contracts/proto-ir/ (run before docker build, gitignored)"
+run = """
+buf export REDACTED-SCHEMA-REGISTRY/agent-policy-fabric/core --output contracts/proto-ir/
+echo "Proto types exported to contracts/proto-ir/ (gitignored — re-run when BSR module updates)"
+"""
+
 [tasks.sign-bundle]
 description = "Re-sign examples/demo-bundle after policy changes"
 run = """
@@ -51,6 +58,7 @@ trap 'kill $(jobs -p) 2>/dev/null; rm -rf $SOCK_DIR' EXIT
   --trust-root-dir examples/dev-keys \
   --counter-store "${SOCK_DIR}/counter" \
   --document-key-id apf-dev \
+  --document-signing-key examples/dev-keys/apf-dev.seed \
   --policy-source local &
 
 # Wait for policy-service

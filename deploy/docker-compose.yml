@@ -27,6 +27,8 @@ services:
       context: ..
       dockerfile: deploy/apf-policy-service/Dockerfile
       target: runtime
+      secrets:
+        - artifactory_token
     environment:
       APF_SOCKET:          /run/apf/policy-service.sock
       APF_HTTP_ADDR:       0.0.0.0:19200
@@ -54,6 +56,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/apf-policy-gateway/Dockerfile
+      secrets:
+        - artifactory_token
     environment:
       APF_GATEWAY_SOCKET:             /run/apf-gateway/policy-gateway.sock
       APF_POLICY_SERVICE_SOCKET:      /run/apf/policy-service.sock
@@ -77,7 +81,7 @@ services:
       policy-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=:18202"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/18202' 2>/dev/null"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -85,6 +89,10 @@ services:
 volumes:
   apf-sock:     # policy-service.sock shared between policy-service and policy-gateway
   gateway-sock: # policy-gateway EvaluationService UDS
+
+secrets:
+  artifactory_token:
+    environment: CARGO_REGISTRIES_ARTIFACTORY_TOKEN
 
 networks:
   default:

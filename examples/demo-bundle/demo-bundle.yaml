@@ -55,9 +55,9 @@ manifest:
   # Federated grants — PolicyDefinition + team PolicyData slices
   # Tool access grants — one PolicyRule per tool (baseline-rest in slack-grants)
   - path: rules/github-grants.yaml
-    sha256: 8a31730409741b5c07ed3c658ddcc5917a53a4e4fa3c873acd1c1150f8f81247
+    sha256: c6abdb3a3b4225b505973759eb7765c18268ef8581c08be2e086f050b65bc320
   - path: rules/slack-grants.yaml
-    sha256: 6bfb6ce42b50b15ffdb56329e07e73935823a8d4a655feba1ee62041c728af54
+    sha256: a91dcc79efab5a543b8ae367b7417c9fa44ed9b703e36057cda68f0d700894aa
   - path: rules/linear-grants.yaml
     sha256: 1c9f58f54f3402375303a50b964ce58aa68aa47d7dc547c646e1542ea2467136
 
@@ -67,4 +67,4 @@ manifest:
 schema: YamlSigilSignature.v1alpha1
 alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
 keyid: apf-dev
-signature: ZLwV6JsOUi_PbCLRlNTt0hOXRMAHxHn3kemN0WYrezmj2e3Ho5IwvEPRxmFxM1UsFnhhFx60TdpSlyXYiKWKCw
+signature: dwkgXlXVBuCTx95jKs-Wm-OkVLnHvnS7lHGPN7Zl33UrPqY4sOZ0ThmMObPZYMj1mJ20BiAUkbm96e60-RJ2Dw
