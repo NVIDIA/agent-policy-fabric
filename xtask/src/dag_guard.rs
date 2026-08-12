@@ -23,9 +23,7 @@ pub fn run() -> Result<(), String> {
     let meta: Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("dag-guard: metadata parse error: {e}"))?;
 
-    let workspace_root = PathBuf::from(
-        meta["workspace_root"].as_str().unwrap_or("."),
-    );
+    let workspace_root = PathBuf::from(meta["workspace_root"].as_str().unwrap_or("."));
 
     let packages = match meta["packages"].as_array() {
         Some(p) if !p.is_empty() => p,
@@ -74,8 +72,7 @@ pub fn run() -> Result<(), String> {
                         .is_some_and(|ks| ks.iter().any(|k| k.as_str() == Some("bin")))
                 })
             });
-            let publish_false =
-                matches!(p["publish"].as_array(), Some(arr) if arr.is_empty());
+            let publish_false = matches!(p["publish"].as_array(), Some(arr) if arr.is_empty());
             let is_service = in_crates && has_bin && publish_false;
 
             // Adapter: name matches a known substrate adapter prefix.
@@ -83,7 +80,12 @@ pub fn run() -> Result<(), String> {
                 && !is_service
                 && ADAPTER_PREFIXES.iter().any(|pfx| name.starts_with(pfx));
 
-            Pkg { name, in_crates, is_service, is_adapter }
+            Pkg {
+                name,
+                in_crates,
+                is_service,
+                is_adapter,
+            }
         })
         .collect();
 
@@ -158,25 +160,30 @@ pub fn run() -> Result<(), String> {
             .current_dir(&workspace_root)
             .output();
 
-        if let Ok(o) = rg {
-            if o.status.success() {
-                let matches = String::from_utf8_lossy(&o.stdout);
-                for line in matches.lines() {
-                    let in_non_library = non_library_names.iter().any(|svc| {
-                        line.contains(&format!("crates/{svc}/"))
-                    });
-                    if !in_non_library {
-                        errors.push(format!(
-                            "dag-guard: FAIL openshell_ import in library: {line}"
-                        ));
-                    }
+        if let Ok(o) = rg
+            && o.status.success()
+        {
+            let matches = String::from_utf8_lossy(&o.stdout);
+            for line in matches.lines() {
+                let in_non_library = non_library_names
+                    .iter()
+                    .any(|svc| line.contains(&format!("crates/{svc}/")));
+                if !in_non_library {
+                    errors.push(format!(
+                        "dag-guard: FAIL openshell_ import in library: {line}"
+                    ));
                 }
             }
         }
     }
 
-    // Rule 4 — yaml_sigil_ outside the allowlisted private backend file.
-    const ALLOWLIST: &str = "crates/apf-policy-service/src/signing/yaml_sigil_backend.rs";
+    // Rule 4 — yaml_sigil_ is allowed only in apf-bundle (the canonical signing
+    // backend library) and in test/fixture code. Any other crate importing it is
+    // a leak of the private signing format into unrelated code.
+    const ALLOWLIST: &[&str] = &[
+        "crates/apf-bundle/src/signing/yaml_sigil.rs",
+        "crates/apf-compile/src/main.rs",
+    ];
 
     if crates_dir.exists() {
         let rg = Command::new("rg")
@@ -184,15 +191,15 @@ pub fn run() -> Result<(), String> {
             .current_dir(&workspace_root)
             .output();
 
-        if let Ok(o) = rg {
-            if o.status.success() {
-                let matches = String::from_utf8_lossy(&o.stdout);
-                for line in matches.lines() {
-                    if !line.contains(ALLOWLIST) {
-                        errors.push(format!(
-                            "dag-guard: FAIL yaml_sigil_ outside allowlist: {line}"
-                        ));
-                    }
+        if let Ok(o) = rg
+            && o.status.success()
+        {
+            let matches = String::from_utf8_lossy(&o.stdout);
+            for line in matches.lines() {
+                if !ALLOWLIST.iter().any(|a| line.contains(a)) {
+                    errors.push(format!(
+                        "dag-guard: FAIL yaml_sigil_ outside allowlist: {line}"
+                    ));
                 }
             }
         }
@@ -207,15 +214,16 @@ pub fn run() -> Result<(), String> {
         }
         let deps = raw["dependencies"].as_array().map_or(&[][..], |v| v);
         for dep in deps {
-            if let Some(src) = dep["source"].as_str() {
-                if src.contains("nvidia") && !src.contains("crates.io") {
-                    // Only warn; resolving registries accurately needs full metadata.
-                    eprintln!(
-                        "dag-guard: WARN library {} has private-registry dep: {}",
-                        pkg.name,
-                        dep["name"].as_str().unwrap_or("?"),
-                    );
-                }
+            if let Some(src) = dep["source"].as_str()
+                && src.contains("nvidia")
+                && !src.contains("crates.io")
+            {
+                // Only warn; resolving registries accurately needs full metadata.
+                eprintln!(
+                    "dag-guard: WARN library {} has private-registry dep: {}",
+                    pkg.name,
+                    dep["name"].as_str().unwrap_or("?"),
+                );
             }
         }
     }

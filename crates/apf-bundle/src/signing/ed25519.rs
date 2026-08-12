@@ -58,9 +58,7 @@ impl BundleVerifier for Ed25519Verifier {
             return Err(VerifyError::Verify("artifact too short".into()));
         }
         let (sig_bytes, payload) = artifact.split_at(64);
-        let sig = Signature::from_bytes(
-            sig_bytes.try_into().expect("64 bytes"),
-        );
+        let sig = Signature::from_bytes(sig_bytes.try_into().expect("64 bytes"));
         self.key
             .verify(payload, &sig)
             .map_err(|e| VerifyError::Verify(e.to_string()))?;

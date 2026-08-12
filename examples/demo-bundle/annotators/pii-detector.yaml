@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyAnnotator
+metadata:
+  name: pii-detector
+
+spec:
+  description: Detects PII structural signatures in body text.
+  annotations:
+    - name: pii_detected
+      output: bool
+      set_true_if: any
+      rules:
+        - field: body_text
+          op: regex_match
+          pattern: '[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+        - field: body_text
+          op: regex_match
+          pattern: '\b\d{3}-\d{2}-\d{4}\b'
+        - field: body_text
+          op: regex_match
+          pattern: '\b(?:\d[ \-]?){13,16}\b'
+
+    - name: pii_kind
+      output: string
+      set_value_from: first_match
+      rules:
+        - field: body_text
+          op: regex_match
+          pattern: '[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+          value: email
+        - field: body_text
+          op: regex_match
+          pattern: '\b\d{3}-\d{2}-\d{4}\b'
+          value: ssn
+        - field: body_text
+          op: regex_match
+          pattern: '\b(?:\d[ \-]?){13,16}\b'
+          value: payment_card

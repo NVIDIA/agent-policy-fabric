@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cedar demo bundle — PolicyBundle envelope.
+#
+# Regenerate signed artifact:
+#   cargo run -p policy-service --bin rpv-genfixture -- \
+#     --template examples/cedar-demo-bundle/cedar-demo-bundle.template.yaml \
+#     --out examples/cedar-demo-bundle/cedar-demo-bundle.yaml \
+#     --key examples/dev-keys/apf-dev.seed \
+#     --base-dir examples/cedar-demo-bundle
+#
+# Run from the runtime-policy-verifier/ directory.
+
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyBundle
+metadata: {}
+
+id: cedar-demo-bundle
+description: "APF Cedar policy engine demo bundle"
+policy_revision: 1
+not_before: "2026-01-01T00:00:00Z"
+expires_at: "2099-12-31T00:00:00Z"
+
+manifest:
+  # Network and provider governance
+  - path: sandbox/default-policy.yaml
+    sha256: f4b9bb6abcc89c2e0800b71f29fd961f793ab152653e958a661da72827b71c5e
+  - path: provider-profiles/github.yaml
+    sha256: 622e83a44b8038069d4d6c27cf411fcd33a50a2755dd3dc3de97224f9a2ac394
+  - path: provider-profiles/slack.yaml
+    sha256: 9475f90b37806a1e9c753fe472a671b046377169c54120acf9588d0bde185af0
+  - path: provider-profiles/nvidia-inference.yaml
+    sha256: 96edff37bcc4913b769cd69e1d55bfb20c7af1345b478c6975728c555986f74e
+  - path: provider-profiles/claude-code.yaml
+    sha256: c8f4de625132c6524caebdaf47f781b2d220a11884ff1a6fe2fd1bacd27f4768
+  - path: provider-profiles/anthropic.yaml
+    sha256: 72689879b93f322eeb6db39c9a28053cea6d3d31436f65c338f12bd561e655a6
+
+  # Stage 1 — detection annotators
+  - path: annotators/secret-detector.yaml
+    sha256: 3f819ebf6d5437ebc3c64d75acb5a4e005137e9e0a62a418786c7cd31b890897
+  - path: annotators/pii-detector.yaml
+    sha256: 0fd8b7d59ec815c768425af1c20c95860b44838030f0ae549b4a0363f85ff43e
+
+  # Shared finding type
+  - path: findings/secret-detected.yaml
+    sha256: 4ea88b69e17bb70dafae71ecc922a0609dd9a4bbfe7558d040bd4e7a7fa5ee73
+
+  # Stage 3 — mutation effects
+  - path: effects/redact-wholesale.yaml
+    sha256: 7c7ffe8756bf7f7e89865416d4a1dc1297438bf1cebdb5495ecd446abe9b35dc
+  - path: effects/redact-pii-body.yaml
+    sha256: 7ede0c2c8eb1a0c516da4877d8dc6990105bc940d6b73acf5ca7095c3c7d6e99
+
+  # Federated grants — PolicyDefinition + team PolicyData slices
+  # Tool access grants — one PolicyRule per tool (baseline-rest in slack-grants)
+  - path: rules/github-grants.yaml
+    sha256: 8a31730409741b5c07ed3c658ddcc5917a53a4e4fa3c873acd1c1150f8f81247
+  - path: rules/slack-grants.yaml
+    sha256: 6bfb6ce42b50b15ffdb56329e07e73935823a8d4a655feba1ee62041c728af54
+  - path: rules/linear-grants.yaml
+    sha256: 1c9f58f54f3402375303a50b964ce58aa68aa47d7dc547c646e1542ea2467136
+
+  - path: rules/security-content-gate.yaml
+    sha256: 8e852fe5680e9344adce75dde8f942336cf03e4a2b1bbf4cb1fe263182513ef1
+---
+schema: YamlSigilSignature.v1alpha1
+alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
+keyid: apf-dev
+signature: ZLwV6JsOUi_PbCLRlNTt0hOXRMAHxHn3kemN0WYrezmj2e3Ho5IwvEPRxmFxM1UsFnhhFx60TdpSlyXYiKWKCw

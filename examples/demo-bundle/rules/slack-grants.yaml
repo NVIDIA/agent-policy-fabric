@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Slack tool grants — data-driven Cedar PolicyRule.
+# spec.data carries the approved channel; operators change the channel by
+# updating data only, not the Cedar rule.
+#
+# Only the network egress gateway MCP path (slack_chat_post) is governed here. Direct non-MCP
+# calls to slack.com are passed through by baseline-allow; enforcement on
+# that path is L7 OPA (POST /api/chat.postMessage only) + content policy.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: slack-grants
+spec:
+  description: Grants for Slack MCP capabilities via the network egress gateway. Approved channel is data-driven.
+  language: cedar
+  role: capability
+  data:
+    approved_channel: "C0123456789"
+    max_text_len: 2000
+  definition: |
+    // Allow posting to the approved channel within the text length limit.
+    @id("slack-grants/slack_chat_post")
+    permit (
+      principal,
+      action == APF::Action::"slack::slack_chat_post",
+      resource
+    )
+    when {
+      context.args.channel == context.data.approved_channel &&
+      context.args.text_len <= context.data.max_text_len
+    };

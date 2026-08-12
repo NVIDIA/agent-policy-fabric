@@ -7,7 +7,7 @@ pub use apf_proto::gateway_interceptor_v1::{
     gateway_interceptor_server::{GatewayInterceptor, GatewayInterceptorServer},
     interceptor_evaluation,
 };
+pub use apf_proto::openshell;
 pub use apf_proto::supervisor_middleware_v1::supervisor_middleware_server::{
     SupervisorMiddleware, SupervisorMiddlewareServer,
 };
-pub use apf_proto::openshell;

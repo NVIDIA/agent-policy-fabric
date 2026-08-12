@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cedar demo bundle — PolicyBundle envelope.
+#
+# Regenerate signed artifact:
+#   cargo run -p policy-service --bin rpv-genfixture -- \
+#     --template examples/cedar-demo-bundle/cedar-demo-bundle.template.yaml \
+#     --out examples/cedar-demo-bundle/cedar-demo-bundle.yaml \
+#     --key examples/dev-keys/apf-dev.seed \
+#     --base-dir examples/cedar-demo-bundle
+#
+# Run from the runtime-policy-verifier/ directory.
+
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyBundle
+metadata: {}
+
+id: cedar-demo-bundle
+description: "APF Cedar policy engine demo bundle"
+policy_revision: 1
+not_before: "2026-01-01T00:00:00Z"
+expires_at: "2099-12-31T00:00:00Z"
+
+manifest:
+  # Network and provider governance
+  - path: sandbox/default-policy.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/github.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/slack.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/nvidia-inference.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/claude-code.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/anthropic.yaml
+    sha256: REPLACE_WITH_DIGEST
+
+  # Stage 1 — detection annotators
+  - path: annotators/secret-detector.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: annotators/pii-detector.yaml
+    sha256: REPLACE_WITH_DIGEST
+
+  # Shared finding type
+  - path: findings/secret-detected.yaml
+    sha256: REPLACE_WITH_DIGEST
+
+  # Stage 3 — mutation effects
+  - path: effects/redact-wholesale.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: effects/redact-pii-body.yaml
+    sha256: REPLACE_WITH_DIGEST
+
+  # Federated grants — PolicyDefinition + team PolicyData slices
+  # Tool access grants — one PolicyRule per tool (baseline-rest in slack-grants)
+  - path: rules/github-grants.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: rules/slack-grants.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: rules/linear-grants.yaml
+    sha256: REPLACE_WITH_DIGEST
+
+  - path: rules/security-content-gate.yaml
+    sha256: REPLACE_WITH_DIGEST

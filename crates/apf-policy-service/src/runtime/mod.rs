@@ -5,6 +5,6 @@ pub mod audit;
 pub mod core;
 pub mod runtime_context;
 
-pub use core::{LoadedBundle, PolicyServiceCore, DocumentSigner};
-pub use runtime_context::RuntimeContext;
 pub use audit::PolicyServiceAudit;
+pub use core::{DocumentSigner, LoadedBundle, PolicyServiceCore};
+pub use runtime_context::RuntimeContext;

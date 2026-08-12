@@ -12,6 +12,7 @@ pub struct LoadedBundle {
     pub digest_hex: String,
     pub monotonic_counter: u64,
     pub audit_metadata: BundleAuditMetadata,
+    pub bundle: apf_bundle::Bundle,
 }
 
 /// Identity material used to sign vended documents (e.g. `GetDocument` responses).

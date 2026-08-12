@@ -24,6 +24,7 @@ use p256::pkcs8::DecodePublicKey;
 
 const KEY_PREFIX: &str = "ed25519:";
 
+#[derive(Clone)]
 pub struct TrustEntry {
     pub ed25519: Option<VerifyingKey>,
     pub p256: Option<P256VerifyingKey>,
@@ -35,6 +36,7 @@ pub struct TrustEntry {
 ///   without redeploying RPV. When implemented, add `--trust-root-jwks-uri`
 ///   and resolve keys by `kid` (key ID) matching the signature carrier's `keyid`.
 /// - Centrally delivered trust root bundle, signed and rotated.
+#[derive(Clone)]
 pub struct TrustStore {
     keys: HashMap<String, TrustEntry>,
 }

@@ -34,7 +34,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Top-level bundle as it appears in the yaml-sigil artifact payload.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Bundle {
     // Buf-style envelope — optional; matches prototype-policy-examples.
     #[serde(rename = "apiVersion", default)]

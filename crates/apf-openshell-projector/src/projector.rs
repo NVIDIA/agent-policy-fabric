@@ -96,12 +96,11 @@ impl Projector for OpenShellProjector {
         let passthrough_names: std::collections::BTreeSet<&String> =
             p.provider_profiles.keys().collect();
         for (name, provider) in &p.providers {
-            let bytes =
-                crate::provider::compose(provider).map_err(|cause| ProjectError {
-                    target: TARGET.to_string(),
-                    surface: SURFACE_PROVIDER_PROFILE.to_string(),
-                    cause: format!("provider '{name}': {cause}"),
-                })?;
+            let bytes = crate::provider::compose(provider).map_err(|cause| ProjectError {
+                target: TARGET.to_string(),
+                surface: SURFACE_PROVIDER_PROFILE.to_string(),
+                cause: format!("provider '{name}': {cause}"),
+            })?;
             if passthrough_names.contains(name) {
                 surfaces.retain(|s| !(s.kind == SURFACE_PROVIDER_PROFILE && &s.name == name));
             }
@@ -414,9 +413,7 @@ fn build_policy_annotators_projection(
 
 fn lower_spec_with_middleware(
     spec: &ir::SandboxPolicySpec,
-    middleware: Option<
-        &BTreeMap<String, apf_compiler::frontend::NetworkMiddlewareConfigDef>,
-    >,
+    middleware: Option<&BTreeMap<String, apf_compiler::frontend::NetworkMiddlewareConfigDef>>,
 ) -> os::SandboxPolicy {
     os::SandboxPolicy {
         version: OPENSHELL_POLICY_VERSION,
@@ -577,8 +574,7 @@ mod tests {
     use super::*;
     use apf_compiler::frontend;
 
-    const STUB: &str =
-        include_str!("../../../examples/demo-bundle/sandbox/default-policy.yaml");
+    const STUB: &str = include_str!("../../../examples/demo-bundle/sandbox/default-policy.yaml");
 
     fn project_default(ir: ir::SandboxPolicy) -> Vec<u8> {
         let mut p = CanonicalPolicy::default();

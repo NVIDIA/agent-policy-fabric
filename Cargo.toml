@@ -6,3 +6,8 @@ members = ["xtask", "crates/apf-types", "crates/apf-bundle", "crates/apf-policy-
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
+
+[workspace.dependencies]
+yaml-sigil-verification = { version = "0.1.1-rc.3", registry = "artifactory", default-features = false, features = ["buffa", "yaml-serde-yaml"] }
+yaml-sigil-signing      = { version = "0.1.1-rc.3", registry = "artifactory", default-features = false, features = ["buffa", "yaml-serde-yaml"] }
+yaml-sigil-traits       = { version = "0.1.1-rc.3", registry = "artifactory", default-features = false }

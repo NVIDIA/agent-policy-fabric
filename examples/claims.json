@@ -1,0 +1,10 @@
+{
+  "role_map": {
+    "alice": "rw",
+    "bob": "ro",
+    "alice@example.com": "rw",
+    "bob@example.com": "ro",
+    "admin": "rw",
+    "auditor": "ro"
+  }
+}

@@ -18,12 +18,21 @@ pub fn refresh(
     counter_store: &CounterStore,
     runtime_versions: &HashMap<&str, &str>,
 ) -> anyhow::Result<BundleMembers> {
-    let outcome = verify_bundle(bytes, path, verifier, counter_store, SystemTime::now(), runtime_versions);
+    let outcome = verify_bundle(
+        bytes,
+        path,
+        verifier,
+        counter_store,
+        SystemTime::now(),
+        runtime_versions,
+    );
     if !outcome.ok {
-        anyhow::bail!("bundle verification failed: {:?}", outcome.rejection_reasons);
+        anyhow::bail!(
+            "bundle verification failed: {:?}",
+            outcome.rejection_reasons
+        );
     }
-    let bundle = parse_bundle(bytes)
-        .map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
+    let bundle = parse_bundle(bytes).map_err(|e| anyhow::anyhow!("bundle parse failed: {e}"))?;
     let members = bundle
         .load_members(path.parent().unwrap_or(Path::new(".")))
         .map_err(|e| anyhow::anyhow!("bundle member load failed: {e}"))?;

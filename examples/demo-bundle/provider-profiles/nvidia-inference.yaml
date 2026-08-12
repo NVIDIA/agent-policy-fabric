@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# NVIDIA inference endpoint via OpenAI-compatible API.
+# Credentials injected into sandboxes as OPENAI_API_KEY + OPENAI_BASE_URL.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: nvidia-inference
+  title: NVIDIA Inference
+  description: NVIDIA API Catalog (integrate.api.nvidia.com) via the OpenAI-compatible endpoint.
+
+spec:
+  type: openai
+  endpoints:
+    - host: integrate.api.nvidia.com
+      port: 443
+      protocol: rest
+      access: read-write
+      enforcement: enforce
+  credentials:
+    - name: api_key
+      envVars:
+        - OPENAI_API_KEY
+      required: true
+      style: bearer
+      header: Authorization
+      source:
+        kind: host-env
+        name: INFERENCE_API_KEY

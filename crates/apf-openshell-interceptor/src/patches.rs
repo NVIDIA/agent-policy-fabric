@@ -8,14 +8,15 @@ use sha2::{Digest as Sha2Digest, Sha256};
 
 use crate::proto::JsonPatch;
 use apf_proto::json::json_to_proto_value;
-use apf_proto::policy_service_v1alpha1::GetDocumentResponse;
 use apf_proto::openshell_sandbox::SandboxPolicy;
+use apf_proto::policy_service_v1alpha1::GetDocumentResponse;
 
 /// Decoded claims from the policy-service-minted provenance JWT.
 ///
 /// Extracted without signature verification at inject time to populate annotations.
 /// Full signature verification runs at VALIDATE time using the cached JWKS-derived key.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are part of the JWT contract; some read only in tests or by callers
 pub struct ProvenanceClaims {
     /// Unique token ID — stored as `apf.nvidia.com/correlation-id`.
     pub jti: String,
@@ -67,7 +68,6 @@ pub fn extract_provenance_claims(jwt: &str) -> Option<ProvenanceClaims> {
     let _header = parts.next()?;
     let payload_b64 = parts.next()?;
 
-    #[allow(clippy::items_after_statements)]
     use base64::Engine as _;
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)
@@ -86,6 +86,7 @@ pub fn extract_provenance_claims(jwt: &str) -> Option<ProvenanceClaims> {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum PatchError {
     #[error("policy projection has no provenance token")]
     UnsignedProjection,
@@ -143,6 +144,7 @@ pub fn sandbox_policy_patches(doc: &GetDocumentResponse) -> Result<Vec<JsonPatch
 /// `original_profile_index` is the position of this profile in the object's `profiles` array.
 /// Using the caller-supplied index instead of the iteration index avoids path drift when
 /// profiles without an `id` are skipped during collection.
+#[allow(dead_code)]
 pub fn provider_profile_patches(
     docs: &[(usize, String, GetDocumentResponse)],
 ) -> Result<Vec<JsonPatch>, PatchError> {

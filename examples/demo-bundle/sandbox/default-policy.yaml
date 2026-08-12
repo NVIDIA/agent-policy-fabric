@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: nvidia.agent-policy-fabric.sandbox/v1alpha1
+kind: SandboxPolicy
+metadata:
+  name: default
+
+spec:
+  filesystem:
+    include_workdir: true
+    read_only:
+      - /usr
+      - /lib
+      - /proc
+      - /dev/urandom
+      - /app
+      - /etc
+      - /var/log
+    read_write:
+      - /sandbox
+      - /tmp
+      - /dev/null
+
+  landlock:
+    compatibility: best_effort
+
+  process:
+    run_as_user: sandbox
+    run_as_group: sandbox
+
+  # Deny-default egress. Only the endpoints below are reachable from the sandbox.
+  # The Cedar PolicyRules in rules/ then govern what the agent can DO within these
+  # allowed endpoints — argument constraints, content inspection, mutations.
+  network_policies:
+    anthropic:
+      name: anthropic
+      endpoints:
+        - host: api.anthropic.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+    nvidia-inference:
+      name: nvidia-inference
+      binaries:
+        - path: /usr/bin/curl
+        - path: /usr/local/bin/claude
+        - path: /usr/bin/node
+      endpoints:
+        - host: integrate.api.nvidia.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+    github:
+      name: github
+      binaries:
+        - path: /usr/bin/gh
+        - path: /usr/bin/curl
+      endpoints:
+        - host: api.github.com
+          port: 443
+          protocol: rest
+          enforcement: enforce
+          access: read-only
+    openai:
+      name: openai
+      binaries:
+        - path: /usr/bin/curl
+      endpoints:
+        - host: api.openai.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+    httpbin:
+      name: httpbin
+      binaries:
+        - path: /usr/bin/curl
+        - path: /usr/bin/python3
+      endpoints:
+        - host: httpbin.org
+          port: 443
+          protocol: rest
+          enforcement: enforce
+          rules:
+            - allow:
+                method: POST
+                path: /anything
+
+    egress-gateway:
+      name: egress-gateway
+      binaries:
+        - path: /usr/local/bin/claude
+        - path: /usr/bin/node
+      endpoints:
+        - host: host.openshell.internal
+          port: 17771
+          protocol: rest
+          enforcement: enforce
+          access: read-write
+
+  # APF content policy middleware — evaluates every outbound HTTP request
+  # against the Cedar engine before credentials are injected.
+  network_middlewares:
+    apf_content_policy:
+      name: APF content policy
+      middleware: apf-content-policy
+      order: 10
+      on_error: fail_closed
+      endpoints:
+        include:
+          - "httpbin.org"
+          - "api.github.com"
+          - "api.openai.com"
+          - "host.openshell.internal"

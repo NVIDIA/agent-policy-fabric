@@ -181,10 +181,10 @@ impl Evaluator for CedarEvaluator {
             // policies can reference operator-supplied values from PolicyRule.spec.data
             // without hardcoding them in the Cedar definition.
             let mut context_json = base_context_json.clone();
-            if !rule.data.is_null() {
-                if let Value::Object(ctx) = &mut context_json {
-                    ctx.insert("data".to_string(), rule.data.clone());
-                }
+            if !rule.data.is_null()
+                && let Value::Object(ctx) = &mut context_json
+            {
+                ctx.insert("data".to_string(), rule.data.clone());
             }
             // The context is schema-independent: rules validate policies against
             // their schema at load time, but requests are built unvalidated so
@@ -424,7 +424,10 @@ permit(
             ))
             .unwrap();
         assert!(!r.allow);
-        assert_eq!(r.deny_reason, "outlook-grants: conditions not met for outlook::message_search");
+        assert_eq!(
+            r.deny_reason,
+            "outlook-grants: conditions not met for outlook::message_search"
+        );
     }
 
     #[test]
@@ -479,7 +482,10 @@ permit(
             .evaluate(input("outlook", "message_delete", &[("folder", "inbox")]))
             .unwrap();
         assert!(!r.allow);
-        assert_eq!(r.deny_reason, "outlook-grants: conditions not met for outlook::message_delete");
+        assert_eq!(
+            r.deny_reason,
+            "outlook-grants: conditions not met for outlook::message_delete"
+        );
     }
 
     // A non-MCP request (no tool_name) with only capability rules passes through:
@@ -1099,7 +1105,10 @@ forbid(principal, action, resource) when { context.args.folder == "archive" };
             ))
             .unwrap();
         assert!(!deny.allow);
-        assert_eq!(deny.deny_reason, "outlook-grants: conditions not met for outlook::message_search");
+        assert_eq!(
+            deny.deny_reason,
+            "outlook-grants: conditions not met for outlook::message_search"
+        );
         assert_eq!(deny.verdict, crate::Verdict::Allow);
         assert!(deny.findings.is_empty());
     }
@@ -1123,6 +1132,9 @@ forbid(principal, action, resource) when { context.args.folder == "archive" };
             ))
             .unwrap();
         assert!(!deny.allow);
-        assert_eq!(deny.deny_reason, "outlook-grants: conditions not met for outlook::message_search");
+        assert_eq!(
+            deny.deny_reason,
+            "outlook-grants: conditions not met for outlook::message_search"
+        );
     }
 }

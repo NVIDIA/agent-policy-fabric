@@ -6,8 +6,10 @@ pub mod signing;
 pub mod trust_store;
 pub mod verifier;
 
-pub use bundle::{Bundle, BundleMembers, BundleParseError, ManifestEntry, RuntimeCompatEntry, parse_bundle};
+pub use bundle::{
+    Bundle, BundleMembers, BundleParseError, ManifestEntry, RuntimeCompatEntry, parse_bundle,
+};
 pub use counter_store::{CounterCheckError, CounterStore, CounterStoreError};
+pub use signing::{Ed25519Signer, Ed25519Verifier, YamlSigilVerifier};
 pub use trust_store::{TrustStore, TrustStoreError};
 pub use verifier::{VerifyOutcome, verify_bundle};
-pub use signing::{Ed25519Signer, Ed25519Verifier};

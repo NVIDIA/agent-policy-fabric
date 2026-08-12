@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Replace the /text field in an outbound JSON body with a sanitization notice
+# when PII is detected. Fires on any non-MCP REST request (httpbin, Slack API, etc.).
+# Uses a full-field replace rather than surgical inline redaction (which would
+# require a regex-replace patch op not yet implemented).
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyEffect
+metadata:
+  name: redact-pii-body
+
+spec:
+  description: Replace the JSON body's text field with a sanitization notice on PII detection.
+  verdict: allow
+  body:
+    patches:
+      - op: replace
+        path: /text
+        value: "[APF sanitized — PII detected in message. Original content withheld.]"
+  finding:
+    type: pii_redacted
+    label: pii_in_body_text
+    severity: medium

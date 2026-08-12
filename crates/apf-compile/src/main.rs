@@ -3,21 +3,26 @@
 //!
 //! Subcommands:
 //!   compile     Verify and compile a signed policy bundle offline
-//!   genfixture  Generate a signed bundle fixture from a template
+//!   genfixture  Generate a yaml-sigil signed bundle fixture from a template
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use apf_bundle::{CounterStore, Ed25519Signer, Ed25519Verifier, TrustStore, verify_bundle};
+use apf_bundle::{CounterStore, TrustStore, YamlSigilVerifier, verify_bundle};
 use apf_compiler::Compiler;
-use apf_types::{BundleSigner, BundleVerifier};
+use apf_types::BundleVerifier;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use sha2::{Digest, Sha256};
+use yaml_sigil_signing::{OutputForm, SignOutcome, SignRequest, SigningKey as SigilKey};
+use yaml_sigil_traits::AlgorithmId;
 
 #[derive(Debug, Parser)]
-#[command(name = "apf-compile", about = "APF bundle compilation and fixture generation")]
+#[command(
+    name = "apf-compile",
+    about = "APF bundle compilation and fixture generation"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -60,50 +65,101 @@ struct GenfixtureArgs {
     #[arg(long)]
     template: PathBuf,
 
-    /// Directory containing member files referenced by the template.
-    /// Defaults to the template's parent directory.
+    /// Output path for the signed yaml-sigil artifact.
     #[arg(long)]
-    members_dir: Option<PathBuf>,
+    out: PathBuf,
 
     /// Ed25519 signing key seed file (`ed25519:<base64>` format).
+    /// Pass `--generate-key` to create a new keypair if the file does not exist.
     #[arg(long)]
-    sign_key: PathBuf,
+    key: PathBuf,
 
-    /// Key id to stamp in the signature.
-    #[arg(long, default_value = "apf-dev")]
-    key_id: String,
-
-    /// Output path for the signed artifact. Defaults to `<template-stem>.yaml`
-    /// in the current directory.
+    /// Base directory for resolving manifest member paths.
+    /// Defaults to the template's parent directory.
     #[arg(long)]
-    output: Option<PathBuf>,
+    base_dir: Option<PathBuf>,
+
+    /// Generate a new Ed25519 keypair into --key (and a sibling `.pub`)
+    /// if the key file does not already exist.
+    #[arg(long)]
+    generate_key: bool,
+
+    /// Where to write the generated public key. Defaults to `<key>.pub`.
+    #[arg(long)]
+    pubkey_out: Option<PathBuf>,
+
+    /// Key id stamped into the yaml-sigil signature carrier. Must match the
+    /// `.pub` filename stem loaded by the service trust store.
+    /// Defaults to the `--key` file stem.
+    #[arg(long)]
+    keyid: Option<String>,
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn load_signing_key(path: &Path) -> anyhow::Result<ed25519_dalek::SigningKey> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("read signing key {}: {e}", path.display()))?;
-    let line = raw
-        .lines()
-        .find(|l| {
-            let t = l.trim();
-            !t.is_empty() && !t.starts_with('#')
-        })
-        .ok_or_else(|| anyhow::anyhow!("signing key file is empty: {}", path.display()))?
-        .trim();
-    let b64 = line.strip_prefix("ed25519:").ok_or_else(|| {
-        anyhow::anyhow!("signing key {}: expected `ed25519:` prefix", path.display())
-    })?;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(b64.as_bytes())
-        .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
-    if raw.len() != 32 {
-        anyhow::bail!("expected 32-byte seed, got {}", raw.len());
+const KEY_PREFIX: &str = "ed25519:";
+
+fn load_or_generate_key(
+    path: &Path,
+    generate_if_missing: bool,
+    pubkey_out: &Option<PathBuf>,
+) -> anyhow::Result<ed25519_dalek::SigningKey> {
+    if path.exists() {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("read key {}: {e}", path.display()))?;
+        let line = raw
+            .lines()
+            .find(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with('#')
+            })
+            .ok_or_else(|| anyhow::anyhow!("key file empty: {}", path.display()))?
+            .trim();
+        let b64 = line
+            .strip_prefix(KEY_PREFIX)
+            .ok_or_else(|| anyhow::anyhow!("key must start with `{KEY_PREFIX}`"))?;
+        let seed = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
+        if seed.len() != 32 {
+            anyhow::bail!("expected 32-byte seed, got {}", seed.len());
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&seed);
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&arr));
     }
+
+    if !generate_if_missing {
+        anyhow::bail!(
+            "key file {} does not exist; pass --generate-key to create",
+            path.display()
+        );
+    }
+
+    use rand::RngCore as _;
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(&raw);
-    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+    rand::thread_rng().fill_bytes(&mut seed);
+    let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let seed_b64 = base64::engine::general_purpose::STANDARD.encode(seed);
+    std::fs::write(
+        path,
+        format!(
+            "# DEV-ONLY Ed25519 signing key. Do not use in production.\n{KEY_PREFIX}{seed_b64}\n"
+        ),
+    )?;
+    println!("generated dev signing key at {}", path.display());
+
+    let pub_path = pubkey_out
+        .clone()
+        .unwrap_or_else(|| path.with_extension("pub"));
+    let pub_b64 = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+    std::fs::write(
+        &pub_path,
+        format!("# DEV-ONLY Ed25519 verifying key.\n{KEY_PREFIX}{pub_b64}\n"),
+    )?;
+    println!("generated dev public key at {}", pub_path.display());
+
+    Ok(sk)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -115,14 +171,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     let trust_store = TrustStore::load_from_dir(&args.trust_root_dir)
         .map_err(|e| anyhow::anyhow!("load trust roots: {e}"))?;
-    let vk = trust_store
-        .get(&args.key_id)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no trust root for key id '{}'", args.key_id))?;
-    let verifier = Ed25519Verifier::new(vk);
+    let verifier = YamlSigilVerifier::new(trust_store);
 
-    let bundle_bytes = std::fs::read(&args.bundle_path)
-        .map_err(|e| anyhow::anyhow!("read bundle: {e}"))?;
+    let bundle_bytes =
+        std::fs::read(&args.bundle_path).map_err(|e| anyhow::anyhow!("read bundle: {e}"))?;
 
     let counter_store = CounterStore::load_or_init(
         &std::env::temp_dir().join(format!("apf-compile-{}.counter", std::process::id())),
@@ -140,12 +192,16 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     if !outcome.ok {
         anyhow::bail!("verification failed: {:?}", outcome.rejection_reasons);
     }
-    println!("verified  digest={} counter={}", outcome.digest_hex, outcome.monotonic_counter);
+    println!(
+        "verified  digest={} counter={}",
+        outcome.digest_hex, outcome.monotonic_counter
+    );
 
     if !args.verify_only {
         let compiler = Compiler::new(vec![]);
-        let parsed = apf_bundle::parse_bundle(&bundle_bytes)
-            .map_err(|e| anyhow::anyhow!("parse bundle: {e}"))?;
+        let parsed = outcome
+            .bundle
+            .ok_or_else(|| anyhow::anyhow!("bundle did not parse (verification failed earlier)"))?;
         let bundle_dir = args.bundle_path.parent().unwrap_or_else(|| Path::new("."));
         let members = parsed
             .load_members(bundle_dir)
@@ -157,7 +213,12 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
             println!("warning: no projections produced (no projectors registered)");
         }
         for s in &compiled.surfaces {
-            println!("projection  kind={} name={} bytes={}", s.kind, s.name, s.bytes.len());
+            println!(
+                "projection  kind={} name={} bytes={}",
+                s.kind,
+                s.name,
+                s.bytes.len()
+            );
         }
     }
     Ok(())
@@ -166,59 +227,76 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
 // ── genfixture handler ────────────────────────────────────────────────────────
 
 fn run_genfixture(args: GenfixtureArgs) -> anyhow::Result<()> {
-    let members_dir = args.members_dir.unwrap_or_else(|| {
-        args.template
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf()
-    });
+    let base = args
+        .base_dir
+        .or_else(|| args.template.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
 
-    let template_str = std::fs::read_to_string(&args.template)
-        .map_err(|e| anyhow::anyhow!("read template: {e}"))?;
+    let template_bytes = std::fs::read(&args.template)
+        .map_err(|e| anyhow::anyhow!("read template {}: {e}", args.template.display()))?;
+    let mut payload_str = String::from_utf8(template_bytes)
+        .map_err(|e| anyhow::anyhow!("template is not UTF-8: {e}"))?;
 
-    // Fill REPLACE_WITH_DIGEST placeholders with actual SHA-256 values.
-    let mut filled = template_str.clone();
-    let parsed: serde_yaml::Value =
-        serde_yaml::from_str(&template_str).map_err(|e| anyhow::anyhow!("parse template: {e}"))?;
-    if let Some(manifest) = parsed.get("manifest").and_then(|v| v.as_sequence()) {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&payload_str)
+        .map_err(|e| anyhow::anyhow!("template is not valid YAML: {e}"))?;
+
+    if let Some(manifest) = parsed
+        .get("manifest")
+        .and_then(serde_yaml::Value::as_sequence)
+    {
         for entry in manifest {
-            if let (Some(path_val), Some(sha_val)) = (
-                entry.get("path").and_then(|v| v.as_str()),
-                entry.get("sha256").and_then(|v| v.as_str()),
-            ) {
-                if sha_val.to_uppercase() == "REPLACE_WITH_DIGEST" {
-                    let member_path = members_dir.join(path_val);
-                    let bytes = std::fs::read(&member_path).map_err(|e| {
-                        anyhow::anyhow!("read member {}: {e}", member_path.display())
-                    })?;
-                    let digest = sha256_hex(&bytes);
-                    filled = filled.replace(
-                        &format!("sha256: {sha_val}"),
-                        &format!("sha256: {digest}"),
-                    );
-                }
+            let Some(path) = entry.get("path").and_then(serde_yaml::Value::as_str) else {
+                continue;
+            };
+            let abs = base.join(path);
+            let member = std::fs::read(&abs)
+                .map_err(|e| anyhow::anyhow!("read manifest member {}: {e}", abs.display()))?;
+            let digest = sha256_hex(&member);
+            if !payload_str.contains("REPLACE_WITH_DIGEST") {
+                anyhow::bail!(
+                    "manifest entry {path}: template missing `REPLACE_WITH_DIGEST` placeholder"
+                );
             }
+            payload_str = payload_str.replacen("REPLACE_WITH_DIGEST", &digest, 1);
+            println!("manifest  {path}: sha256={digest}");
         }
     }
 
-    let sk = load_signing_key(&args.sign_key)?;
-    let signer = Ed25519Signer::new(sk);
-    let artifact = signer
-        .sign(filled.as_bytes())
-        .map_err(|e| anyhow::anyhow!("sign: {e}"))?;
-
-    let output = args.output.unwrap_or_else(|| {
-        let stem = args.template.file_stem().unwrap_or_default().to_string_lossy();
-        PathBuf::from(format!("{stem}.yaml"))
+    let sk = load_or_generate_key(&args.key, args.generate_key, &args.pubkey_out)?;
+    let keyid = args.keyid.unwrap_or_else(|| {
+        args.key
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string()
     });
-    std::fs::write(&output, &artifact)
-        .map_err(|e| anyhow::anyhow!("write {}: {e}", output.display()))?;
-    println!(
-        "wrote {} ({} bytes sha256={})",
-        output.display(),
-        artifact.len(),
-        sha256_hex(&artifact)
-    );
+    if keyid.is_empty() {
+        anyhow::bail!("could not determine keyid; pass --keyid");
+    }
+
+    let req = SignRequest {
+        payload: payload_str.as_bytes(),
+        algorithm: AlgorithmId::Ed25519,
+        key: SigilKey::Ed25519(&sk),
+        keyid: Some(keyid.as_str()),
+        append_missing_final_newline: false,
+        output_form: OutputForm::Yaml,
+        algorithm_parameters: &[],
+    };
+    let artifact = match yaml_sigil_signing::sign(&req) {
+        SignOutcome::Success(s) => s.artifact,
+        SignOutcome::Invocation(e) => anyhow::bail!("signing invocation error: {e:?}"),
+        SignOutcome::Signer(e) => anyhow::bail!("signing error: {e:?}"),
+    };
+
+    if let Some(parent) = args.out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&args.out, &artifact)
+        .map_err(|e| anyhow::anyhow!("write {}: {e}", args.out.display()))?;
+    println!("signed bundle written to {}", args.out.display());
     Ok(())
 }
 

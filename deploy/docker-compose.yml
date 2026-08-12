@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+# APF developer compose — builds from source and runs the policy stack locally.
+#
+# Usage (from repo root):
+#   mise run dev          # build images + start
+#   mise run dev-logs     # tail all logs
+#   mise run dev-down     # stop + remove containers
+#   mise run dev-native   # run services natively without Docker (cargo run)
+#
+# The demo bundle (examples/demo-bundle/demo-bundle.yaml) is pre-signed with the
+# dev key and committed alongside the template. Re-sign after policy changes:
+#   mise run sign-bundle
+#
+# Note: locally-built macOS binaries cannot be mounted into Linux containers.
+# This compose always builds images; the Dockerfile build cache makes rebuilds fast.
+#
+# Once up:
+#   curl localhost:19200/healthz
+#   grpcurl -plaintext localhost:18202 grpc.health.v1.Health/Check
+
+name: apf-dev
+
+services:
+
+  policy-service:
+    build:
+      context: ..
+      dockerfile: deploy/apf-policy-service/Dockerfile
+      target: runtime
+    environment:
+      APF_SOCKET:          /run/apf/policy-service.sock
+      APF_HTTP_ADDR:       0.0.0.0:19200
+      APF_BUNDLE_PATH:     /app/bundle/demo-bundle.yaml
+      APF_TRUST_ROOT_DIR:  /app/keys
+      APF_COUNTER_STORE:   /tmp/apf-counter
+      APF_DOCUMENT_SIGNING_KEY: /app/keys/apf-dev.seed
+      APF_DOCUMENT_KEY_ID:      apf-dev
+      APF_POLICY_SOURCE:        local
+      APF_SURFACES:        openshell.sandbox.v1,openshell.provider-profile.v1,apf.policy-rules.v1,apf.policy-annotators.v1
+      RUST_LOG:            ${APF_LOG:-apf_policy_service=debug,warn}
+    volumes:
+      - ../examples/demo-bundle:/app/bundle:ro
+      - ../examples/dev-keys:/app/keys:ro
+      - apf-sock:/run/apf
+    ports:
+      - "127.0.0.1:19200:19200"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19200/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  policy-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/apf-policy-gateway/Dockerfile
+    environment:
+      APF_GATEWAY_SOCKET:             /run/apf-gateway/policy-gateway.sock
+      APF_POLICY_SERVICE_SOCKET:      /run/apf/policy-service.sock
+      APF_TRUST_ROOT_DIR:             /app/keys
+      APF_COUNTER_STORE:              /tmp/apf-gw-counter
+      APF_DOCUMENT_KEY_ID:            apf-dev
+      APF_JWKS_URL:                   http://policy-service:19200/.well-known/jwks.json
+      APF_OPENSHELL_INTERCEPTOR_ADDR: 0.0.0.0:18202
+      APF_OPENSHELL_MIDDLEWARE_ADDR:  0.0.0.0:9099
+      RUST_LOG:                       ${APF_LOG:-apf_policy_gateway=debug,warn}
+    volumes:
+      - ../examples/dev-keys:/app/keys:ro
+      - apf-sock:/run/apf
+      - gateway-sock:/run/apf-gateway
+    ports:
+      - "127.0.0.1:18202:18202"   # interceptor gRPC
+      - "127.0.0.1:9099:9099"     # middleware gRPC
+    depends_on:
+      policy-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:18202"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  apf-sock:     # policy-service.sock shared between policy-service and policy-gateway
+  gateway-sock: # policy-gateway EvaluationService UDS
+
+networks:
+  default:
+    name: apf-dev

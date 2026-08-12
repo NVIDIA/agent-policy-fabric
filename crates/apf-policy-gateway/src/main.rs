@@ -33,13 +33,22 @@ use apf_policy_gateway::digest_watcher::{DigestWatcherConfig, spawn_digest_watch
 use apf_policy_gateway::engine::{build_evaluator, new_evaluator_channel};
 use apf_policy_gateway::events;
 use apf_policy_gateway::surfaces::evaluation::EvaluationServiceImpl;
-use apf_policy_gateway::trust::{JwksWatcherConfig, fetch_ed25519_key_from_jwks, spawn_jwks_watcher};
+use apf_policy_gateway::trust::{
+    JwksWatcherConfig, fetch_ed25519_key_from_jwks, spawn_jwks_watcher,
+};
 
 #[derive(Debug, Parser)]
-#[command(name = "apf-policy-gateway", about = "APF Policy Gateway — local Policy Decision Point")]
+#[command(
+    name = "apf-policy-gateway",
+    about = "APF Policy Gateway — local Policy Decision Point"
+)]
 struct Cli {
     /// UDS socket path for the EvaluationService/Evaluate gRPC surface.
-    #[arg(long, env = "APF_GATEWAY_SOCKET", default_value = "/run/apf/policy-gateway.sock")]
+    #[arg(
+        long,
+        env = "APF_GATEWAY_SOCKET",
+        default_value = "/run/apf/policy-gateway.sock"
+    )]
     socket: PathBuf,
 
     /// Only accept UDS connections from this UID. Defaults to the process UID.
@@ -47,7 +56,11 @@ struct Cli {
     allowed_uid: Option<u32>,
 
     /// Path to the apf-policy-service UDS socket.
-    #[arg(long, env = "APF_POLICY_SERVICE_SOCKET", default_value = "/run/apf/policy-service.sock")]
+    #[arg(
+        long,
+        env = "APF_POLICY_SERVICE_SOCKET",
+        default_value = "/run/apf/policy-service.sock"
+    )]
     policy_service_socket: String,
 
     /// Surface ID passed to GetDocument when fetching policies.
@@ -75,7 +88,11 @@ struct Cli {
     jwks_refresh_interval_secs: u64,
 
     /// Persistent monotonic-counter file for bundle anti-rollback.
-    #[arg(long, env = "APF_COUNTER_STORE", default_value = "/var/lib/apf/gateway-counter")]
+    #[arg(
+        long,
+        env = "APF_COUNTER_STORE",
+        default_value = "/var/lib/apf/gateway-counter"
+    )]
     counter_store: PathBuf,
 
     /// Seconds between bundle digest polls. Set to 0 to disable refresh.
@@ -84,7 +101,6 @@ struct Cli {
 
     // ── OpenShell adapter flags ────────────────────────────────────────────────
     // Read by apf-openshell-interceptor and apf-openshell-middleware when registered.
-
     /// URL of the OpenShell gateway gRPC server to connect to
     /// (e.g. `http://localhost:7001`). Used for outbound calls: provider
     /// profile reconciliation and sandbox policy refresh.
@@ -107,7 +123,9 @@ struct Cli {
 fn build_evaluator_from_members(
     members: &apf_bundle::BundleMembers,
 ) -> anyhow::Result<Arc<dyn apf_policy_eval::Evaluator>> {
-    let policy_rules: Vec<_> = members.policy_rules.iter()
+    let policy_rules: Vec<_> = members
+        .policy_rules
+        .iter()
         .filter_map(|(_, bytes)| {
             frontend::parse_policy_rule(bytes)
                 .ok()
@@ -116,12 +134,15 @@ fn build_evaluator_from_members(
         .collect();
 
     let annotators: Vec<_> = frontend::parse_policy_annotators(members).unwrap_or_default();
-    let effects: Vec<_>    = frontend::parse_policy_effects(members).unwrap_or_default();
-    let findings: Vec<_>   = frontend::parse_policy_findings(members).unwrap_or_default();
+    let effects: Vec<_> = frontend::parse_policy_effects(members).unwrap_or_default();
+    let findings: Vec<_> = frontend::parse_policy_findings(members).unwrap_or_default();
 
-    let annotator_docs: Vec<_> = annotators.iter().map(frontend::PolicyAnnotator::to_doc).collect();
-    let effect_docs: Vec<_>    = effects.iter().map(|e| frontend::effect_to_doc(e)).collect();
-    let finding_docs: Vec<_>   = findings.iter().map(|f| frontend::finding_to_doc(f)).collect();
+    let annotator_docs: Vec<_> = annotators
+        .iter()
+        .map(frontend::PolicyAnnotator::to_doc)
+        .collect();
+    let effect_docs: Vec<_> = effects.iter().map(frontend::effect_to_doc).collect();
+    let finding_docs: Vec<_> = findings.iter().map(frontend::finding_to_doc).collect();
 
     build_evaluator(&policy_rules, &annotator_docs, &effect_docs, &finding_docs)
         .map_err(|e| anyhow::anyhow!("build Cedar evaluator: {e}"))
@@ -140,13 +161,21 @@ async fn main() -> anyhow::Result<()> {
     let trust_store = TrustStore::load_from_dir(&args.trust_root_dir)
         .with_context(|| format!("load trust roots from {}", args.trust_root_dir.display()))?;
     if trust_store.is_empty() {
-        anyhow::bail!("trust-root dir {} has no `*.pub` keys", args.trust_root_dir.display());
+        anyhow::bail!(
+            "trust-root dir {} has no `*.pub` keys",
+            args.trust_root_dir.display()
+        );
     }
     info!(dir = %args.trust_root_dir.display(), count = trust_store.len(), "loaded trust roots");
 
     let mut policy_client = PolicyClientHandle::connect(&args.policy_service_socket)
         .await
-        .with_context(|| format!("connect to policy-service at {}", args.policy_service_socket))?;
+        .with_context(|| {
+            format!(
+                "connect to policy-service at {}",
+                args.policy_service_socket
+            )
+        })?;
 
     match policy_client.health().await {
         Ok(h) => info!(state = ?h.state, "policy-service health ok"),
@@ -156,7 +185,8 @@ async fn main() -> anyhow::Result<()> {
     let verifying_key: Option<Arc<std::sync::RwLock<ed25519_dalek::VerifyingKey>>> =
         if let Some(ref url) = args.jwks_url {
             info!(url = %url, "fetching Ed25519 verifying key from JWKS");
-            let key = fetch_ed25519_key_from_jwks(url).await
+            let key = fetch_ed25519_key_from_jwks(url)
+                .await
                 .with_context(|| format!("fetch JWKS from {url}"))?;
             let shared = Arc::new(std::sync::RwLock::new(key));
             if args.jwks_refresh_interval_secs > 0 {
@@ -174,15 +204,19 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
-    let vk = trust_store.get(&args.document_key_id).cloned()
+    let vk = trust_store
+        .get(&args.document_key_id)
+        .cloned()
         .ok_or_else(|| anyhow::anyhow!("no trust root for key id '{}'", args.document_key_id))?;
     let bundle_verifier = Ed25519Verifier::new(vk);
 
-    let mut counter_store = CounterStore::load_or_init(&args.counter_store)
+    let counter_store = CounterStore::load_or_init(&args.counter_store)
         .with_context(|| format!("load counter store {}", args.counter_store.display()))?;
 
     // Fetch initial bundle and build evaluator.
-    let doc = policy_client.get_document(&args.document_kind, &args.document_name, None).await
+    let doc = policy_client
+        .get_document(&args.document_kind, &args.document_name, None)
+        .await
         .context("fetch initial bundle")?;
 
     let tmp = std::env::temp_dir().join(format!("apf-gateway-{}.bundle", std::process::id()));
@@ -194,7 +228,8 @@ async fn main() -> anyhow::Result<()> {
         &bundle_verifier as &dyn BundleVerifier,
         &counter_store,
         &HashMap::new(),
-    ).context("verify initial bundle")?;
+    )
+    .context("verify initial bundle")?;
 
     let _ = std::fs::remove_file(&tmp);
 
@@ -234,14 +269,19 @@ async fn main() -> anyhow::Result<()> {
     let listener = UnixListener::bind(&args.socket)?;
     std::fs::set_permissions(&args.socket, std::fs::Permissions::from_mode(0o600))?;
 
-    let allowed_uid = args.allowed_uid.unwrap_or_else(|| nix::unistd::getuid().as_raw());
+    let allowed_uid = args
+        .allowed_uid
+        .unwrap_or_else(|| nix::unistd::getuid().as_raw());
     info!(socket = %args.socket.display(), allowed_uid, "policy-gateway listening");
 
     let gated = UnixListenerStream::new(listener).filter_map(move |result| match result {
         Ok(stream) => match stream.peer_cred() {
             Ok(cred) if cred.uid() == allowed_uid => Some(Ok(stream)),
             Ok(cred) => {
-                warn!(peer_uid = cred.uid(), allowed_uid, "rejecting connection: UID mismatch");
+                warn!(
+                    peer_uid = cred.uid(),
+                    allowed_uid, "rejecting connection: UID mismatch"
+                );
                 None
             }
             Err(e) => {
@@ -285,7 +325,8 @@ async fn main() -> anyhow::Result<()> {
             config,
         };
 
-        let bind_addr = interceptor_bind.parse()
+        let bind_addr = interceptor_bind
+            .parse()
             .context("parse --openshell-interceptor-addr")?;
         info!(
             bind = %interceptor_bind,

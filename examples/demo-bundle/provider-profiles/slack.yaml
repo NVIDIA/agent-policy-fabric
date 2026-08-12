@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: slack
+  title: Slack
+  description: Slack Web API — workspace messaging.
+
+spec:
+  type: messaging
+  endpoints:
+    - host: slack.com
+      port: 443
+      protocol: rest
+      access: read-write
+      enforcement: enforce
+  binaries:
+    - /usr/bin/curl
+  credentials:
+    - name: bot_token
+      envVars:
+        - SLACK_TOKEN
+      required: true
+      style: bearer
+      header: Authorization
+      source:
+        kind: host-env
+        name: SLACK_TOKEN

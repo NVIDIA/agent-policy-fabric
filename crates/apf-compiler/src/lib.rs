@@ -10,10 +10,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use sha2::{Digest, Sha256};
-
-use apf_proto::ir;
 use apf_bundle::{Bundle, BundleMembers};
+use apf_proto::ir;
 
 pub mod backend;
 pub mod envelope;
@@ -82,9 +80,9 @@ impl Compiler {
     pub fn compile_file(&self, bundle_path: &Path) -> Result<CompiledBundle, CompileError> {
         let bytes = std::fs::read(bundle_path)?;
         let bundle = Bundle::from_payload_bytes(&bytes)?;
-        let members = bundle.load_members(
-            bundle_path.parent().unwrap_or_else(|| Path::new(".")),
-        ).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let members = bundle
+            .load_members(bundle_path.parent().unwrap_or_else(|| Path::new(".")))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.lower_members(&members, None)
     }
 
@@ -108,7 +106,7 @@ impl Compiler {
         let mut surfaces: Vec<CompiledSurface> = Vec::new();
         for projector in &self.projectors {
             for surface in projector.project(&canonical)? {
-                if allowed_surfaces.map_or(true, |s| s.contains(&surface.kind)) {
+                if allowed_surfaces.is_none_or(|s| s.contains(&surface.kind)) {
                     surfaces.push(surface);
                 }
             }
@@ -131,7 +129,7 @@ pub fn compile_policy_rule_docs(
     let rules = frontend::parse_policy_rules(members)?;
     rules
         .iter()
-        .map(|r| frontend::parse_policy_rule_doc(r))
+        .map(frontend::parse_policy_rule_doc)
         .collect::<Result<_, _>>()
         .map_err(CompileError::Frontend)
 }
@@ -144,10 +142,4 @@ pub fn surfaces_to_projections(
         .into_iter()
         .map(|s| ((s.kind, s.name), s.bytes))
         .collect()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    hex::encode(h.finalize())
 }
