@@ -477,6 +477,7 @@ impl HttpBundleSource {
     }
 }
 
+#[async_trait::async_trait]
 impl PolicySource for HttpBundleSource {
     fn get(&self, surface_id: &str, name: &str, variant: &str) -> Option<PolicyProjection> {
         let caches = self.caches.read().expect("cache lock poisoned");
@@ -510,6 +511,20 @@ impl PolicySource for HttpBundleSource {
         names.sort();
         names.dedup();
         names
+    }
+
+    async fn refresh(
+        &self,
+        _bundle_path: Option<&std::path::Path>,
+    ) -> anyhow::Result<super::RefreshOutcome> {
+        // bundle_path is ignored; re-fetches from the configured remote URL.
+        self.poll_for_update()
+            .await
+            .map_err(|e| anyhow::anyhow!("http bundle refresh failed: {e}"))?;
+        Ok(super::RefreshOutcome {
+            policy_digest: self.current_bundle_digest(),
+            version: self.current_counter(),
+        })
     }
 }
 

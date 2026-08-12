@@ -73,7 +73,10 @@ pub fn parse_policy_rule(bytes: &[u8]) -> Result<ir::PolicyRule, FrontendError> 
             schema: doc.spec.schema,
             definition: doc.spec.definition,
             data,
-            role: apf_policy_eval::PolicyRuleRole::Grant as i32,
+            role: match doc.spec.role.as_deref() {
+                Some("control") => apf_policy_eval::PolicyRuleRole::Control as i32,
+                _ => apf_policy_eval::PolicyRuleRole::Grant as i32,
+            },
         }),
     })
 }
