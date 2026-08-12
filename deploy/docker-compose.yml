@@ -36,7 +36,7 @@ services:
       APF_DOCUMENT_SIGNING_KEY: /app/keys/apf-dev.seed
       APF_DOCUMENT_KEY_ID:      apf-dev
       APF_POLICY_SOURCE:        local
-      APF_SURFACES:        openshell.sandbox.v1,openshell.provider-profile.v1,apf.policy-rules.v1,apf.policy-annotators.v1
+      APF_SURFACES:        openshell.sandbox.v1,openshell.provider-profile.v1,apf.policy.v1
       RUST_LOG:            ${APF_LOG:-apf_policy_service=debug,warn}
     volumes:
       - ../examples/demo-bundle:/app/bundle:ro

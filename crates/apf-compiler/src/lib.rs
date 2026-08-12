@@ -115,8 +115,9 @@ impl Compiler {
                 .iter()
                 .filter_map(|(_, bytes)| frontend::parse_policy_rule(bytes).ok())
                 .collect(),
-            annotators: policy_annotators.iter().map(|a| {
-                ir::PolicyAnnotator {
+            annotators: policy_annotators
+                .iter()
+                .map(|a| ir::PolicyAnnotator {
                     metadata: Some(ir::ObjectMeta {
                         name: a.name.clone(),
                         description: a.description.clone(),
@@ -126,8 +127,8 @@ impl Compiler {
                         description: a.description.clone(),
                         annotations: a.annotations.iter().map(annotation_spec_to_ir).collect(),
                     }),
-                }
-            }).collect(),
+                })
+                .collect(),
             effects: policy_effects.clone(),
             findings: policy_findings.clone(),
         };
@@ -145,11 +146,7 @@ impl Compiler {
         let profile_set_kind = "openshell.provider-profile.v1".to_string();
         if allowed_surfaces.is_none_or(|s| s.contains(&profile_set_kind)) {
             let provider_profile_set = ProviderProfileSet {
-                profiles: members
-                    .provider_profiles
-                    .values()
-                    .cloned()
-                    .collect(),
+                profiles: members.provider_profiles.values().cloned().collect(),
             };
             surfaces.push(CompiledSurface {
                 kind: profile_set_kind,
@@ -211,29 +208,33 @@ fn annotation_spec_to_ir(spec: &apf_policy_eval::AnnotationSpec) -> ir::Annotati
     let set_value_from = match spec.set_value_from {
         apf_policy_eval::SetValueFrom::FirstMatch => ir::SetValueFrom::FirstMatch,
     } as i32;
-    let rules = spec.rules.iter().map(|r| {
-        let op = match r.op {
-            apf_policy_eval::AnnotationOp::RegexMatch  => ir::AnnotationOp::RegexMatch,
-            apf_policy_eval::AnnotationOp::Equals      => ir::AnnotationOp::Equals,
-            apf_policy_eval::AnnotationOp::EndsWith    => ir::AnnotationOp::Endswith,
-            apf_policy_eval::AnnotationOp::StartsWith  => ir::AnnotationOp::Startswith,
-            apf_policy_eval::AnnotationOp::Contains    => ir::AnnotationOp::Contains,
-            apf_policy_eval::AnnotationOp::Length      => ir::AnnotationOp::Length,
-            apf_policy_eval::AnnotationOp::Gte         => ir::AnnotationOp::Gte,
-            apf_policy_eval::AnnotationOp::Lte         => ir::AnnotationOp::Lte,
-            apf_policy_eval::AnnotationOp::Passthrough => ir::AnnotationOp::Passthrough,
-        } as i32;
-        ir::AnnotationRule {
-            field:     r.field.clone(),
-            op,
-            pattern:   r.pattern.clone(),
-            value:     r.value.clone(),
-            suffix:    r.suffix.clone(),
-            prefix:    r.prefix.clone(),
-            substring: r.substring.clone(),
-            threshold: r.threshold,
-        }
-    }).collect();
+    let rules = spec
+        .rules
+        .iter()
+        .map(|r| {
+            let op = match r.op {
+                apf_policy_eval::AnnotationOp::RegexMatch => ir::AnnotationOp::RegexMatch,
+                apf_policy_eval::AnnotationOp::Equals => ir::AnnotationOp::Equals,
+                apf_policy_eval::AnnotationOp::EndsWith => ir::AnnotationOp::Endswith,
+                apf_policy_eval::AnnotationOp::StartsWith => ir::AnnotationOp::Startswith,
+                apf_policy_eval::AnnotationOp::Contains => ir::AnnotationOp::Contains,
+                apf_policy_eval::AnnotationOp::Length => ir::AnnotationOp::Length,
+                apf_policy_eval::AnnotationOp::Gte => ir::AnnotationOp::Gte,
+                apf_policy_eval::AnnotationOp::Lte => ir::AnnotationOp::Lte,
+                apf_policy_eval::AnnotationOp::Passthrough => ir::AnnotationOp::Passthrough,
+            } as i32;
+            ir::AnnotationRule {
+                field: r.field.clone(),
+                op,
+                pattern: r.pattern.clone(),
+                value: r.value.clone(),
+                suffix: r.suffix.clone(),
+                prefix: r.prefix.clone(),
+                substring: r.substring.clone(),
+                threshold: r.threshold,
+            }
+        })
+        .collect();
     ir::AnnotationSpec {
         name: spec.name.clone(),
         output,

@@ -23,6 +23,7 @@ use crate::proto::openshell::v1::{
     ListSandboxesRequest, Sandbox, SandboxPhase, UpdateConfigRequest,
 };
 use crate::reconciler::connect_gateway;
+use apf_types::events::{BundleEvent, BundleEventReceiver};
 
 const LIST_SANDBOXES_PAGE_SIZE: u32 = 100;
 
@@ -32,13 +33,6 @@ const FAR_FUTURE: Duration = Duration::from_secs(365 * 24 * 3600);
 /// Proactive refresh fires this many milliseconds before `valid_until_ms` to
 /// give sandboxes time to pull the new projection before the old one expires.
 const MARGIN_MS: u64 = 30_000;
-
-/// Bundle-changed event carrying digest and optional expiry.
-#[derive(Clone)]
-pub struct BundleChangedEvent {
-    pub digest: String,
-    pub valid_until_ms: u64,
-}
 
 /// Configuration for the sandbox policy refresher.
 pub struct RefresherConfig {
@@ -54,10 +48,7 @@ pub struct RefresherConfig {
 /// bundle-changed events and, when `valid_until_ms` is set, proactively
 /// before the deadline.
 #[allow(clippy::too_many_lines)]
-pub fn spawn_policy_refresher(
-    config: RefresherConfig,
-    mut rx: tokio::sync::broadcast::Receiver<BundleChangedEvent>,
-) {
+pub fn spawn_policy_refresher(config: RefresherConfig, mut rx: BundleEventReceiver) {
     tokio::spawn(async move {
         // Start with the TTL sleep far in the future; it will be reset on the
         // first bundle-changed event that carries a non-zero valid_until_ms.
@@ -68,7 +59,7 @@ pub fn spawn_policy_refresher(
             tokio::select! {
                 result = rx.recv() => {
                     match result {
-                        Ok(BundleChangedEvent { digest, valid_until_ms }) => {
+                        Ok(BundleEvent::BundleChanged { digest, valid_until_ms }) => {
                             match refresh_running_sandboxes(
                                 &config.gateway_endpoint,
                                 config.gateway_tls.clone(),
