@@ -12,6 +12,8 @@ use std::path::Path;
 
 use apf_bundle::{Bundle, BundleMembers};
 use apf_proto::ir;
+use apf_proto::{PolicySet, ProviderProfileSet};
+use prost::Message as _;
 
 pub mod backend;
 pub mod envelope;
@@ -104,6 +106,58 @@ impl Compiler {
         }
 
         let mut surfaces: Vec<CompiledSurface> = Vec::new();
+
+        // Emit apf.policy.v1/{bundle_id} — all Cedar policy inputs in one atomic fetch.
+        // Feeds the Cedar evaluator on the policy-gateway with a consistent snapshot.
+        let policy_set = PolicySet {
+            rules: members
+                .policy_rules
+                .iter()
+                .filter_map(|(_, bytes)| frontend::parse_policy_rule(bytes).ok())
+                .collect(),
+            annotators: policy_annotators.iter().map(|a| {
+                ir::PolicyAnnotator {
+                    metadata: Some(ir::ObjectMeta {
+                        name: a.name.clone(),
+                        description: a.description.clone(),
+                        ..Default::default()
+                    }),
+                    spec: Some(ir::PolicyAnnotatorSpec {
+                        description: a.description.clone(),
+                        annotations: a.annotations.iter().map(annotation_spec_to_ir).collect(),
+                    }),
+                }
+            }).collect(),
+            effects: policy_effects.clone(),
+            findings: policy_findings.clone(),
+        };
+        let policy_set_kind = "apf.policy.v1".to_string();
+        if allowed_surfaces.is_none_or(|s| s.contains(&policy_set_kind)) {
+            surfaces.push(CompiledSurface {
+                kind: policy_set_kind,
+                name: "default".to_string(),
+                bytes: policy_set.encode_to_vec(),
+            });
+        }
+
+        // Emit openshell.provider-profile.v1/default — all provider profiles in
+        // one atomic fetch for the reconciler.
+        let profile_set_kind = "openshell.provider-profile.v1".to_string();
+        if allowed_surfaces.is_none_or(|s| s.contains(&profile_set_kind)) {
+            let provider_profile_set = ProviderProfileSet {
+                profiles: members
+                    .provider_profiles
+                    .values()
+                    .cloned()
+                    .collect(),
+            };
+            surfaces.push(CompiledSurface {
+                kind: profile_set_kind,
+                name: "default".to_string(),
+                bytes: provider_profile_set.encode_to_vec(),
+            });
+        }
+
         for projector in &self.projectors {
             for surface in projector.project(&canonical)? {
                 if allowed_surfaces.is_none_or(|s| s.contains(&surface.kind)) {
@@ -142,4 +196,49 @@ pub fn surfaces_to_projections(
         .into_iter()
         .map(|s| ((s.kind, s.name), s.bytes))
         .collect()
+}
+
+fn annotation_spec_to_ir(spec: &apf_policy_eval::AnnotationSpec) -> ir::AnnotationSpec {
+    let output = match spec.output {
+        apf_policy_eval::AnnotationOutput::Bool => ir::AnnotationOutput::Bool,
+        apf_policy_eval::AnnotationOutput::String => ir::AnnotationOutput::String,
+        apf_policy_eval::AnnotationOutput::Integer => ir::AnnotationOutput::Integer,
+    } as i32;
+    let set_true_if = match spec.set_true_if {
+        apf_policy_eval::SetTrueIf::Any => ir::SetTrueIf::Any,
+        apf_policy_eval::SetTrueIf::All => ir::SetTrueIf::All,
+    } as i32;
+    let set_value_from = match spec.set_value_from {
+        apf_policy_eval::SetValueFrom::FirstMatch => ir::SetValueFrom::FirstMatch,
+    } as i32;
+    let rules = spec.rules.iter().map(|r| {
+        let op = match r.op {
+            apf_policy_eval::AnnotationOp::RegexMatch  => ir::AnnotationOp::RegexMatch,
+            apf_policy_eval::AnnotationOp::Equals      => ir::AnnotationOp::Equals,
+            apf_policy_eval::AnnotationOp::EndsWith    => ir::AnnotationOp::Endswith,
+            apf_policy_eval::AnnotationOp::StartsWith  => ir::AnnotationOp::Startswith,
+            apf_policy_eval::AnnotationOp::Contains    => ir::AnnotationOp::Contains,
+            apf_policy_eval::AnnotationOp::Length      => ir::AnnotationOp::Length,
+            apf_policy_eval::AnnotationOp::Gte         => ir::AnnotationOp::Gte,
+            apf_policy_eval::AnnotationOp::Lte         => ir::AnnotationOp::Lte,
+            apf_policy_eval::AnnotationOp::Passthrough => ir::AnnotationOp::Passthrough,
+        } as i32;
+        ir::AnnotationRule {
+            field:     r.field.clone(),
+            op,
+            pattern:   r.pattern.clone(),
+            value:     r.value.clone(),
+            suffix:    r.suffix.clone(),
+            prefix:    r.prefix.clone(),
+            substring: r.substring.clone(),
+            threshold: r.threshold,
+        }
+    }).collect();
+    ir::AnnotationSpec {
+        name: spec.name.clone(),
+        output,
+        set_true_if,
+        set_value_from,
+        rules,
+    }
 }

@@ -92,3 +92,6 @@ pub use pdp_v1alpha1::evaluation_service_client;
 pub use pdp_v1alpha1::evaluation_service_server;
 pub use policy_service_v1alpha1::policy_service_client;
 pub use policy_service_v1alpha1::policy_service_server;
+pub use ir::PolicyAnnotator;
+pub use ir::PolicySet;
+pub use ir::ProviderProfileSet;
