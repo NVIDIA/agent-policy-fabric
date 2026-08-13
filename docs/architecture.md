@@ -1,9 +1,5 @@
 # APF Architecture
 
-Created: 2026-08-08  Updated: 2026-08-13
-
-**Status:** draft — under review
-
 ---
 
 ## 1. Component Responsibilities

@@ -1,7 +1,5 @@
 # APF Bundle Publishing Guide
 
-Created: 2026-08-13
-
 This document describes one mechanism for policy bundle creation and publishing: a GitOps flow where policy originates in Git, is compiled and signed on merge, and published to Artifactory. Any mechanism that produces a signed bundle and publishes it to Artifactory is compatible with the downstream pipeline — GitOps is a convention, not a requirement. For the YAML document schemas and Cedar evaluation model, see [policy-model.md](policy-model.md).
 
 ---
