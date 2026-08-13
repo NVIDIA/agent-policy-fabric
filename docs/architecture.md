@@ -1,6 +1,6 @@
 # APF Architecture
 
-Created: 2026-08-08  Updated: 2026-08-08
+Created: 2026-08-08  Updated: 2026-08-13
 
 **Status:** draft — under review
 
@@ -8,9 +8,11 @@ Created: 2026-08-08  Updated: 2026-08-08
 
 ## 1. Component Responsibilities
 
-### `apf-policy-service` — Policy Administration Point (PAP)
+### `apf-policy-service` — Policy Administration Point (PAP) *(cloud deployment: planned)*
 
-The cloud-side authority for policy. Compiles, signs, stores, and serves policy bundles. Never evaluates requests.
+Policy authority for the APF stack. Compiles, signs, stores, and serves policy bundles. Never evaluates requests.
+
+**Current supported deployment:** `apf-policy-service` runs on the same host as `apf-policy-gateway`, serving bundles over a Unix domain socket (`LocalBundleSource` or `HttpBundleSource`). See §7 for the planned cloud-based topology.
 
 | Responsibility | Detail |
 |---|---|
@@ -22,9 +24,9 @@ The cloud-side authority for policy. Compiles, signs, stores, and serves policy 
 | Provenance | Mints JWT (`provenance_token`) on every `GetDocument` response via `DocumentSigner` |
 | Variant selection | `PolicyResolver` maps caller runtime context → bundle variant (e.g. `"governed-rw"`) |
 
-### `apf-policy-gateway` — local Policy Decision Point (PDP)
+### `apf-policy-gateway` — host-side policy agent
 
-Host-side enforcement anchor. Fetches and verifies bundles locally, evaluates every request in-process. Never reaches the cloud on the hot path.
+The host-side anchor for all APF enforcement. It embeds the local Policy Decision Point (PDP) — fetching and verifying bundles, evaluating every request in-process with no cloud dependency on the hot path — and it hosts the runtime enforcement adapters: sandbox policy projection at admission and per-request egress enforcement (see the OpenShell adapter section below).
 
 | Responsibility | Detail |
 |---|---|
@@ -77,9 +79,9 @@ See §5 for the planned design. Handles credential lifecycle separately from pol
                            • JWKS endpoint
                                     │ GetDocument (poll)
                                     ▼
-                           apf-policy-gateway (PDP)
+                           apf-policy-gateway (host-side policy agent)
                            • verify bundle (apf-bundle)
-                           • CedarEvaluator (arc-swap)
+                           • CedarEvaluator (arc-swap) — local PDP
                            • EvaluationService/Evaluate (UDS)
                            • JWKS trust verification
                           ┌─────────┴──────────────┐
@@ -338,3 +340,52 @@ Upstream MCP server (Slack, GitLab, etc.)
 | **Cloud dependency** | Required (service is the PAP) | None after bundle loaded |
 | **APF components** | `apf-policy-service`, `apf-policy-gateway` (fetch/verify) | `apf-policy-gateway` (evaluate), `apf-openshell-interceptor`, `apf-openshell-middleware` |
 | **Failure mode** | Gateway holds last known good bundle | Deny-safe: gateway denies if evaluator unavailable |
+
+---
+
+## 7. Deployment Models
+
+### 7.1 Co-located (current supported model)
+
+`apf-policy-service` and `apf-policy-gateway` run on the same host. The service compiles, signs, and serves bundles over a Unix domain socket; the gateway fetches from it locally. No network hop on the control plane.
+
+```
+  ┌─────────────────────────────── Host ────────────────────────────────┐
+  │                                                                     │
+  │  apf-policy-service (PAP)         apf-policy-gateway               │
+  │  • compile / sign / serve  ◀── GetDocument (UDS poll) ──           │
+  │  • PolicyService gRPC (UDS)                                         │
+  │  • LocalBundleSource or HttpBundleSource                            │
+  │                                                                     │
+  └─────────────────────────────────────────────────────────────────────┘
+```
+
+The service–gateway transport is a Unix domain socket. The bundle source (`LocalBundleSource` or `HttpBundleSource`) is independent of the transport and can be configured without changing the co-located topology.
+
+### 7.2 Cloud-based PAP *(planned)*
+
+`apf-policy-service` runs in a shared cloud environment (e.g. Kubernetes). Gateway instances on multiple hosts fetch bundles from a single PAP over the network. Bundle storage is backed by Artifactory (`HttpBundleSource`).
+
+```
+  Cloud ──────────────────────────────────────────────────────────────────────
+  │  apf-policy-service (PAP)                                              │
+  │  • compile / sign / serve bundles                                      │
+  │  • PolicyService gRPC + HTTP (mTLS)                                    │
+  │  • HttpBundleSource — pulls signed bundles from Artifactory            │
+  └────────────────────────────────────────────────────────────────────────
+                │
+                │  GetDocument  (mTLS / TCP)
+                ▼
+  Host A ─────────────────────────────────────────────────────────────────────
+  │  apf-policy-gateway                                                    │
+  │  • verify + evaluate locally — no cloud dependency on hot path         │
+  └────────────────────────────────────────────────────────────────────────
+  Host B ─────────────────────────────────────────────────────────────────────
+  │  apf-policy-gateway                                                    │
+  └────────────────────────────────────────────────────────────────────────
+```
+
+No gateway code changes required. The gateway client is transport-agnostic; switching from co-located to cloud-based PAP is a configuration change only.
+
+For the policy bundle lifecycle — CI compilation and signing, Artifactory distribution, and the end-to-end flow from author commit to live policy — see [docs/policy-publishing.md](policy-publishing.md).
+```

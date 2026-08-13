@@ -70,4 +70,4 @@ active policy rules and request content.
 ## Architecture
 
 See `docs/architecture.md` for sequence diagrams of both seams.
-See `docs/policy-language.md` for policy authoring reference.
+See `docs/policy-model.md` for the policy model and document schemas.

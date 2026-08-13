@@ -45,4 +45,4 @@ Bundle (YAML) → compiler pipeline → projections
 ```
 
 See `docs/architecture.md` for the full control/data plane diagram.
-See `docs/policy-language.md` for bundle authoring reference.
+See `docs/policy-model.md` for the policy model and document schemas.
