@@ -5,7 +5,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
@@ -75,7 +74,6 @@ impl LocalBundleSource {
     }
 
     fn load_bundle(&self, bundle_path: &Path) -> anyhow::Result<PolicyServiceCore> {
-        use apf_bundle::verify_bundle;
         use apf_compiler::surfaces_to_projections;
 
         let verifier = self
@@ -96,20 +94,12 @@ impl LocalBundleSource {
 
         let mut counter_store = counter_store_mutex.lock().expect("counter store lock");
 
-        let outcome = verify_bundle(
+        let outcome = super::verify_bundle_bytes(
             &bundle_bytes,
             bundle_path,
             verifier as &dyn BundleVerifier,
             &counter_store,
-            SystemTime::now(),
-            &std::collections::HashMap::new(),
-        );
-        if !outcome.ok {
-            anyhow::bail!(
-                "bundle verification failed: {:?}",
-                outcome.rejection_reasons
-            );
-        }
+        )?;
 
         // Load and compile before advancing the counter so a compilation failure
         // doesn't permanently consume the counter slot.

@@ -448,8 +448,13 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("--bundle-source-url required when --policy-source=http")
         })?;
         let token = resolve_bundle_source_token(args)?;
-        let mut src = HttpBundleSource::new(url, &token, compiler)
-            .map_err(|e| anyhow::anyhow!("build http bundle source: {e}"))?;
+        let mut src = HttpBundleSource::new(
+            url,
+            &token,
+            compiler,
+            YamlSigilVerifier::new(trust_store.clone()),
+        )
+        .map_err(|e| anyhow::anyhow!("build http bundle source: {e}"))?;
         src.set_counter_store(counter_store);
         src.set_audit(audit.clone());
         src.load_initial().await?;

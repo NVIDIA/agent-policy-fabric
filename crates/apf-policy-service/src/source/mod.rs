@@ -16,6 +16,38 @@ pub use http::{HttpBundleSource, UpdateStrategy};
 pub use local::LocalBundleSource;
 pub use resolver::{ClaimsResolver, PassthroughResolver, PolicyResolver, ResolvedPolicy};
 
+/// Verify a fetched bundle artifact — signature, manifest hashes, expiry,
+/// runtime compatibility, and counter regression — before any source hands
+/// its bytes to the compiler.
+///
+/// Every [`PolicySource`] backend that loads bundle bytes from outside the
+/// process (disk, HTTP, or any future transport) must route them through
+/// this before compiling. Do not duplicate `apf_bundle::verify_bundle` calls
+/// in a new backend — call this instead, so a new source can't independently
+/// skip verification the way the HTTP source once did.
+pub(crate) fn verify_bundle_bytes(
+    bundle_bytes: &[u8],
+    bundle_path: &std::path::Path,
+    verifier: &dyn apf_types::BundleVerifier,
+    counter_store: &apf_bundle::CounterStore,
+) -> anyhow::Result<apf_bundle::VerifyOutcome> {
+    let outcome = apf_bundle::verify_bundle(
+        bundle_bytes,
+        bundle_path,
+        verifier,
+        counter_store,
+        std::time::SystemTime::now(),
+        &std::collections::HashMap::new(),
+    );
+    if !outcome.ok {
+        anyhow::bail!(
+            "bundle verification failed: {:?}",
+            outcome.rejection_reasons
+        );
+    }
+    Ok(outcome)
+}
+
 /// A compiled projection ready to be vended to a caller.
 #[derive(Clone)]
 pub struct PolicyProjection {

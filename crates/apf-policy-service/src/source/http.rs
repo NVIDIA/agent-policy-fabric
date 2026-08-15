@@ -24,7 +24,8 @@ use tracing::{info, trace, warn};
 use super::{PolicyProjection, PolicySource};
 use crate::runtime::audit::{BundleAuditMetadata, PolicyRejectAudit, PolicyServiceAudit};
 use crate::runtime::runtime_context::RuntimeContext;
-use apf_bundle::CounterStore;
+use apf_bundle::{CounterStore, YamlSigilVerifier};
+use apf_types::BundleVerifier;
 
 /// How the source detects bundle updates.
 #[derive(Debug, Clone)]
@@ -90,12 +91,21 @@ pub struct HttpBundleSource {
     counter_store: Mutex<Option<CounterStore>>,
     /// Audit emitter for policy lifecycle events on the hot-swap path.
     audit: PolicyServiceAudit,
+    /// Verifies every fetched bundle's signature against the trust store
+    /// before it's compiled or served — see `super::verify_bundle_bytes`.
+    verifier: YamlSigilVerifier,
 }
 
 impl HttpBundleSource {
     /// Build a new source. `url` may contain `{variant}` for template-based
-    /// multi-bundle resolution.
-    pub fn new(url: &str, token: &str, compiler: apf_compiler::Compiler) -> anyhow::Result<Self> {
+    /// multi-bundle resolution. `verifier` is mandatory: an HTTP-fetched
+    /// bundle is never trusted on transport (token/TLS) alone.
+    pub fn new(
+        url: &str,
+        token: &str,
+        compiler: apf_compiler::Compiler,
+        verifier: YamlSigilVerifier,
+    ) -> anyhow::Result<Self> {
         let http_client = reqwest::Client::builder()
             .build()
             .map_err(|e| anyhow::anyhow!("build HTTP client: {e}"))?;
@@ -107,6 +117,7 @@ impl HttpBundleSource {
             http_client,
             counter_store: Mutex::new(None),
             audit: PolicyServiceAudit,
+            verifier,
         })
     }
 
@@ -447,17 +458,33 @@ impl HttpBundleSource {
             .map_err(|e| anyhow::anyhow!("unpack tar.gz: {e}"))?;
 
         let manifest_path = find_bundle_manifest(tmp_dir.path())?;
+
+        // Verify signature + counter before compiling, so an unsigned or
+        // rolled-back artifact never reaches the compiler or the cache.
+        let bundle_bytes = std::fs::read(&manifest_path)
+            .map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
+        let counter = {
+            let counter_store_guard = self
+                .counter_store
+                .lock()
+                .expect("counter store lock poisoned");
+            let counter_store = counter_store_guard.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("counter store not configured; cannot verify bundle")
+            })?;
+            let outcome = super::verify_bundle_bytes(
+                &bundle_bytes,
+                &manifest_path,
+                &self.verifier as &dyn BundleVerifier,
+                counter_store,
+            )?;
+            outcome.monotonic_counter
+        };
+
         let compiled = self
             .compiler
             .compile_file(&manifest_path)
             .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
-        let bundle_bytes =
-            std::fs::read(&manifest_path).map_err(|e| anyhow::anyhow!("re-read manifest: {e}"))?;
-        let bundle = apf_bundle::Bundle::from_payload_bytes(&bundle_bytes)
-            .map_err(|e| anyhow::anyhow!("parse bundle for counter: {e}"))?;
-
-        let counter = bundle.monotonic_counter;
         let projections = apf_compiler::surfaces_to_projections(compiled.surfaces)
             .into_iter()
             .map(|(key, bytes)| {
@@ -584,6 +611,12 @@ mod tests {
     fn make_test_source(cache: BundleCache) -> HttpBundleSource {
         let mut caches = BTreeMap::new();
         caches.insert(String::new(), cache);
+        // Empty trust store: these tests populate the cache directly and
+        // never go through extract_and_compile, so no verification runs.
+        let empty_trust_dir = tempfile::tempdir().expect("create empty trust dir");
+        let verifier =
+            YamlSigilVerifier::new(apf_bundle::TrustStore::load_from_dir(empty_trust_dir.path())
+                .expect("load empty trust store"));
         HttpBundleSource {
             url_template: String::new(),
             auth_token: String::new(),
@@ -592,6 +625,7 @@ mod tests {
             http_client: reqwest::Client::new(),
             counter_store: Mutex::new(None),
             audit: PolicyServiceAudit::default(),
+            verifier,
         }
     }
 
