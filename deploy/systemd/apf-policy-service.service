@@ -1,0 +1,75 @@
+[Unit]
+Description=APF Policy Service (PAP)
+Documentation=https://github.com/NVIDIA/APF
+After=network.target
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=apf
+Group=apf
+EnvironmentFile=/etc/apf/policy-service.env
+LoadCredential=document-signing-key:/etc/apf/document-signing-key
+# Uncomment together with APF_HTTP_ADDR in policy-service.env. The daemon
+# requires --http-bearer-token-file whenever the HTTP surface is enabled
+# and refuses to start without it (see SECURITY.md).
+#LoadCredential=http-bearer-token:/etc/apf/http-bearer-token
+WorkingDirectory=/var/lib/apf/policy-service
+StateDirectory=apf/policy-service
+StateDirectoryMode=0700
+RuntimeDirectory=apf
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+UMask=0077
+
+ExecStart=/usr/local/bin/apf-policy-service serve \
+    --document-signing-key ${CREDENTIALS_DIRECTORY}/document-signing-key \
+    --http-bearer-token-file ${CREDENTIALS_DIRECTORY}/http-bearer-token
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=1min
+KillSignal=SIGTERM
+KillMode=mixed
+
+# Restarts, reloads, and stops go through the deploy pipeline only — see
+# SECURITY.md "Process-level lockdown". Do not add sudo/polkit rules that
+# let interactive sessions call `systemctl restart apf-policy-service`.
+
+# Hardening. RestrictAddressFamilies is UNIX-only: the default config talks
+# to nothing but the local bundle file and its own UDS listener. Add
+# AF_INET/AF_INET6 (and widen ReadWritePaths/IPAddressAllow) only when
+# APF_POLICY_SOURCE=http or APF_HTTP_ADDR is enabled — and if it's the
+# latter, also uncomment the LoadCredential=http-bearer-token line above
+# and the --http-bearer-token-file flag's backing file, or the daemon
+# refuses to start. Record why in a comment here.
+AmbientCapabilities=
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+PrivateUsers=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/etc/apf
+RemoveIPC=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

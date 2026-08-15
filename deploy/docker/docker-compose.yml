@@ -11,12 +11,24 @@
 # dev key and committed alongside the template. Re-sign after policy changes:
 #   mise run sign-bundle
 #
+# apf-policy-service refuses to start with APF_HTTP_ADDR set unless
+# APF_HTTP_BEARER_TOKEN_FILE is also set (see ../systemd/SECURITY.md) — this
+# stack points it at examples/dev-keys/http-bearer-token.dev, a
+# zero-security-value dev-only file committed alongside the dev signing key.
+# /healthz and /readyz don't need it either way.
+#
+# The OpenShell-facing interceptor/middleware surfaces are enabled here via
+# the documented insecure-transport opt-out (see ../systemd/SECURITY.md) —
+# this loopback-only dev stack has no OpenShell gateway to issue TLS/caller
+# trust against, so it opts out explicitly rather than bootstrapping
+# throwaway fixtures. Production deployments must not set these two flags —
+# see ../systemd/ for the fully authenticated deployment.
+#
 # Note: locally-built macOS binaries cannot be mounted into Linux containers.
 # This compose always builds images; the Dockerfile build cache makes rebuilds fast.
 #
 # Once up:
 #   curl localhost:19200/healthz
-#   grpcurl -plaintext localhost:18202 grpc.health.v1.Health/Check
 
 name: apf-dev
 
@@ -24,14 +36,15 @@ services:
 
   policy-service:
     build:
-      context: ..
-      dockerfile: deploy/apf-policy-service/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/apf-policy-service/Dockerfile
       target: runtime
       secrets:
         - artifactory_token
     environment:
       APF_SOCKET:          /run/apf/policy-service.sock
       APF_HTTP_ADDR:       0.0.0.0:19200
+      APF_HTTP_BEARER_TOKEN_FILE: /app/keys/http-bearer-token.dev
       APF_BUNDLE_PATH:     /app/bundle/demo-bundle.yaml
       APF_TRUST_ROOT_DIR:  /app/keys
       APF_COUNTER_STORE:   /tmp/apf-counter
@@ -41,8 +54,8 @@ services:
       APF_SURFACES:        openshell.sandbox.v1,openshell.provider-profile.v1,apf.policy.v1
       RUST_LOG:            ${APF_LOG:-apf_policy_service=debug,warn}
     volumes:
-      - ../examples/demo-bundle:/app/bundle:ro
-      - ../examples/dev-keys:/app/keys:ro
+      - ../../examples/demo-bundle:/app/bundle:ro
+      - ../../examples/dev-keys:/app/keys:ro
       - apf-sock:/run/apf
     ports:
       - "127.0.0.1:19200:19200"
@@ -54,8 +67,8 @@ services:
 
   policy-gateway:
     build:
-      context: ..
-      dockerfile: deploy/apf-policy-gateway/Dockerfile
+      context: ../..
+      dockerfile: deploy/docker/apf-policy-gateway/Dockerfile
       secrets:
         - artifactory_token
     environment:
@@ -72,7 +85,7 @@ services:
       APF_OPENSHELL_MIDDLEWARE_ALLOW_INSECURE_TRANSPORT: "true"
       RUST_LOG:                       ${APF_LOG:-apf_policy_gateway=debug,warn}
     volumes:
-      - ../examples/dev-keys:/app/keys:ro
+      - ../../examples/dev-keys:/app/keys:ro
       - apf-sock:/run/apf
       - gateway-sock:/run/apf-gateway
     ports:
@@ -82,7 +95,7 @@ services:
       policy-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/18202' 2>/dev/null"]
+      test: ["CMD-SHELL", "test -S /run/apf-gateway/policy-gateway.sock"]
       interval: 2s
       timeout: 3s
       retries: 30

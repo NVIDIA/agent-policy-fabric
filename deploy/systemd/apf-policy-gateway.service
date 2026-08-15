@@ -1,0 +1,72 @@
+[Unit]
+Description=APF Policy Gateway (host-side PDP)
+Documentation=https://github.com/NVIDIA/APF
+After=network.target apf-policy-service.service
+Wants=apf-policy-service.service
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=apf
+Group=apf
+EnvironmentFile=/etc/apf/policy-gateway.env
+LoadCredential=interceptor-tls-key:/etc/apf/tls/interceptor-key.pem
+LoadCredential=middleware-tls-key:/etc/apf/tls/middleware-key.pem
+WorkingDirectory=/var/lib/apf/policy-gateway
+StateDirectory=apf/policy-gateway
+StateDirectoryMode=0700
+RuntimeDirectory=apf
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+UMask=0077
+
+ExecStart=/usr/local/bin/apf-policy-gateway \
+    --openshell-interceptor-tls-key-file ${CREDENTIALS_DIRECTORY}/interceptor-tls-key \
+    --openshell-middleware-tls-key-file ${CREDENTIALS_DIRECTORY}/middleware-tls-key
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=1min
+KillSignal=SIGTERM
+KillMode=mixed
+
+# Restarts, reloads, and stops go through the deploy pipeline only — see
+# SECURITY.md "Process-level lockdown". Do not add sudo/polkit rules that
+# let interactive sessions call `systemctl restart apf-policy-gateway`.
+
+# Hardening. AF_INET is required here (unlike apf-policy-service) because
+# the OpenShell interceptor/middleware surfaces are TCP, not UDS — see
+# SECURITY.md "APF <-> OpenShell interface lockdown". IPAddressAllow
+# pins the whole unit to loopback so a misconfigured *_ADDR env var (e.g. an
+# accidental 0.0.0.0 bind) still can't be reached off-host.
+AmbientCapabilities=
+CapabilityBoundingSet=
+IPAddressAllow=localhost
+IPAddressDeny=any
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+PrivateUsers=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+RemoveIPC=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

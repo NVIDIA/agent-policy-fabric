@@ -2,7 +2,7 @@
 # APF Policy Gateway image.
 #
 # Build from repo root:
-#   docker build -f deploy/apf-policy-gateway/Dockerfile -t apf-policy-gateway:dev .
+#   docker build -f deploy/docker/apf-policy-gateway/Dockerfile -t apf-policy-gateway:dev .
 
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM rust:1.88-bookworm AS build

@@ -4,7 +4,7 @@
 # Build from repo root (Artifactory token required for yaml-sigil deps):
 #   docker build \
 #     --secret id=artifactory_token,env=CARGO_REGISTRIES_ARTIFACTORY_TOKEN \
-#     -f deploy/apf-policy-service/Dockerfile -t apf-policy-service:demo --target demo .
+#     -f deploy/docker/apf-policy-service/Dockerfile -t apf-policy-service:demo --target demo .
 #
 # Targets:
 #   runtime  — minimal production image
@@ -47,8 +47,11 @@ RUN mkdir -p /run/apf /var/lib/apf /data/bundles /data/keys /etc/apf
 
 EXPOSE 19200
 
+# APF_HTTP_ADDR is opt-in, not defaulted here: apf-policy-service refuses to
+# start with it set unless APF_HTTP_BEARER_TOKEN_FILE is also provided (see
+# apf-policy-service/src/surfaces/http.rs). Set both at `docker run`/compose
+# time — deploy/docker-compose.yml does this for the dev stack.
 ENV APF_SOCKET=/run/apf/policy-service.sock \
-    APF_HTTP_ADDR=0.0.0.0:19200 \
     APF_TRUST_ROOT_DIR=/data/keys \
     APF_COUNTER_STORE=/var/lib/apf/counter \
     APF_DOCUMENT_KEY_ID=apf-dev \

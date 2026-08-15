@@ -1,0 +1,17 @@
+// polkit rule: deny interactive/session-bus start|stop|restart|reload of the
+// APF units to everyone. Only root (the deploy pipeline, running as root via
+// its own controlled sudo path — see ../SECURITY.md "Process-level
+// lockdown") manages these units; that path never goes through polkit, so
+// this rule cannot block it. It exists to close the *other* path: an admin
+// with a normal login session and passwordless-sudo-for-systemctl-by-polkit
+// (common on workstation-style hosts) calling
+// `systemctl restart apf-policy-service` without going through the pipeline.
+polkit.addRule(function (action, subject) {
+    var apfUnits = ["apf-policy-service.service", "apf-policy-gateway.service"];
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        apfUnits.indexOf(action.lookup("unit")) != -1
+    ) {
+        return polkit.Result.NO;
+    }
+});
