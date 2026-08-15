@@ -118,6 +118,13 @@ struct ServeArgs {
     #[arg(long, env = "APF_HTTP_ADDR")]
     http_addr: Option<std::net::SocketAddr>,
 
+    /// Bearer token file gating `/v1/documents` and `/v1/refresh`. Required
+    /// whenever `--http-addr` is set — the service refuses to start
+    /// otherwise. `/health`, `/healthz`, `/readyz`, and
+    /// `/.well-known/jwks.json` are always unauthenticated regardless.
+    #[arg(long, env = "APF_HTTP_BEARER_TOKEN_FILE")]
+    http_bearer_token_file: Option<PathBuf>,
+
     #[arg(long, env = "APF_ALLOWED_UID")]
     allowed_uid: Option<u32>,
 
@@ -174,6 +181,22 @@ fn load_signing_key(path: &Path) -> anyhow::Result<SigningKey> {
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&raw);
     Ok(SigningKey::from_bytes(&seed))
+}
+
+fn resolve_http_bearer_token(args: &ServeArgs) -> anyhow::Result<Option<Arc<str>>> {
+    let Some(path) = &args.http_bearer_token_file else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("read --http-bearer-token-file {}: {e}", path.display()))?;
+    let token = raw.trim();
+    if token.is_empty() {
+        anyhow::bail!(
+            "--http-bearer-token-file {} is empty",
+            path.display()
+        );
+    }
+    Ok(Some(Arc::from(token)))
 }
 
 fn resolve_bundle_source_token(args: &ServeArgs) -> anyhow::Result<String> {
@@ -508,8 +531,14 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
     });
 
     if let Some(addr) = args.http_addr {
+        let bearer_token = resolve_http_bearer_token(args)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--http-addr requires --http-bearer-token-file; \
+                 /v1/documents and /v1/refresh cannot be exposed unauthenticated"
+            )
+        })?;
         if !addr.ip().is_loopback() {
-            warn!(%addr, "HTTP surface bound to non-loopback address; no authentication");
+            warn!(%addr, "HTTP surface bound to non-loopback address");
         }
         info!(%addr, "HTTP surface enabled");
         let http_state = HttpState {
@@ -517,6 +546,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             source: Arc::clone(&source),
             resolver: Arc::clone(&resolver),
             allowed_kinds: Arc::clone(&allowed_kinds),
+            bearer_token: Some(bearer_token),
         };
         let app = http_router(http_state);
         let listener_tcp = tokio::net::TcpListener::bind(addr).await?;

@@ -33,6 +33,7 @@ apf-policy-service keygen    # generate an Ed25519 signing keypair
 | `--policy-source` | `APF_POLICY_SOURCE` | `local` | `local` or `http` |
 | `--bundle-source-url` | `APF_BUNDLE_SOURCE_URL` | — | Bundle URL (HTTP mode) |
 | `--http-addr` | `APF_HTTP_ADDR` | disabled | Enable HTTP surface (health, documents, JWKS) |
+| `--http-bearer-token-file` | `APF_HTTP_BEARER_TOKEN_FILE` | — | Required if `--http-addr` is set; gates the non-ops HTTP routes |
 
 ## Architecture
 

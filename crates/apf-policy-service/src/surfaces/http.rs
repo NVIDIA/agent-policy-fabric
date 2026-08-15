@@ -1,24 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//! JSON HTTP surface for the APF policy service daemon. Enabled via `--http-addr`.
-//!
-//! Routes:
-//!   GET  /health
-//!   GET  /healthz            — liveness probe (always 200)
-//!   GET  /readyz             — readiness probe (200 when bundle loaded, 503 otherwise)
-//!   GET  /v1/documents/{kind}[?`sandbox_id=…&user_subject=…&agent_type`=…]
-//!   GET  /v1/documents/{kind}/{name}[?`sandbox_id=…&user_subject=…&agent_type`=…]
-//!   POST /v1/refresh         — triggers an immediate bundle re-fetch
-//!   GET  /.well-known/jwks.json  — Ed25519 JWK for the document signer
+//! JSON HTTP surface for the APF policy service daemon. Enabled via
+//! `--http-addr`; see `router()` for the route table and auth split.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
-use axum::response::Json;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -36,6 +29,9 @@ pub struct HttpState {
     pub resolver: Arc<dyn PolicyResolver>,
     /// Empty = no restriction; non-empty = only these kinds are served.
     pub allowed_kinds: Arc<HashSet<String>>,
+    /// Gates the non-ops routes. `None` means they aren't mounted at all —
+    /// see `router()`.
+    pub bearer_token: Option<Arc<str>>,
 }
 
 impl HttpState {
@@ -54,16 +50,70 @@ impl HttpState {
 }
 
 /// Build the Axum router for the HTTP surface, wired to the given `state`.
+///
+/// Ops/liveness routes stay unauthenticated regardless of `bearer_token` so
+/// probes and JWKS fetch never depend on auth config. Everything else sits
+/// behind `require_bearer_token` via `route_layer`. `main.rs` requires a
+/// token whenever the HTTP surface is enabled at all, so `bearer_token` is
+/// always `Some` in the running service; the `None` branch here is for
+/// direct callers of `router()` (tests, other embedders) and stays
+/// fail-closed on purpose — no token mounts no protected routes, rather
+/// than serving them unauthenticated.
 pub fn router(state: HttpState) -> Router {
-    Router::new()
+    let public = Router::new()
         .route("/health", get(health))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/.well-known/jwks.json", get(jwks))
+        .with_state(state.clone());
+
+    if state.bearer_token.is_none() {
+        return public;
+    }
+
+    let protected = Router::new()
         .route("/v1/documents/{kind}", get(list_documents))
         .route("/v1/documents/{kind}/{name}", get(get_document))
         .route("/v1/refresh", post(refresh_policy))
-        .route("/.well-known/jwks.json", get(jwks))
-        .with_state(state)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer_token,
+        ))
+        .with_state(state);
+
+    public.merge(protected)
+}
+
+async fn require_bearer_token(
+    State(s): State<HttpState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = s.bearer_token.as_deref() else {
+        // Unreachable: this layer is only attached when bearer_token is Some.
+        return (StatusCode::UNAUTHORIZED, "bearer auth not configured").into_response();
+    };
+    let presented = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    match presented {
+        Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => {
+            next.run(req).await
+        }
+        _ => (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response(),
+    }
+}
+
+/// Compares in time proportional to `a.len()`, independent of where (or
+/// whether) the two inputs differ, so response latency can't be used to
+/// recover the token a byte at a time.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // --- /health ---
