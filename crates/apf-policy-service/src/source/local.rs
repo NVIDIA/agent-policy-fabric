@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
-use apf_bundle::{CounterStore, YamlSigilVerifier};
+use apf_bundle::CounterStore;
 use apf_compiler::Compiler;
 use apf_types::BundleVerifier;
 
@@ -28,7 +28,7 @@ use crate::runtime::core::{DocumentSigner, LoadedBundle, PolicyServiceCore};
 pub struct LocalBundleSource {
     core: Arc<arc_swap::ArcSwap<PolicyServiceCore>>,
     // Reload context — present when local hot-swap is supported.
-    verifier: Option<YamlSigilVerifier>,
+    verifier: Option<Arc<dyn BundleVerifier>>,
     counter_store: Option<Mutex<CounterStore>>,
     compiler: Option<Compiler>,
     document_signer: Option<Arc<DocumentSigner>>,
@@ -55,7 +55,7 @@ impl LocalBundleSource {
     #[must_use]
     pub fn with_reload(
         core: Arc<arc_swap::ArcSwap<PolicyServiceCore>>,
-        verifier: YamlSigilVerifier,
+        verifier: Arc<dyn BundleVerifier>,
         counter_store: CounterStore,
         compiler: Compiler,
         document_signer: Option<Arc<DocumentSigner>>,
@@ -97,7 +97,7 @@ impl LocalBundleSource {
         let outcome = super::verify_bundle_bytes(
             &bundle_bytes,
             bundle_path,
-            verifier as &dyn BundleVerifier,
+            verifier.as_ref(),
             &counter_store,
         )?;
 

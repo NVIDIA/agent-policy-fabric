@@ -452,7 +452,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             url,
             &token,
             compiler,
-            YamlSigilVerifier::new(trust_store.clone()),
+            Arc::new(YamlSigilVerifier::new(trust_store.clone())),
         )
         .map_err(|e| anyhow::anyhow!("build http bundle source: {e}"))?;
         src.set_counter_store(counter_store);
@@ -470,7 +470,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             };
         Arc::new(LocalBundleSource::with_reload(
             Arc::clone(&core),
-            YamlSigilVerifier::new(trust_store.clone()),
+            Arc::new(YamlSigilVerifier::new(trust_store.clone())),
             CounterStore::load_or_init(&args.counter_store)
                 .map_err(|e| anyhow::anyhow!("counter store for reload: {e}"))?,
             Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]),

@@ -24,7 +24,7 @@ use tracing::{info, trace, warn};
 use super::{PolicyProjection, PolicySource};
 use crate::runtime::audit::{BundleAuditMetadata, PolicyRejectAudit, PolicyServiceAudit};
 use crate::runtime::runtime_context::RuntimeContext;
-use apf_bundle::{CounterStore, YamlSigilVerifier};
+use apf_bundle::CounterStore;
 use apf_types::BundleVerifier;
 
 /// How the source detects bundle updates.
@@ -93,7 +93,7 @@ pub struct HttpBundleSource {
     audit: PolicyServiceAudit,
     /// Verifies every fetched bundle's signature against the trust store
     /// before it's compiled or served — see `super::verify_bundle_bytes`.
-    verifier: YamlSigilVerifier,
+    verifier: Arc<dyn BundleVerifier>,
 }
 
 impl HttpBundleSource {
@@ -104,7 +104,7 @@ impl HttpBundleSource {
         url: &str,
         token: &str,
         compiler: apf_compiler::Compiler,
-        verifier: YamlSigilVerifier,
+        verifier: Arc<dyn BundleVerifier>,
     ) -> anyhow::Result<Self> {
         let http_client = reqwest::Client::builder()
             .build()
@@ -474,7 +474,7 @@ impl HttpBundleSource {
             let outcome = super::verify_bundle_bytes(
                 &bundle_bytes,
                 &manifest_path,
-                &self.verifier as &dyn BundleVerifier,
+                self.verifier.as_ref(),
                 counter_store,
             )?;
             outcome.monotonic_counter
@@ -605,6 +605,7 @@ fn collect_yaml_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apf_bundle::YamlSigilVerifier;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -614,9 +615,10 @@ mod tests {
         // Empty trust store: these tests populate the cache directly and
         // never go through extract_and_compile, so no verification runs.
         let empty_trust_dir = tempfile::tempdir().expect("create empty trust dir");
-        let verifier =
-            YamlSigilVerifier::new(apf_bundle::TrustStore::load_from_dir(empty_trust_dir.path())
-                .expect("load empty trust store"));
+        let verifier: Arc<dyn BundleVerifier> = Arc::new(YamlSigilVerifier::new(
+            apf_bundle::TrustStore::load_from_dir(empty_trust_dir.path())
+                .expect("load empty trust store"),
+        ));
         HttpBundleSource {
             url_template: String::new(),
             auth_token: String::new(),
