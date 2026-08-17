@@ -64,6 +64,17 @@ The interceptor and middleware are complementary:
 A request must pass BOTH: the destination must be in the sandbox's network
 policy AND the request must be permitted by the Cedar evaluator.
 
+## Supervisor middleware authentication
+
+- Extension caller trust is a separate trust domain from bundle and provenance trust. `--openshell-middleware-auth-trust-file` contains the exact OpenShell issuer, audience, signing `kid`, and Ed25519 public key; never substitute `--trust-root-dir`, `--jwks-url`, or `--document-key-id`.
+- Treat `--openshell-middleware-addr`, the extension trust profile, the TLS certificate, and the TLS key as one authenticated listener configuration. If the listener is enabled, reject missing or partial security settings before bind. If the listener is disabled, reject stray security settings.
+- Open each security path without following a symlink and validate the opened inode before reading. The trust profile and certificate must be regular files with no group or world write bits. The private key must be a regular owner-only file, normally `0600` or `0400`. Reject directories, FIFOs, sockets, devices, symlinks, and other special files.
+- Parse the trust profile, Ed25519 public key, TLS certificate chain, and TLS private key into the server TLS configuration during preflight, before any listener reports ready. Do not fall back to plaintext or expose partial readiness after an open, permission, parse, key, or TLS configuration failure.
+- The verifier accepts one bearer credential, requires the OpenShell extension JOSE type and exact configured issuer/audience/key ID, and inserts the verified caller into request extensions before dispatch.
+- Authorize RPCs by caller kind: `Describe` allows gateways and supervisors, `ValidateConfig` allows gateways only, and `EvaluateHttpRequest` allows supervisors only. Before using request context, require the supervisor token's sandbox ID to match `HttpRequestEvaluation.context.sandbox_id`.
+- In authenticated mode, `MiddlewareManifest.expected_audience` is the configured audience. An empty audience is reserved for explicit insecure mode.
+- `--openshell-middleware-allow-insecure-transport` is a total opt-out from TLS and caller authentication for trusted local development or isolated research. It must be explicit, cannot be combined with authenticated settings, and must emit a startup warning.
+
 ## Adding capabilities
 
 To add a new enforcement capability (e.g. a response inspection hook):

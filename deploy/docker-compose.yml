@@ -63,6 +63,8 @@ services:
       APF_JWKS_URL:                   http://policy-service:19200/.well-known/jwks.json
       APF_OPENSHELL_INTERCEPTOR_ADDR: 0.0.0.0:18202
       APF_OPENSHELL_MIDDLEWARE_ADDR:  0.0.0.0:9099
+      # This loopback-only demo intentionally opts out of extension TLS and caller authentication.
+      APF_OPENSHELL_MIDDLEWARE_ALLOW_INSECURE_TRANSPORT: "true"
       RUST_LOG:                       ${APF_LOG:-apf_policy_gateway=debug,warn}
     volumes:
       - ../examples/dev-keys:/app/keys:ro

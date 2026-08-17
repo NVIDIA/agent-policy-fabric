@@ -19,8 +19,10 @@ use apf_policy_eval::{
 use prost::Message;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use tonic::service::interceptor::InterceptedService;
 use tonic::{Request, Response, Status};
 
+use crate::auth::{AuthenticatedCaller, ExtensionAuthVerifier, ExtensionCallerKind};
 use apf_proto::supervisor_middleware_v1::{
     self as wire, supervisor_middleware_server::SupervisorMiddleware,
     supervisor_middleware_server::SupervisorMiddlewareServer,
@@ -53,31 +55,107 @@ const CODE_REPLACEMENT_BODY_TOO_LARGE: &str = "replacement_body_too_large";
 
 /// Evaluator-backed implementation of OpenShell's supervisor middleware.
 ///
-/// The constructor receives a watch receiver over the current policy evaluator.
-/// Bundle loading, evaluator refresh, authenticated listener startup, and
-/// `network_middlewares` registration belong to the policy gateway and are
-/// intentionally outside this request adapter.
+/// Bundle loading, evaluator refresh, TLS listener startup, and
+/// `network_middlewares` registration belong to the policy gateway.
 #[derive(Clone)]
 pub struct SupervisorMiddlewareService {
     evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+    authentication: AuthenticationMode,
 }
 
+#[derive(Clone)]
+enum AuthenticationMode {
+    Required { expected_audience: String },
+    Insecure,
+}
+
+enum AuthorizationFailure {
+    MissingCaller,
+    CallerNotAllowed,
+}
+
+impl AuthorizationFailure {
+    fn into_status(self) -> Status {
+        match self {
+            Self::MissingCaller => {
+                Status::unauthenticated("OpenShell extension caller is not authenticated")
+            }
+            Self::CallerNotAllowed => Status::permission_denied(
+                "OpenShell extension caller is not authorized for this RPC",
+            ),
+        }
+    }
+}
+
+/// Size-limited supervisor middleware server protected by extension JWT authentication.
+pub type AuthenticatedSupervisorMiddlewareServer = InterceptedService<
+    SupervisorMiddlewareServer<SupervisorMiddlewareService>,
+    ExtensionAuthVerifier,
+>;
+
 impl SupervisorMiddlewareService {
-    /// Creates a middleware service from a watch receiver over the active evaluator.
+    /// Builds a size-limited server that authenticates every OpenShell call before dispatch.
     #[must_use]
-    pub fn new(evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>) -> Self {
-        Self { evaluator }
+    pub fn authenticated_server(
+        evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+        verifier: ExtensionAuthVerifier,
+    ) -> AuthenticatedSupervisorMiddlewareServer {
+        let service = Self {
+            evaluator,
+            authentication: AuthenticationMode::Required {
+                expected_audience: verifier.audience().to_string(),
+            },
+        };
+        InterceptedService::new(service.into_size_limited_server(), verifier)
     }
 
-    /// Wraps the service in a tonic server configured for OpenShell V1 limits.
+    /// Builds a size-limited server with authentication deliberately disabled.
     ///
-    /// The runtime that serves this value must authenticate its local transport;
-    /// this adapter does not establish a listener or a peer-identity boundary.
+    /// This mode is only for a matching OpenShell registration whose
+    /// `allow_insecure_transport` setting explicitly opts out of extension authentication.
     #[must_use]
-    pub fn into_server(self) -> SupervisorMiddlewareServer<Self> {
+    pub fn insecure_server(
+        evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+    ) -> SupervisorMiddlewareServer<Self> {
+        Self {
+            evaluator,
+            authentication: AuthenticationMode::Insecure,
+        }
+        .into_size_limited_server()
+    }
+
+    fn into_size_limited_server(self) -> SupervisorMiddlewareServer<Self> {
         SupervisorMiddlewareServer::new(self)
             .max_decoding_message_size(GRPC_MESSAGE_BYTES)
             .max_encoding_message_size(GRPC_MESSAGE_BYTES)
+    }
+
+    fn authorize<'a, T>(
+        &self,
+        request: &'a Request<T>,
+        allowed: &[ExtensionCallerKind],
+    ) -> Result<Option<&'a AuthenticatedCaller>, AuthorizationFailure> {
+        let AuthenticationMode::Required { .. } = &self.authentication else {
+            return Ok(None);
+        };
+        // The authenticated server inserts this extension before dispatch.
+        // Its absence fails closed if another runtime wraps the service
+        // incorrectly.
+        let caller = request
+            .extensions()
+            .get::<AuthenticatedCaller>()
+            .ok_or(AuthorizationFailure::MissingCaller)?;
+        if !allowed.contains(&caller.kind()) {
+            return Err(AuthorizationFailure::CallerNotAllowed);
+        }
+        Ok(Some(caller))
+    }
+
+    fn expected_audience(&self) -> &str {
+        match &self.authentication {
+            AuthenticationMode::Required { expected_audience } => expected_audience,
+            AuthenticationMode::Insecure => "",
+        }
     }
 }
 
@@ -92,8 +170,16 @@ impl fmt::Debug for SupervisorMiddlewareService {
 impl SupervisorMiddleware for SupervisorMiddlewareService {
     async fn describe(
         &self,
-        _request: Request<()>,
+        request: Request<()>,
     ) -> Result<Response<wire::MiddlewareManifest>, Status> {
+        self.authorize(
+            &request,
+            &[
+                ExtensionCallerKind::Gateway,
+                ExtensionCallerKind::Supervisor,
+            ],
+        )
+        .map_err(AuthorizationFailure::into_status)?;
         Ok(Response::new(wire::MiddlewareManifest {
             name: SERVICE_NAME.to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -105,6 +191,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 // deadline instead of silently shortening it.
                 timeout: String::new(),
             }],
+            expected_audience: self.expected_audience().to_string(),
         }))
     }
 
@@ -112,6 +199,8 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         &self,
         request: Request<wire::ValidateConfigRequest>,
     ) -> Result<Response<wire::ValidateConfigResponse>, Status> {
+        self.authorize(&request, &[ExtensionCallerKind::Gateway])
+            .map_err(AuthorizationFailure::into_status)?;
         let field_count = request
             .into_inner()
             .config
@@ -134,7 +223,24 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         &self,
         request: Request<wire::HttpRequestEvaluation>,
     ) -> Result<Response<wire::HttpRequestResult>, Status> {
+        let authenticated_sandbox = self
+            .authorize(&request, &[ExtensionCallerKind::Supervisor])
+            .map_err(AuthorizationFailure::into_status)?
+            .and_then(AuthenticatedCaller::sandbox_id)
+            .map(str::to_owned);
         let evaluation = request.into_inner();
+        if authenticated_sandbox.is_some_and(|sandbox_id| {
+            evaluation
+                .context
+                .as_ref()
+                .is_none_or(|context| context.sandbox_id != sandbox_id)
+        }) {
+            // A valid supervisor token is scoped to exactly one sandbox. Bind
+            // that identity before parsing request content or invoking policy.
+            return Err(Status::permission_denied(
+                "OpenShell supervisor sandbox does not match the request context",
+            ));
+        }
         let service = self.clone();
         let response = tokio::task::spawn_blocking(move || service.evaluate(&evaluation))
             .await
@@ -683,12 +789,42 @@ mod tests {
 
     fn make_service(evaluator: impl Evaluator + 'static) -> SupervisorMiddlewareService {
         let (_, rx) = tokio::sync::watch::channel(Arc::new(evaluator) as Arc<dyn Evaluator>);
-        SupervisorMiddlewareService::new(rx)
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication: AuthenticationMode::Insecure,
+        }
     }
 
     fn make_service_arc(evaluator: Arc<dyn Evaluator>) -> SupervisorMiddlewareService {
         let (_, rx) = tokio::sync::watch::channel(evaluator);
-        SupervisorMiddlewareService::new(rx)
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication: AuthenticationMode::Insecure,
+        }
+    }
+
+    fn make_authenticated_service_arc(
+        evaluator: Arc<dyn Evaluator>,
+    ) -> SupervisorMiddlewareService {
+        let (_, rx) = tokio::sync::watch::channel(evaluator);
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication: AuthenticationMode::Required {
+                expected_audience: "urn:openshell:extension:middleware:test".to_string(),
+            },
+        }
+    }
+
+    fn authenticated_request<T>(
+        message: T,
+        kind: ExtensionCallerKind,
+        sandbox_id: Option<&str>,
+    ) -> Request<T> {
+        let mut request = Request::new(message);
+        request
+            .extensions_mut()
+            .insert(AuthenticatedCaller::for_test(kind, sandbox_id));
+        request
     }
 
     fn evaluation(body: &[u8]) -> wire::HttpRequestEvaluation {
@@ -725,6 +861,7 @@ mod tests {
 
         assert_eq!(manifest.name, SERVICE_NAME);
         assert_eq!(manifest.service_version, env!("CARGO_PKG_VERSION"));
+        assert!(manifest.expected_audience.is_empty());
         assert_eq!(
             manifest.bindings,
             vec![wire::MiddlewareBinding {
@@ -733,6 +870,104 @@ mod tests {
                 max_body_bytes: MAX_BODY_BYTES as u64,
                 timeout: String::new(),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_methods_enforce_the_caller_matrix_and_advertise_audience() {
+        let evaluator = Arc::new(StubEvaluator::returning(EvalResult::default()));
+        let service = make_authenticated_service_arc(evaluator.clone());
+
+        for (kind, sandbox_id) in [
+            (ExtensionCallerKind::Gateway, None),
+            (ExtensionCallerKind::Supervisor, Some("sandbox-042")),
+        ] {
+            let manifest = service
+                .describe(authenticated_request((), kind, sandbox_id))
+                .await
+                .expect("Describe accepts gateway and supervisor callers")
+                .into_inner();
+            assert_eq!(
+                manifest.expected_audience,
+                "urn:openshell:extension:middleware:test"
+            );
+        }
+
+        let validate = wire::ValidateConfigRequest {
+            config: Some(Struct::default()),
+            middleware_name: SERVICE_NAME.to_string(),
+        };
+        service
+            .validate_config(authenticated_request(
+                validate.clone(),
+                ExtensionCallerKind::Gateway,
+                None,
+            ))
+            .await
+            .expect("ValidateConfig accepts a gateway caller");
+        assert_eq!(
+            service
+                .validate_config(authenticated_request(
+                    validate,
+                    ExtensionCallerKind::Supervisor,
+                    Some("sandbox-042"),
+                ))
+                .await
+                .expect_err("ValidateConfig rejects a supervisor caller")
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+
+        service
+            .evaluate_http_request(authenticated_request(
+                evaluation(b"not-json"),
+                ExtensionCallerKind::Supervisor,
+                Some("sandbox-042"),
+            ))
+            .await
+            .expect("EvaluateHttpRequest accepts its matching supervisor caller");
+        assert_eq!(
+            service
+                .evaluate_http_request(authenticated_request(
+                    evaluation(b"not-json"),
+                    ExtensionCallerKind::Gateway,
+                    None,
+                ))
+                .await
+                .expect_err("EvaluateHttpRequest rejects a gateway caller")
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        assert_eq!(evaluator.inputs().len(), 1);
+
+        assert_eq!(
+            service
+                .describe(Request::new(()))
+                .await
+                .expect_err("authenticated dispatch must reject a missing caller")
+                .code(),
+            tonic::Code::Unauthenticated
+        );
+    }
+
+    #[tokio::test]
+    async fn supervisor_sandbox_mismatch_is_rejected_before_policy_evaluation() {
+        let evaluator = Arc::new(StubEvaluator::returning(EvalResult::default()));
+        let service = make_authenticated_service_arc(evaluator.clone());
+        let error = service
+            .evaluate_http_request(authenticated_request(
+                evaluation(b"not-json"),
+                ExtensionCallerKind::Supervisor,
+                Some("sandbox-other"),
+            ))
+            .await
+            .expect_err("a supervisor token cannot evaluate another sandbox")
+            .code();
+
+        assert_eq!(error, tonic::Code::PermissionDenied);
+        assert!(
+            evaluator.inputs().is_empty(),
+            "identity mismatch must fail before evaluator invocation"
         );
     }
 

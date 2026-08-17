@@ -1,24 +1,20 @@
 # apf-policy-gateway
 
-The APF host-side policy agent. Runs alongside the sandbox runtime to project
-policy at admission and enforce it on every egress request.
+The APF host-side policy agent. Runs alongside the sandbox runtime to project policy at admission and enforce it on every egress request.
 
 It serves two distinct roles:
 
-1. **Sandbox policy projection** — at sandbox admission, fetches the compiled
-   `SandboxPolicy` projection from `apf-policy-service` and injects it into the
-   sandbox as OpenShell annotations, establishing the network egress rules the
-   sandbox will operate under
-2. **Local Policy Decision Point (PDP)** — evaluates every egress request
-   in-process via Cedar, without a cloud round-trip
+1. **Sandbox policy projection** — at sandbox admission, fetches the compiled `SandboxPolicy` projection from `apf-policy-service` and injects it into the sandbox as OpenShell annotations, establishing the network egress rules the sandbox will operate under
+2. **Local Policy Decision Point (PDP)** — evaluates every egress request in-process via Cedar, without a cloud round-trip
 
 ## What it does
 
-```
+```text
 At startup:
   Connect to apf-policy-service → fetch + verify bundle
   Build Cedar evaluator from PolicyRule documents
   Start bundle watch loop (hot-swap evaluator on bundle change)
+  If authenticated middleware is enabled, load caller trust + TLS identity before listening
 
 At sandbox admission (OpenShell control plane):
   GatewayInterceptorServer ← OpenShell gateway calls here
@@ -44,10 +40,64 @@ Per egress request (OpenShell data plane):
 | `--openshell-gateway-url` | `APF_OPENSHELL_GATEWAY_URL` | — | OpenShell gateway URL (outbound — profile reconciliation, sandbox refresh) |
 | `--openshell-interceptor-addr` | `APF_OPENSHELL_INTERCEPTOR_ADDR` | — | Bind address for `GatewayInterceptorServer` (inbound — OpenShell gateway calls here at sandbox admission) |
 | `--openshell-middleware-addr` | `APF_OPENSHELL_MIDDLEWARE_ADDR` | — | Bind address for `SupervisorMiddlewareServer` (inbound — supervisor calls here per request) |
+| `--openshell-middleware-auth-trust-file` | `APF_OPENSHELL_MIDDLEWARE_AUTH_TRUST_FILE` | — | TOML profile for verifying OpenShell extension JWTs |
+| `--openshell-middleware-tls-cert-file` | `APF_OPENSHELL_MIDDLEWARE_TLS_CERT_FILE` | — | PEM certificate chain served by the middleware HTTPS listener |
+| `--openshell-middleware-tls-key-file` | `APF_OPENSHELL_MIDDLEWARE_TLS_KEY_FILE` | — | PEM private key for the middleware HTTPS listener |
+| `--openshell-middleware-allow-insecure-transport` | `APF_OPENSHELL_MIDDLEWARE_ALLOW_INSECURE_TRANSPORT` | `false` | Explicitly disable middleware TLS and caller authentication for local research |
+
+## Supervisor middleware authentication
+
+Production middleware registrations use HTTPS plus an OpenShell extension bearer JWT. Configure the listener address, extension trust profile, TLS certificate chain, and TLS private key together. The gateway rejects partial combinations before it opens the listener. Supplying security settings without `--openshell-middleware-addr` also fails startup.
+
+The TLS certificate must be valid for the hostname in the OpenShell middleware endpoint and chain to a CA trusted by OpenShell. The extension trust profile authenticates inbound OpenShell callers; it is separate from APF bundle trust (`--trust-root-dir`) and policy-document provenance trust (`--jwks-url` and `--document-key-id`). Those APF trust settings cannot replace the extension trust profile.
+
+The trust profile is strict TOML and rejects unknown fields:
+
+```toml
+issuer = "openshell-gateway:<gateway-id>"
+audience = "urn:openshell:extension:middleware:apf-content-policy"
+kid = "<OpenShell signing key id>"
+public_key_pem = """
+-----BEGIN PUBLIC KEY-----
+<OpenShell Ed25519 public key>
+-----END PUBLIC KEY-----
+"""
+max_lifetime_secs = 3600
+leeway_secs = 60
+```
+
+For an OpenShell middleware registration named `apf-content-policy`, OpenShell resolves an omitted registration audience to `urn:openshell:extension:middleware:apf-content-policy`. Use that exact value in this trust profile. If the OpenShell registration sets an explicit `audience`, copy that exact value here instead. `issuer` and `kid` must likewise match the OpenShell gateway identity and signing authority. `max_lifetime_secs` must be between 1 and 3600; `leeway_secs` must be no greater than 300. The verifier accepts exactly one `authorization: Bearer <JWT>` value and requires `alg=EdDSA`, `typ=openshell-ext+jwt`, the configured `kid`, exact scalar issuer and audience claims, a nonempty `jti`, and a bounded positive lifetime.
+
+### Checked security files
+
+The gateway opens the trust profile, TLS certificate, and TLS private key without following a symlink, then checks the metadata and reads bytes from that same opened inode. The trust profile and certificate must be regular files with no group or world write bits. The private key must be a regular owner-only file, normally mode `0600` or `0400`; any group or world permission bit rejects it. Directories, FIFOs, sockets, devices, symlinks, and other non-regular inputs fail startup.
+
+The authenticated-mode preflight parses the trust profile, Ed25519 public key, TLS certificate chain, and TLS private key into the server configuration before any listener is allowed to report ready. A missing file, unsafe mode, invalid trust value, malformed certificate, or malformed key therefore stops the process instead of producing a partially ready service or falling back to plaintext.
+
+For files provisioned directly on a Unix host, set compatible modes with fish:
+
+```fish
+chmod 0644 /etc/apf/openshell-extension-auth.toml /etc/apf/tls/middleware-cert.crt
+chmod 0600 /etc/apf/tls/middleware-key.pk8
+```
+
+Start an authenticated listener with fish-compatible flags:
+
+```fish
+apf-policy-gateway \
+  --openshell-middleware-addr 0.0.0.0:9099 \
+  --openshell-middleware-auth-trust-file /etc/apf/openshell-extension-auth.toml \
+  --openshell-middleware-tls-cert-file /etc/apf/tls/middleware-cert.crt \
+  --openshell-middleware-tls-key-file /etc/apf/tls/middleware-key.pk8
+```
+
+Authenticated `Describe` accepts a gateway or supervisor caller and advertises the configured audience in `MiddlewareManifest.expected_audience`. `ValidateConfig` accepts only a gateway caller. `EvaluateHttpRequest` accepts only a supervisor caller, and the authenticated JWT `sandbox_id` must equal `request.context.sandbox_id` before APF evaluates the request.
+
+For trusted local development or isolated research only, pass `--openshell-middleware-allow-insecure-transport` with the listener address and omit all three authenticated-mode files. The matching OpenShell registration must set `allow_insecure_transport = true`. This mode serves plaintext gRPC, does not require or verify an extension credential, advertises an empty `expected_audience`, and logs a startup warning. It cannot be combined with any authenticated-mode setting.
 
 ## Two enforcement seams
 
-```
+```text
 apf-policy-service
       │
       │ (1) GetDocument → compiled SandboxPolicy bytes
@@ -63,9 +113,7 @@ apf-policy-gateway ──── hosts ───▶ SupervisorMiddlewareServer
                                    (OpenShell data plane: per-request)
 ```
 
-The interceptor establishes **what the sandbox can reach** (network policy).
-The middleware decides **whether each specific request is permitted** given the
-active policy rules and request content.
+The interceptor establishes **what the sandbox can reach** (network policy). The middleware decides **whether each specific request is permitted** given the active policy rules and request content.
 
 ## Architecture
 

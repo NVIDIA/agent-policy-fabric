@@ -23,13 +23,13 @@ apf-openshell-middleware    = { path = "../apf-openshell-middleware" }
 arc-swap           = "1"
 prost              = "0.13"
 tokio              = { version = "1", features = ["full"] }
-tonic              = { version = "0.12", features = ["channel"] }
+tonic              = { version = "0.12", features = ["channel", "tls"] }
 anyhow             = "1"
 clap               = { version = "4", features = ["derive", "env"] }
 thiserror          = "2"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nix                = { version = "0.29", features = ["socket", "user"] }
+nix                = { version = "0.29", features = ["fs", "socket", "user"] }
 tokio-stream       = "0.1"
 jsonwebtoken       = "9"
 base64             = "0.22"
@@ -37,3 +37,6 @@ ed25519-dalek      = { version = "2", features = ["rand_core"] }
 reqwest            = { version = "0.12", features = ["json"] }
 serde              = { version = "1", features = ["derive"] }
 serde_json         = "1"
+
+[dev-dependencies]
+tempfile = "3"

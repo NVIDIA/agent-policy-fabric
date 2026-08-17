@@ -56,19 +56,21 @@ trap 'kill $(jobs -p) 2>/dev/null; rm -rf $SOCK_DIR' EXIT
 # Wait for policy-service
 until curl -sf http://127.0.0.1:19200/healthz >/dev/null 2>&1; do sleep 0.2; done
 
+# The native demo is loopback-only and deliberately uses OpenShell's local research opt-out.
 ./target/release/apf-policy-gateway \
-  --gateway-socket "${SOCK_DIR}/policy-gateway.sock" \
+  --socket "${SOCK_DIR}/policy-gateway.sock" \
   --policy-service-socket "${SOCK_DIR}/policy-service.sock" \
   --trust-root-dir examples/dev-keys \
   --counter-store "${SOCK_DIR}/gw-counter" \
   --document-key-id apf-dev \
   --jwks-url "http://127.0.0.1:19200/.well-known/jwks.json" \
   --openshell-interceptor-addr 127.0.0.1:18202 \
-  --openshell-middleware-addr 127.0.0.1:9099 &
+  --openshell-middleware-addr 127.0.0.1:9099 \
+  --openshell-middleware-allow-insecure-transport &
 
 echo "APF dev stack running. Ctrl-C to stop."
 echo "  policy-service:  http://127.0.0.1:19200"
 echo "  interceptor gRPC: 127.0.0.1:18202"
-echo "  middleware gRPC:  127.0.0.1:9099"
+echo "  middleware gRPC:  127.0.0.1:9099 (INSECURE local research mode)"
 wait
 """
