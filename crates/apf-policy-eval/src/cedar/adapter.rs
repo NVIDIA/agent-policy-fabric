@@ -87,7 +87,13 @@ fn context_json(input: &EvalInput) -> Value {
     // has no string-length or numeric-coercion builtins.
     let mut args_map = Map::new();
     for (name, value) in &input.args {
-        if let Value::String(s) = value {
+        // Cedar's context JSON has no null; a null anywhere in the value
+        // makes Context::from_json_value fail and the evaluation deny.
+        // Treat null as absent instead.
+        let Some(value) = strip_nulls(value) else {
+            continue;
+        };
+        if let Value::String(s) = &value {
             args_map.insert(
                 format!("{name}_len"),
                 Value::from(i64::try_from(s.chars().count()).unwrap_or(i64::MAX)),
@@ -96,11 +102,26 @@ fn context_json(input: &EvalInput) -> Value {
                 args_map.insert(format!("{name}_num"), Value::from(n));
             }
         }
-        args_map.insert(name.clone(), value.clone());
+        args_map.insert(name.clone(), value);
     }
     ctx.insert("args".to_string(), Value::Object(args_map));
 
     Value::Object(ctx)
+}
+
+/// Remove JSON nulls from a value: `None` for null itself, null-valued keys
+/// dropped from objects, null elements dropped from arrays, recursively.
+fn strip_nulls(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::Object(map) => Some(Value::Object(
+            map.iter()
+                .filter_map(|(k, v)| strip_nulls(v).map(|v| (k.clone(), v)))
+                .collect(),
+        )),
+        Value::Array(items) => Some(Value::Array(items.iter().filter_map(strip_nulls).collect())),
+        other => Some(other.clone()),
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +215,27 @@ mod tests {
             Value::String("/v1/messages".to_string())
         );
         assert_eq!(ctx["target_scheme"], Value::String("https".to_string()));
+    }
+
+    #[test]
+    fn null_args_are_treated_as_absent() {
+        let mut args = serde_json::Map::new();
+        args.insert("channel".to_string(), Value::String("C123".to_string()));
+        args.insert("thread_ts".to_string(), Value::Null);
+        args.insert(
+            "blocks".to_string(),
+            serde_json::json!([{"type": "section", "extra": null}, null]),
+        );
+        let input = EvalInput::for_tool_call(
+            Some("slack".to_string()),
+            Some("chat_post".to_string()),
+            "user@corp.com".to_string(),
+            args,
+        );
+        let (_, _, _, ctx) = to_cedar(&input);
+        let ctx_args = ctx["args"].as_object().expect("args record");
+        assert!(ctx_args.get("thread_ts").is_none());
+        assert_eq!(ctx_args["blocks"], serde_json::json!([{"type": "section"}]));
+        assert_eq!(ctx_args["channel"], Value::String("C123".to_string()));
     }
 }
