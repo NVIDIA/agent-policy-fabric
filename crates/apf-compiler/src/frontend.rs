@@ -1275,10 +1275,13 @@ pub fn build_canonical_policy(
 ) -> Result<crate::backend::CanonicalPolicy, FrontendError> {
     use std::collections::BTreeMap;
     let mut sandbox_policies = BTreeMap::new();
-    let sandbox_middleware = BTreeMap::new();
+    let mut sandbox_middleware = BTreeMap::new();
     for (name, bytes) in &members.sandbox_policies {
         let policy = parse(bytes)?;
-        // sandbox_middleware is carried out-of-band (BSR field not yet available)
+        let middlewares = parse_network_middlewares(bytes)?;
+        if !middlewares.is_empty() {
+            sandbox_middleware.insert(name.clone(), middlewares);
+        }
         sandbox_policies.insert(name.clone(), policy);
     }
     let mut providers = BTreeMap::new();
