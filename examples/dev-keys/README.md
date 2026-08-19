@@ -11,6 +11,7 @@ and `--key-id` when signing bundles).
 |---|---|---|
 | `apf-dev.seed` | **yes** | Ed25519 signing seed (`ed25519:<base64>` format). Named `.seed` not `.key` so it is not caught by push rules matching `\.(pem\|key)$`. |
 | `apf-dev.pub` | yes | Matching verifying key loaded by the daemon as trust root `apf-dev`. |
+| `http-bearer-token.dev` | yes | Fixed dev-only bearer token for `apf-policy-service`'s optional HTTP surface. Unrelated to bundle signing — the service requires *some* token file whenever `--http-addr` is set, this is that file for the dev stack. |
 
 ## Why the private key is committed
 
