@@ -84,11 +84,7 @@ pub fn router(state: HttpState) -> Router {
     public.merge(protected)
 }
 
-async fn require_bearer_token(
-    State(s): State<HttpState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn require_bearer_token(State(s): State<HttpState>, req: Request, next: Next) -> Response {
     let Some(expected) = s.bearer_token.as_deref() else {
         // Unreachable: this layer is only attached when bearer_token is Some.
         return (StatusCode::UNAUTHORIZED, "bearer auth not configured").into_response();
@@ -113,7 +109,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 // --- /health ---

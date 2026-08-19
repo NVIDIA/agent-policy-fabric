@@ -461,8 +461,8 @@ impl HttpBundleSource {
 
         // Verify signature + counter before compiling, so an unsigned or
         // rolled-back artifact never reaches the compiler or the cache.
-        let bundle_bytes = std::fs::read(&manifest_path)
-            .map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
+        let bundle_bytes =
+            std::fs::read(&manifest_path).map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
         let counter = {
             let counter_store_guard = self
                 .counter_store

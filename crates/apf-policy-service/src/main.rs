@@ -191,10 +191,7 @@ fn resolve_http_bearer_token(args: &ServeArgs) -> anyhow::Result<Option<Arc<str>
         .map_err(|e| anyhow::anyhow!("read --http-bearer-token-file {}: {e}", path.display()))?;
     let token = raw.trim();
     if token.is_empty() {
-        anyhow::bail!(
-            "--http-bearer-token-file {} is empty",
-            path.display()
-        );
+        anyhow::bail!("--http-bearer-token-file {} is empty", path.display());
     }
     Ok(Some(Arc::from(token)))
 }

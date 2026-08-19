@@ -34,7 +34,9 @@ pub fn refresh(
     }
     // Use the already-parsed Bundle from VerifyOutcome — avoids re-parsing the
     // raw artifact bytes which contain the yaml-sigil signature carrier.
-    let bundle = outcome.bundle.expect("outcome.ok guarantees bundle is present");
+    let bundle = outcome
+        .bundle
+        .expect("outcome.ok guarantees bundle is present");
     let members = bundle
         .load_members(path.parent().unwrap_or(Path::new(".")))
         .map_err(|e| anyhow::anyhow!("bundle member load failed: {e}"))?;
