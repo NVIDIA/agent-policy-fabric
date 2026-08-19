@@ -143,10 +143,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "apf-openshell-auth"
+version = "0.1.0"
+dependencies = [
+ "jsonwebtoken",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml 0.8.23",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
 name = "apf-openshell-interceptor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apf-openshell-auth",
  "apf-policy-client",
  "apf-proto",
  "apf-types",
@@ -173,12 +190,11 @@ name = "apf-openshell-middleware"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apf-openshell-auth",
  "apf-policy-eval",
  "apf-proto",
  "base64 0.22.1",
  "hex",
- "jsonwebtoken",
- "nix",
  "prost",
  "serde",
  "serde_json",
@@ -187,7 +203,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "toml 0.8.23",
  "tonic",
  "tracing",
 ]
@@ -240,6 +255,7 @@ dependencies = [
  "anyhow",
  "apf-bundle",
  "apf-compiler",
+ "apf-openshell-auth",
  "apf-openshell-interceptor",
  "apf-openshell-middleware",
  "apf-policy-client",

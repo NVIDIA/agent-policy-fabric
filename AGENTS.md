@@ -56,6 +56,9 @@ Dependency direction: `contracts/ → crates/<lib> → crates/<service> → crat
 **Forbidden — dag-guard fails the pull request:**
 - Service crate path-depending on another service crate
 - Library crate path-depending on any service or adapter crate
+- Adapter crate path-depending on a *non-leaf* adapter crate — a leaf adapter
+  (no adapter deps of its own, e.g. `apf-openshell-auth`) may be shared by
+  other adapters; two business-logic adapters may not depend on each other directly
 - `openshell_*` imports in library crate source
 - `yaml_sigil_*` imports outside `apf-policy-service/src/signing/yaml_sigil_backend.rs`
 

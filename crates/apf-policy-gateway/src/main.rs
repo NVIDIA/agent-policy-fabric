@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use apf_compiler::frontend;
+use apf_openshell_auth::ExtensionAuthVerifier;
 use apf_proto::PolicySet;
 use apf_proto::pdp_v1alpha1::evaluation_service_server::EvaluationServiceServer;
 use clap::{Args, Parser};
@@ -41,8 +42,8 @@ use apf_policy_gateway::trust::{
 };
 use apf_types::events::{BundleEvent, bundle_event_channel};
 
-const MAX_MIDDLEWARE_TLS_CERT_BYTES: usize = 1024 * 1024;
-const MAX_MIDDLEWARE_TLS_KEY_BYTES: usize = 64 * 1024;
+const MAX_TLS_CERT_BYTES: usize = 1024 * 1024;
+const MAX_TLS_KEY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Args, Default)]
 struct MiddlewareCli {
@@ -71,21 +72,81 @@ struct MiddlewareCli {
     openshell_middleware_allow_insecure_transport: bool,
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
-enum MiddlewareConfigError {
-    #[error("middleware security settings require --openshell-middleware-addr")]
-    StraySecurityConfig,
-    #[error(
-        "--openshell-middleware-allow-insecure-transport conflicts with TLS or authentication settings"
-    )]
-    ConflictingSecurityModes,
-    #[error(
-        "middleware listener requires the trust file, TLS certificate, and TLS key together, or explicit insecure transport"
-    )]
-    AuthenticationRequired,
+impl MiddlewareCli {
+    fn resolve(&self) -> Result<Option<SecuredListenerLaunchConfig>, SecuredListenerConfigError> {
+        resolve_secured_listener(SecuredListenerInputs {
+            surface: "middleware",
+            addr_flag: "openshell-middleware-addr",
+            insecure_flag: "openshell-middleware-allow-insecure-transport",
+            addr: &self.openshell_middleware_addr,
+            trust_file: &self.openshell_middleware_auth_trust_file,
+            cert_file: &self.openshell_middleware_tls_cert_file,
+            key_file: &self.openshell_middleware_tls_key_file,
+            allow_insecure_transport: self.openshell_middleware_allow_insecure_transport,
+        })
+    }
 }
 
-enum MiddlewareLaunchConfig {
+#[derive(Debug, Args, Default)]
+struct InterceptorCli {
+    /// Address to bind the GatewayInterceptor gRPC surface on
+    /// (e.g. `0.0.0.0:18099`). The OpenShell gateway connects here to call
+    /// Describe/SnapshotProviderProfiles/Evaluate at sandbox admission time.
+    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_ADDR")]
+    openshell_interceptor_addr: Option<String>,
+
+    /// TOML trust profile used to authenticate OpenShell extension JWTs.
+    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_AUTH_TRUST_FILE")]
+    openshell_interceptor_auth_trust_file: Option<PathBuf>,
+
+    /// PEM certificate chain served by the authenticated interceptor listener.
+    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_TLS_CERT_FILE")]
+    openshell_interceptor_tls_cert_file: Option<PathBuf>,
+
+    /// PEM private key served by the authenticated interceptor listener.
+    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_TLS_KEY_FILE")]
+    openshell_interceptor_tls_key_file: Option<PathBuf>,
+
+    /// Explicitly disable interceptor TLS and caller authentication.
+    #[arg(
+        long,
+        env = "APF_OPENSHELL_INTERCEPTOR_ALLOW_INSECURE_TRANSPORT",
+        default_value_t = false
+    )]
+    openshell_interceptor_allow_insecure_transport: bool,
+}
+
+impl InterceptorCli {
+    fn resolve(&self) -> Result<Option<SecuredListenerLaunchConfig>, SecuredListenerConfigError> {
+        resolve_secured_listener(SecuredListenerInputs {
+            surface: "interceptor",
+            addr_flag: "openshell-interceptor-addr",
+            insecure_flag: "openshell-interceptor-allow-insecure-transport",
+            addr: &self.openshell_interceptor_addr,
+            trust_file: &self.openshell_interceptor_auth_trust_file,
+            cert_file: &self.openshell_interceptor_tls_cert_file,
+            key_file: &self.openshell_interceptor_tls_key_file,
+            allow_insecure_transport: self.openshell_interceptor_allow_insecure_transport,
+        })
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+enum SecuredListenerConfigError {
+    #[error("{surface} security settings require --{addr_flag}")]
+    StraySecurityConfig {
+        surface: &'static str,
+        addr_flag: &'static str,
+    },
+    #[error("--{insecure_flag} conflicts with TLS or authentication settings")]
+    ConflictingSecurityModes { insecure_flag: &'static str },
+    #[error(
+        "{surface} listener requires the trust file, TLS certificate, and TLS key together, or explicit insecure transport"
+    )]
+    AuthenticationRequired { surface: &'static str },
+}
+
+enum SecuredListenerLaunchConfig {
     Authenticated {
         addr: String,
         trust_file: PathBuf,
@@ -97,10 +158,10 @@ enum MiddlewareLaunchConfig {
     },
 }
 
-enum PreparedMiddlewareServer {
+enum PreparedSecuredServer {
     Authenticated {
         addr: SocketAddr,
-        verifier: apf_openshell_middleware::ExtensionAuthVerifier,
+        verifier: ExtensionAuthVerifier,
         server: Server,
     },
     Insecure {
@@ -114,48 +175,70 @@ enum StartupFilePolicy {
     PrivateKey,
 }
 
-impl MiddlewareCli {
-    fn resolve(&self) -> Result<Option<MiddlewareLaunchConfig>, MiddlewareConfigError> {
-        let configured_inputs = [
-            self.openshell_middleware_auth_trust_file.is_some(),
-            self.openshell_middleware_tls_cert_file.is_some(),
-            self.openshell_middleware_tls_key_file.is_some(),
-        ]
-        .into_iter()
-        .filter(|configured| *configured)
-        .count();
+/// The raw per-surface CLI inputs `resolve_secured_listener` validates. Both
+/// `MiddlewareCli` and `InterceptorCli` package their own fields into this
+/// shape rather than duplicating the stray-config/conflicting-modes/
+/// auth-required validation state machine — see `AGENTS.md`'s "extract on
+/// second consumer" rule; that logic is security-relevant and must not drift
+/// between the two surfaces.
+struct SecuredListenerInputs<'a> {
+    surface: &'static str,
+    addr_flag: &'static str,
+    insecure_flag: &'static str,
+    addr: &'a Option<String>,
+    trust_file: &'a Option<PathBuf>,
+    cert_file: &'a Option<PathBuf>,
+    key_file: &'a Option<PathBuf>,
+    allow_insecure_transport: bool,
+}
 
-        let Some(addr) = &self.openshell_middleware_addr else {
-            if configured_inputs > 0 || self.openshell_middleware_allow_insecure_transport {
-                return Err(MiddlewareConfigError::StraySecurityConfig);
-            }
-            return Ok(None);
-        };
+fn resolve_secured_listener(
+    inputs: SecuredListenerInputs<'_>,
+) -> Result<Option<SecuredListenerLaunchConfig>, SecuredListenerConfigError> {
+    let configured_inputs = [
+        inputs.trust_file.is_some(),
+        inputs.cert_file.is_some(),
+        inputs.key_file.is_some(),
+    ]
+    .into_iter()
+    .filter(|configured| *configured)
+    .count();
 
-        if self.openshell_middleware_allow_insecure_transport {
-            if configured_inputs > 0 {
-                return Err(MiddlewareConfigError::ConflictingSecurityModes);
-            }
-            return Ok(Some(MiddlewareLaunchConfig::Insecure {
-                addr: addr.clone(),
-            }));
+    let Some(addr) = inputs.addr else {
+        if configured_inputs > 0 || inputs.allow_insecure_transport {
+            return Err(SecuredListenerConfigError::StraySecurityConfig {
+                surface: inputs.surface,
+                addr_flag: inputs.addr_flag,
+            });
         }
+        return Ok(None);
+    };
 
-        let (Some(trust_file), Some(cert_file), Some(key_file)) = (
-            &self.openshell_middleware_auth_trust_file,
-            &self.openshell_middleware_tls_cert_file,
-            &self.openshell_middleware_tls_key_file,
-        ) else {
-            return Err(MiddlewareConfigError::AuthenticationRequired);
-        };
-
-        Ok(Some(MiddlewareLaunchConfig::Authenticated {
+    if inputs.allow_insecure_transport {
+        if configured_inputs > 0 {
+            return Err(SecuredListenerConfigError::ConflictingSecurityModes {
+                insecure_flag: inputs.insecure_flag,
+            });
+        }
+        return Ok(Some(SecuredListenerLaunchConfig::Insecure {
             addr: addr.clone(),
-            trust_file: trust_file.clone(),
-            cert_file: cert_file.clone(),
-            key_file: key_file.clone(),
-        }))
+        }));
     }
+
+    let (Some(trust_file), Some(cert_file), Some(key_file)) =
+        (inputs.trust_file, inputs.cert_file, inputs.key_file)
+    else {
+        return Err(SecuredListenerConfigError::AuthenticationRequired {
+            surface: inputs.surface,
+        });
+    };
+
+    Ok(Some(SecuredListenerLaunchConfig::Authenticated {
+        addr: addr.clone(),
+        trust_file: trust_file.clone(),
+        cert_file: cert_file.clone(),
+        key_file: key_file.clone(),
+    }))
 }
 
 #[derive(Debug, Parser)]
@@ -215,11 +298,8 @@ struct Cli {
     #[arg(long, env = "APF_OPENSHELL_GATEWAY_URL")]
     openshell_gateway_url: Option<String>,
 
-    /// Address to bind the GatewayInterceptor gRPC surface on
-    /// (e.g. `0.0.0.0:18099`). The OpenShell gateway connects here to call
-    /// Describe/Evaluate at sandbox admission time.
-    #[arg(long, env = "APF_OPENSHELL_INTERCEPTOR_ADDR")]
-    openshell_interceptor_addr: Option<String>,
+    #[command(flatten)]
+    openshell_interceptor: InterceptorCli,
 
     #[command(flatten)]
     openshell_middleware: MiddlewareCli,
@@ -332,7 +412,7 @@ fn policy_annotator_to_doc(
 async fn read_bounded_regular_file(
     path: &Path,
     max_bytes: usize,
-    description: &'static str,
+    description: &str,
     policy: StartupFilePolicy,
 ) -> anyhow::Result<Vec<u8>> {
     let file = open_checked_startup_file(path, description, policy).await?;
@@ -355,7 +435,7 @@ async fn read_bounded_regular_file(
 #[cfg(unix)]
 async fn open_checked_startup_file(
     path: &Path,
-    description: &'static str,
+    description: &str,
     policy: StartupFilePolicy,
 ) -> anyhow::Result<tokio::fs::File> {
     use std::os::unix::fs::MetadataExt as _;
@@ -389,7 +469,7 @@ async fn open_checked_startup_file(
 #[cfg(unix)]
 fn validate_startup_file_metadata(
     metadata: &std::fs::Metadata,
-    description: &'static str,
+    description: &str,
     policy: StartupFilePolicy,
 ) -> anyhow::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
@@ -416,7 +496,7 @@ fn validate_startup_file_metadata(
 #[cfg(not(unix))]
 async fn open_checked_startup_file(
     path: &Path,
-    description: &'static str,
+    description: &str,
     _policy: StartupFilePolicy,
 ) -> anyhow::Result<tokio::fs::File> {
     let inspected = tokio::fs::symlink_metadata(path)
@@ -439,43 +519,51 @@ async fn open_checked_startup_file(
     Ok(file)
 }
 
-async fn prepare_middleware_server(
-    cli: &MiddlewareCli,
-) -> anyhow::Result<Option<PreparedMiddlewareServer>> {
-    let Some(config) = cli.resolve()? else {
+/// Loads the trust profile and TLS identity for one OpenShell extension-auth
+/// surface, or resolves an explicit insecure listener. `label` (e.g.
+/// `"OpenShell middleware"`) only shapes diagnostic text — both surfaces share
+/// identical trust-file and TLS-loading behavior.
+async fn prepare_secured_server(
+    resolved: Option<SecuredListenerLaunchConfig>,
+    addr_flag: &str,
+    label: &str,
+) -> anyhow::Result<Option<PreparedSecuredServer>> {
+    let Some(config) = resolved else {
         return Ok(None);
     };
 
     match config {
-        MiddlewareLaunchConfig::Insecure { addr } => Ok(Some(PreparedMiddlewareServer::Insecure {
-            addr: addr.parse().context("parse --openshell-middleware-addr")?,
-        })),
-        MiddlewareLaunchConfig::Authenticated {
+        SecuredListenerLaunchConfig::Insecure { addr } => {
+            Ok(Some(PreparedSecuredServer::Insecure {
+                addr: addr
+                    .parse()
+                    .with_context(|| format!("parse --{addr_flag}"))?,
+            }))
+        }
+        SecuredListenerLaunchConfig::Authenticated {
             addr,
             trust_file,
             cert_file,
             key_file,
         } => {
-            let verifier =
-                apf_openshell_middleware::ExtensionAuthVerifier::from_trust_file(&trust_file)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "load OpenShell middleware trust profile at {}",
-                            trust_file.display()
-                        )
-                    })?;
+            let verifier = ExtensionAuthVerifier::from_trust_file(&trust_file)
+                .await
+                .with_context(|| {
+                    format!("load {label} trust profile at {}", trust_file.display())
+                })?;
+            let cert_description = format!("{label} TLS certificate");
+            let key_description = format!("{label} TLS private key");
             let (certificate, private_key) = tokio::try_join!(
                 read_bounded_regular_file(
                     &cert_file,
-                    MAX_MIDDLEWARE_TLS_CERT_BYTES,
-                    "middleware TLS certificate",
+                    MAX_TLS_CERT_BYTES,
+                    &cert_description,
                     StartupFilePolicy::Trust,
                 ),
                 read_bounded_regular_file(
                     &key_file,
-                    MAX_MIDDLEWARE_TLS_KEY_BYTES,
-                    "middleware TLS private key",
+                    MAX_TLS_KEY_BYTES,
+                    &key_description,
                     StartupFilePolicy::PrivateKey,
                 ),
             )?;
@@ -485,9 +573,11 @@ async fn prepare_middleware_server(
             // work before any APF listener can bind or report readiness.
             let server = Server::builder()
                 .tls_config(tls)
-                .context("configure OpenShell middleware server TLS")?;
-            Ok(Some(PreparedMiddlewareServer::Authenticated {
-                addr: addr.parse().context("parse --openshell-middleware-addr")?,
+                .with_context(|| format!("configure {label} server TLS"))?;
+            Ok(Some(PreparedSecuredServer::Authenticated {
+                addr: addr
+                    .parse()
+                    .with_context(|| format!("parse --{addr_flag}"))?,
                 verifier,
                 server,
             }))
@@ -504,7 +594,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Cli::parse();
-    let middleware_server = prepare_middleware_server(&args.openshell_middleware).await?;
+    let interceptor_server = prepare_secured_server(
+        args.openshell_interceptor.resolve()?,
+        "openshell-interceptor-addr",
+        "OpenShell interceptor",
+    )
+    .await?;
+    let middleware_server = prepare_secured_server(
+        args.openshell_middleware.resolve()?,
+        "openshell-middleware-addr",
+        "OpenShell middleware",
+    )
+    .await?;
 
     let mut policy_client = PolicyClientHandle::connect(&args.policy_service_socket)
         .await
@@ -669,11 +770,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // OpenShell gateway interceptor — enabled when --openshell-interceptor-addr is set.
-    if let Some(interceptor_bind) = args.openshell_interceptor_addr.clone() {
+    // The trust/TLS wrapper owns authentication dispatch and message limits;
+    // this runtime owns only listener transport and explicit mode selection.
+    if let Some(prepared) = interceptor_server {
         use apf_openshell_interceptor::server::{GatewayInterceptorService, InterceptorConfig};
-        use apf_proto::gateway_interceptor_v1::gateway_interceptor_server::GatewayInterceptorServer;
 
-        let verifying_key = verifying_key.ok_or_else(|| {
+        let verifying_key = verifying_key.clone().ok_or_else(|| {
             anyhow::anyhow!("--jwks-url required when --openshell-interceptor-addr is set")
         })?;
 
@@ -683,26 +785,50 @@ async fn main() -> anyhow::Result<()> {
             signing_key_id: args.document_key_id.clone(),
             verifying_key: Arc::clone(&verifying_key),
         };
-        let interceptor_svc = GatewayInterceptorService {
-            policy_service: policy_client.clone(),
-            config,
-        };
 
-        let bind_addr = interceptor_bind
-            .parse()
-            .context("parse --openshell-interceptor-addr")?;
-        info!(
-            bind = %interceptor_bind,
-            gateway_url = ?args.openshell_gateway_url,
-            "OpenShell gateway interceptor enabled"
-        );
-        tasks.spawn(async move {
-            tonic::transport::Server::builder()
-                .add_service(GatewayInterceptorServer::new(interceptor_svc))
-                .serve(bind_addr)
-                .await
-                .map_err(|e| anyhow::anyhow!("interceptor server error: {e}"))
-        });
+        match prepared {
+            PreparedSecuredServer::Authenticated {
+                addr,
+                verifier,
+                mut server,
+            } => {
+                let audience = verifier.audience().to_string();
+                let policy_service = policy_client.clone();
+                let service = GatewayInterceptorService::authenticated_server(
+                    policy_service,
+                    config,
+                    verifier,
+                );
+                info!(
+                    %addr,
+                    %audience,
+                    gateway_url = ?args.openshell_gateway_url,
+                    "authenticated OpenShell gateway interceptor enabled"
+                );
+                tasks.spawn(async move {
+                    server
+                        .add_service(service)
+                        .serve(addr)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("interceptor server error: {e}"))
+                });
+            }
+            PreparedSecuredServer::Insecure { addr } => {
+                warn!(
+                    %addr,
+                    "INSECURE OpenShell gateway interceptor enabled without TLS or caller authentication"
+                );
+                let policy_service = policy_client.clone();
+                let service = GatewayInterceptorService::insecure_server(policy_service, config);
+                tasks.spawn(async move {
+                    tonic::transport::Server::builder()
+                        .add_service(service)
+                        .serve(addr)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("interceptor server error: {e}"))
+                });
+            }
+        }
     }
 
     // The middleware wrapper owns authentication dispatch and message limits;
@@ -711,7 +837,7 @@ async fn main() -> anyhow::Result<()> {
         use apf_openshell_middleware::SupervisorMiddlewareService;
 
         match config {
-            PreparedMiddlewareServer::Authenticated {
+            PreparedSecuredServer::Authenticated {
                 addr,
                 verifier,
                 mut server,
@@ -728,7 +854,7 @@ async fn main() -> anyhow::Result<()> {
                         .map_err(|e| anyhow::anyhow!("middleware server error: {e}"))
                 });
             }
-            PreparedMiddlewareServer::Insecure { addr } => {
+            PreparedSecuredServer::Insecure { addr } => {
                 warn!(
                     %addr,
                     "INSECURE OpenShell supervisor middleware enabled without TLS or caller authentication"
@@ -771,46 +897,81 @@ mod tests {
         }
     }
 
-    #[test]
-    fn middleware_security_group_requires_one_complete_non_conflicting_mode() {
+    fn interceptor_cli(listener: bool, security_mask: u8, allow_insecure: bool) -> InterceptorCli {
+        InterceptorCli {
+            openshell_interceptor_addr: listener.then(|| "127.0.0.1:18099".to_string()),
+            openshell_interceptor_auth_trust_file: (security_mask & 0b001 != 0)
+                .then(|| PathBuf::from("trust.toml")),
+            openshell_interceptor_tls_cert_file: (security_mask & 0b010 != 0)
+                .then(|| PathBuf::from("tls-cert.pem.fixture")),
+            openshell_interceptor_tls_key_file: (security_mask & 0b100 != 0)
+                .then(|| PathBuf::from("tls-key.key.fixture")),
+            openshell_interceptor_allow_insecure_transport: allow_insecure,
+        }
+    }
+
+    /// Shared assertions for the stray-config/conflicting-modes/auth-required
+    /// state machine, run once per surface via `resolve` so both `MiddlewareCli`
+    /// and `InterceptorCli` are checked against identical behavior.
+    fn assert_secured_listener_security_group(
+        resolve: impl Fn(
+            bool,
+            u8,
+            bool,
+        )
+            -> Result<Option<SecuredListenerLaunchConfig>, SecuredListenerConfigError>,
+    ) {
         assert!(
-            middleware_cli(false, 0, false)
-                .resolve()
+            resolve(false, 0, false)
                 .expect("an absent listener needs no security configuration")
                 .is_none()
         );
 
         for security_mask in 1..=0b111 {
             assert!(matches!(
-                middleware_cli(false, security_mask, false).resolve(),
-                Err(MiddlewareConfigError::StraySecurityConfig)
+                resolve(false, security_mask, false),
+                Err(SecuredListenerConfigError::StraySecurityConfig { .. })
             ));
         }
         assert!(matches!(
-            middleware_cli(false, 0, true).resolve(),
-            Err(MiddlewareConfigError::StraySecurityConfig)
+            resolve(false, 0, true),
+            Err(SecuredListenerConfigError::StraySecurityConfig { .. })
         ));
 
         for security_mask in 0..0b111 {
             assert!(matches!(
-                middleware_cli(true, security_mask, false).resolve(),
-                Err(MiddlewareConfigError::AuthenticationRequired)
+                resolve(true, security_mask, false),
+                Err(SecuredListenerConfigError::AuthenticationRequired { .. })
             ));
         }
         assert!(matches!(
-            middleware_cli(true, 0b111, false).resolve(),
-            Ok(Some(MiddlewareLaunchConfig::Authenticated { .. }))
+            resolve(true, 0b111, false),
+            Ok(Some(SecuredListenerLaunchConfig::Authenticated { .. }))
         ));
         assert!(matches!(
-            middleware_cli(true, 0, true).resolve(),
-            Ok(Some(MiddlewareLaunchConfig::Insecure { .. }))
+            resolve(true, 0, true),
+            Ok(Some(SecuredListenerLaunchConfig::Insecure { .. }))
         ));
         for security_mask in 1..=0b111 {
             assert!(matches!(
-                middleware_cli(true, security_mask, true).resolve(),
-                Err(MiddlewareConfigError::ConflictingSecurityModes)
+                resolve(true, security_mask, true),
+                Err(SecuredListenerConfigError::ConflictingSecurityModes { .. })
             ));
         }
+    }
+
+    #[test]
+    fn middleware_security_group_requires_one_complete_non_conflicting_mode() {
+        assert_secured_listener_security_group(|listener, mask, insecure| {
+            middleware_cli(listener, mask, insecure).resolve()
+        });
+    }
+
+    #[test]
+    fn interceptor_security_group_requires_one_complete_non_conflicting_mode() {
+        assert_secured_listener_security_group(|listener, mask, insecure| {
+            interceptor_cli(listener, mask, insecure).resolve()
+        });
     }
 
     #[cfg(unix)]
@@ -940,12 +1101,61 @@ leeway_secs = 30
             openshell_middleware_allow_insecure_transport: false,
         };
 
-        let error = match prepare_middleware_server(&cli).await {
+        let error = match prepare_secured_server(
+            cli.resolve().expect("fully-configured CLI must resolve"),
+            "openshell-middleware-addr",
+            "OpenShell middleware",
+        )
+        .await
+        {
             Err(error) => error,
             Ok(_) => panic!("invalid TLS identity must fail middleware preflight"),
         };
         assert!(
             format!("{error:#}").contains("configure OpenShell middleware server TLS"),
+            "unexpected preflight error: {error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn invalid_tls_identity_fails_during_interceptor_preflight() {
+        let directory = tempfile::tempdir().expect("temporary directory must be created");
+        let trust = directory.path().join("trust.toml");
+        let trust_profile = format!(
+            r#"issuer = "openshell-gateway:edge/team-a"
+audience = "urn:openshell:extension:interceptor:apf"
+kid = "test-kid"
+public_key_pem = '''{TEST_PUBLIC_KEY}'''
+max_lifetime_secs = 300
+leeway_secs = 30
+"#,
+        );
+        write_with_mode(&trust, trust_profile.as_bytes(), 0o644);
+        let certificate = directory.path().join("invalid-cert.pem.fixture");
+        let private_key = directory.path().join("invalid-key.key.fixture");
+        write_with_mode(&certificate, b"not a certificate", 0o644);
+        write_with_mode(&private_key, b"not a private key", 0o600);
+        let cli = InterceptorCli {
+            openshell_interceptor_addr: Some("127.0.0.1:18099".to_string()),
+            openshell_interceptor_auth_trust_file: Some(trust),
+            openshell_interceptor_tls_cert_file: Some(certificate),
+            openshell_interceptor_tls_key_file: Some(private_key),
+            openshell_interceptor_allow_insecure_transport: false,
+        };
+
+        let error = match prepare_secured_server(
+            cli.resolve().expect("fully-configured CLI must resolve"),
+            "openshell-interceptor-addr",
+            "OpenShell interceptor",
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("invalid TLS identity must fail interceptor preflight"),
+        };
+        assert!(
+            format!("{error:#}").contains("configure OpenShell interceptor server TLS"),
             "unexpected preflight error: {error:#}"
         );
     }

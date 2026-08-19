@@ -97,10 +97,38 @@ pub fn run() -> Result<(), String> {
 
     let mut errors: Vec<String> = Vec::new();
 
+    // Rule 3 precomputation — an adapter is a "leaf" when it path-depends on
+    // no other adapter-classified package. Only leaf adapters may be shared
+    // by other adapters (see Rule 3 below); this stays one level deep, since
+    // an adapter that picks up a leaf-adapter dependency is no longer itself
+    // a leaf and so cannot in turn be depended on by a third adapter.
+    let adapter_is_leaf: HashMap<&str, bool> = classified
+        .iter()
+        .zip(packages.iter())
+        .filter(|(pkg, _)| pkg.is_adapter)
+        .map(|(pkg, raw)| {
+            let deps = raw["dependencies"].as_array().map_or(&[][..], |v| v);
+            let has_adapter_dep = deps.iter().any(|dep| {
+                dep["source"].is_null()
+                    && pkg_map
+                        .get(dep["name"].as_str().unwrap_or(""))
+                        .is_some_and(|&(_, dep_is_adapter)| dep_is_adapter)
+            });
+            (pkg.name.as_str(), !has_adapter_dep)
+        })
+        .collect();
+
     // DAG rules:
     //   Rule 1 — service → service
     //   Rule 2 — library → service or library → adapter
-    //   Rule 3 — adapter → adapter
+    //   Rule 3 — adapter → non-leaf adapter (lateral coupling between two
+    //            business-logic adapters). Adapter → leaf adapter is allowed:
+    //            it's the "extract on second consumer" pattern (a foundation
+    //            crate — e.g. shared caller-auth logic — that two adapters
+    //            both need, itself depending on no other adapter). This never
+    //            weakens Rule 2/Rule 4's leakage guarantee: the shared crate
+    //            still can't be depended on by a runtime-agnostic library,
+    //            and still can't import openshell_ types itself.
     for (pkg, raw) in classified.iter().zip(packages.iter()) {
         let deps = raw["dependencies"].as_array().map_or(&[][..], |v| v);
         for dep in deps {
@@ -135,9 +163,12 @@ pub fn run() -> Result<(), String> {
                 }
             }
 
-            if pkg.is_adapter && dep_is_adapter {
+            if pkg.is_adapter
+                && dep_is_adapter
+                && !adapter_is_leaf.get(dep_name).copied().unwrap_or(false)
+            {
                 errors.push(format!(
-                    "dag-guard: FAIL adapter→adapter: {} depends on {} via path",
+                    "dag-guard: FAIL adapter→adapter: {} depends on non-leaf adapter {} via path",
                     pkg.name, dep_name,
                 ));
             }

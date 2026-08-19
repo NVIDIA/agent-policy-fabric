@@ -1,0 +1,21 @@
+[package]
+name = "apf-openshell-auth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+jsonwebtoken = "9"
+nix          = { version = "0.29", features = ["fs"] }
+serde        = { version = "1", features = ["derive"] }
+thiserror    = "2"
+tokio        = { version = "1", features = ["full"] }
+toml         = "0.8"
+tonic        = { version = "0.12", features = ["channel"] }
+tracing      = "0.1"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile   = "3"

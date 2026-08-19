@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Authentication for calls from an OpenShell gateway or sandbox supervisor.
+//! Authentication and authorization for calls from an OpenShell gateway or
+//! sandbox supervisor into an APF-hosted OpenShell extension (the gateway
+//! interceptor or supervisor middleware surfaces).
 //!
 //! OpenShell uses one Ed25519 signing authority for both sandbox bootstrap and
 //! extension credentials. This verifier therefore requires the extension JWT
@@ -19,6 +21,7 @@ use thiserror::Error;
 use tokio::io::AsyncReadExt as _;
 use tonic::metadata::MetadataMap;
 use tonic::service::Interceptor;
+use tonic::service::interceptor::InterceptedService;
 use tonic::{Request, Status};
 
 const AUTHORIZATION_METADATA: &str = "authorization";
@@ -112,15 +115,94 @@ impl AuthenticatedCaller {
         self.sandbox_id.as_deref()
     }
 
-    /// Builds a caller identity for sibling-module authorization tests.
-    #[cfg(test)]
-    pub(crate) fn for_test(kind: ExtensionCallerKind, sandbox_id: Option<&str>) -> Self {
+    /// Builds a caller identity for adapter-crate authorization tests.
+    #[doc(hidden)]
+    pub fn for_test(kind: ExtensionCallerKind, sandbox_id: Option<&str>) -> Self {
         Self {
             kind,
             sandbox_id: sandbox_id.map(str::to_owned),
         }
     }
 }
+
+/// Whether a server surface requires an authenticated OpenShell extension
+/// caller before dispatching a request, or has caller authentication
+/// deliberately disabled (local research / dev opt-out).
+#[derive(Clone)]
+pub enum AuthenticationMode {
+    /// Every request must carry a caller identity authenticated by
+    /// [`ExtensionAuthVerifier`] before this RPC's `authorize` check runs.
+    Required { expected_audience: String },
+    /// Caller authentication is disabled for this listener.
+    Insecure,
+}
+
+/// Why an authorization check on an already-authenticated request failed.
+#[derive(Debug)]
+pub enum AuthorizationFailure {
+    /// No [`AuthenticatedCaller`] extension was found on the request, even
+    /// though the server is in [`AuthenticationMode::Required`]. This fails
+    /// closed if a runtime wraps the service without the verifier interceptor.
+    MissingCaller,
+    /// A caller was authenticated, but its [`ExtensionCallerKind`] is not in
+    /// the RPC's allowed list.
+    CallerNotAllowed,
+}
+
+impl AuthorizationFailure {
+    #[must_use]
+    pub fn into_status(self) -> Status {
+        match self {
+            Self::MissingCaller => {
+                Status::unauthenticated("OpenShell extension caller is not authenticated")
+            }
+            Self::CallerNotAllowed => Status::permission_denied(
+                "OpenShell extension caller is not authorized for this RPC",
+            ),
+        }
+    }
+}
+
+impl AuthenticationMode {
+    /// Checks that an already-authenticated request's caller kind is one of
+    /// `allowed`. Returns `Ok(None)` without checking anything when this mode
+    /// is [`AuthenticationMode::Insecure`].
+    pub fn authorize<'a, T>(
+        &self,
+        request: &'a Request<T>,
+        allowed: &[ExtensionCallerKind],
+    ) -> Result<Option<&'a AuthenticatedCaller>, AuthorizationFailure> {
+        let Self::Required { .. } = self else {
+            return Ok(None);
+        };
+        // The authenticated server inserts this extension before dispatch.
+        // Its absence fails closed if another runtime wraps the service
+        // incorrectly.
+        let caller = request
+            .extensions()
+            .get::<AuthenticatedCaller>()
+            .ok_or(AuthorizationFailure::MissingCaller)?;
+        if !allowed.contains(&caller.kind()) {
+            return Err(AuthorizationFailure::CallerNotAllowed);
+        }
+        Ok(Some(caller))
+    }
+
+    /// The configured audience this mode advertises, or an empty string in
+    /// [`AuthenticationMode::Insecure`] mode.
+    #[must_use]
+    pub fn expected_audience(&self) -> &str {
+        match self {
+            Self::Required { expected_audience } => expected_audience,
+            Self::Insecure => "",
+        }
+    }
+}
+
+/// A tonic server wrapped with [`ExtensionAuthVerifier`] as its request
+/// interceptor. Each adapter crate builds its own size-limited `S` before
+/// wrapping it here.
+pub type Authenticated<S> = InterceptedService<S, ExtensionAuthVerifier>;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,7 +299,7 @@ impl ExtensionAuthVerifier {
         Self::from_toml(&bytes)
     }
 
-    /// Returns the exact audience advertised by the authenticated middleware.
+    /// Returns the exact audience advertised by the authenticated server.
     #[must_use]
     pub fn audience(&self) -> &str {
         &self.state.audience
@@ -910,5 +992,56 @@ leeway_secs = {leeway_secs}
         .await
         .expect("FIFO rejection must not block startup");
         assert!(matches!(result, Err(ExtensionAuthConfigError::NotAFile)));
+    }
+
+    #[test]
+    fn insecure_mode_authorizes_without_a_caller() {
+        let mode = AuthenticationMode::Insecure;
+        let request = Request::new(());
+        assert!(
+            mode.authorize(&request, &[ExtensionCallerKind::Gateway])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(mode.expected_audience(), "");
+    }
+
+    #[test]
+    fn required_mode_enforces_the_allowed_caller_list() {
+        let mode = AuthenticationMode::Required {
+            expected_audience: AUDIENCE.to_string(),
+        };
+        assert_eq!(mode.expected_audience(), AUDIENCE);
+
+        let missing = Request::new(());
+        assert!(matches!(
+            mode.authorize(&missing, &[ExtensionCallerKind::Gateway]),
+            Err(AuthorizationFailure::MissingCaller)
+        ));
+
+        let mut disallowed = Request::new(());
+        disallowed
+            .extensions_mut()
+            .insert(AuthenticatedCaller::for_test(
+                ExtensionCallerKind::Supervisor,
+                Some("sandbox-a"),
+            ));
+        assert!(matches!(
+            mode.authorize(&disallowed, &[ExtensionCallerKind::Gateway]),
+            Err(AuthorizationFailure::CallerNotAllowed)
+        ));
+
+        let mut allowed = Request::new(());
+        allowed
+            .extensions_mut()
+            .insert(AuthenticatedCaller::for_test(
+                ExtensionCallerKind::Gateway,
+                None,
+            ));
+        let caller = mode
+            .authorize(&allowed, &[ExtensionCallerKind::Gateway])
+            .expect("allowed caller kind must authorize")
+            .expect("Required mode returns the authenticated caller");
+        assert_eq!(caller.kind(), ExtensionCallerKind::Gateway);
     }
 }

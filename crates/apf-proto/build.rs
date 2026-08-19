@@ -6,11 +6,7 @@ use std::process::Command;
 // Provider, PolicyEffect, PolicyFinding, etc.
 const APF_CORE_MODULE: &str = "REDACTED-SCHEMA-REGISTRY/agent-policy-fabric/core";
 
-// OpenShell protos remain pinned together except for supervisor middleware. The middleware
-// authentication field is additive on the wire, so consuming it independently avoids pulling
-// unrelated source-level changes into the sandbox and gateway contracts.
-const OPENSHELL_COMMIT: &str = "eb380d71a3e40952ed7d6944f5e63e54bd262470";
-const OPENSHELL_MIDDLEWARE_AUTH_COMMIT: &str = "bdabb54cb361a59d4eba957a8cdfd85ae5858289";
+const OPENSHELL_COMMIT: &str = "8d67250a5d17348eb96c4fa46226b06d8041f2ba";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
@@ -50,27 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|f| apf_export.join(v1).join(f))
     .collect();
 
-    // --- Fetch OpenShell sandbox.proto from git ---
+    // --- Fetch OpenShell protos from git ---
     let os_export = out_dir.join("openshell-proto-export");
     export_openshell(&os_export, OPENSHELL_COMMIT)?;
-    let middleware_export = out_dir.join("openshell-middleware-proto-export");
-    export_openshell_proto(
-        &middleware_export,
-        OPENSHELL_MIDDLEWARE_AUTH_COMMIT,
-        "supervisor_middleware.proto",
-    )?;
     let sandbox_proto = os_export.join("sandbox.proto");
     let gateway_interceptor = os_export.join("gateway_interceptor.proto");
-    let supervisor_middleware = middleware_export.join("supervisor_middleware.proto");
+    let supervisor_middleware = os_export.join("supervisor_middleware.proto");
     let datamodel_proto = os_export.join("datamodel.proto");
     let openshell_proto = os_export.join("openshell.proto");
-
-    if !supervisor_middleware.is_file() {
-        return Err(format!(
-            "OpenShell supervisor_middleware.proto is missing from pinned commit {OPENSHELL_MIDDLEWARE_AUTH_COMMIT}"
-        )
-        .into());
-    }
 
     // --- Local wire surface protos ---
     let local_protos: Vec<PathBuf> = [
@@ -109,7 +92,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &all_protos.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
             &[
                 apf_export.as_path(),
-                middleware_export.as_path(),
                 os_export.as_path(),
                 contracts.as_path(),
             ],
@@ -150,26 +132,6 @@ fn export_openshell(out: &Path, commit: &str) -> Result<(), Box<dyn std::error::
             out.join("sandbox.proto"),
             b"syntax = \"proto3\";\npackage openshell.sandbox.v1;\n// stub\n",
         )?;
-    }
-    Ok(())
-}
-
-fn export_openshell_proto(
-    out: &Path,
-    commit: &str,
-    proto: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = std::fs::remove_dir_all(out);
-    std::fs::create_dir_all(out)?;
-    let source = format!("https://github.com/NVIDIA/OpenShell.git#ref={commit},subdir=proto");
-    let status = Command::new("buf")
-        .args(["export", &source, "--output"])
-        .arg(out)
-        .args(["--path", proto, "--exclude-imports"])
-        .status()
-        .map_err(|error| format!("could not export {proto} from OpenShell {commit}: {error}"))?;
-    if !status.success() {
-        return Err(format!("failed to export {proto} from OpenShell {commit}: {status}").into());
     }
     Ok(())
 }

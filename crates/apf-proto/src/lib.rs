@@ -69,7 +69,8 @@ pub mod openshell {
             #![allow(
                 clippy::doc_markdown,
                 clippy::default_trait_access,
-                clippy::too_many_lines
+                clippy::too_many_lines,
+                clippy::large_enum_variant
             )]
             tonic::include_proto!("openshell.middleware.v1");
         }

@@ -515,6 +515,11 @@ fn lower_endpoint(e: &ir::NetworkEndpoint) -> os::NetworkEndpoint {
         credential_signing: String::new(),
         signing_region: String::new(),
         signing_service: String::new(),
+        // APF only projects endpoint-bearing provider profiles today, which
+        // never need an explicit static-credential binding — that's only for
+        // endpointless profiles. `None` is the valid default for every
+        // endpoint APF projects.
+        credential_binding: None,
     }
 }
 

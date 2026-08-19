@@ -5,6 +5,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::reconciler;
+use apf_openshell_auth::{
+    Authenticated, AuthenticationMode, AuthorizationFailure, ExtensionAuthVerifier,
+    ExtensionCallerKind,
+};
 use apf_policy_client::PolicyClientHandle;
 use ed25519_dalek::VerifyingKey;
 use tonic::{Request, Response, Status};
@@ -14,12 +18,18 @@ use crate::bindings;
 use crate::context;
 use crate::patches::{self, PatchError};
 use crate::proto::{
-    DescribeRequest, GatewayInterceptor, InterceptorEvaluation, InterceptorManifest,
-    InterceptorResult, ProviderProfileSnapshot, ProviderProfileSnapshotRequest,
-    interceptor_evaluation,
+    DescribeRequest, GatewayInterceptor, GatewayInterceptorServer, InterceptorEvaluation,
+    InterceptorManifest, InterceptorResult, ProviderProfileSnapshot,
+    ProviderProfileSnapshotRequest, interceptor_evaluation,
 };
 use apf_proto::json as util;
 use apf_proto::spec_digest::canonical_json_digest;
+
+// Bounds CreateSandbox specs, config patches, and aggregated provider-profile
+// snapshots. Unlike the middleware's HTTP body limit, there is no single
+// OpenShell-advertised ceiling for these payload shapes; this is sized with
+// headroom over a typical HTTP body limit for the multi-profile snapshot case.
+const GRPC_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Operator-supplied configuration for the interceptor process.
 #[derive(Clone)]
@@ -38,8 +48,67 @@ pub struct InterceptorConfig {
 /// The tonic service that implements `GatewayInterceptor`.
 #[derive(Clone)]
 pub struct GatewayInterceptorService {
-    pub policy_service: PolicyClientHandle,
-    pub config: InterceptorConfig,
+    policy_service: PolicyClientHandle,
+    config: InterceptorConfig,
+    authentication: AuthenticationMode,
+}
+
+/// Size-limited gateway interceptor server protected by extension JWT authentication.
+pub type AuthenticatedGatewayInterceptorServer =
+    Authenticated<GatewayInterceptorServer<GatewayInterceptorService>>;
+
+impl GatewayInterceptorService {
+    /// Builds a size-limited server that authenticates every OpenShell call before dispatch.
+    #[must_use]
+    pub fn authenticated_server(
+        policy_service: PolicyClientHandle,
+        config: InterceptorConfig,
+        verifier: ExtensionAuthVerifier,
+    ) -> AuthenticatedGatewayInterceptorServer {
+        let service = Self {
+            policy_service,
+            config,
+            authentication: AuthenticationMode::Required {
+                expected_audience: verifier.audience().to_string(),
+            },
+        };
+        Authenticated::new(service.into_size_limited_server(), verifier)
+    }
+
+    /// Builds a size-limited server with authentication deliberately disabled.
+    ///
+    /// This mode is only for a matching OpenShell registration whose
+    /// `allow_insecure_transport` setting explicitly opts out of extension authentication.
+    #[must_use]
+    pub fn insecure_server(
+        policy_service: PolicyClientHandle,
+        config: InterceptorConfig,
+    ) -> GatewayInterceptorServer<Self> {
+        Self {
+            policy_service,
+            config,
+            authentication: AuthenticationMode::Insecure,
+        }
+        .into_size_limited_server()
+    }
+
+    fn into_size_limited_server(self) -> GatewayInterceptorServer<Self> {
+        GatewayInterceptorServer::new(self)
+            .max_decoding_message_size(GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(GRPC_MESSAGE_BYTES)
+    }
+
+    fn authorize<T>(&self, request: &Request<T>) -> Result<(), AuthorizationFailure> {
+        // Every GatewayInterceptor RPC is called exclusively by the OpenShell
+        // gateway at admission time — there is no supervisor caller on this surface.
+        self.authentication
+            .authorize(request, &[ExtensionCallerKind::Gateway])
+            .map(|_| ())
+    }
+
+    fn expected_audience(&self) -> &str {
+        self.authentication.expected_audience()
+    }
 }
 
 /// Decoded claims from a provenance JWT, used for annotation population and TOCTOU detection.
@@ -1085,15 +1154,21 @@ impl GatewayInterceptorService {
 impl GatewayInterceptor for GatewayInterceptorService {
     async fn describe(
         &self,
-        _request: Request<DescribeRequest>,
+        request: Request<DescribeRequest>,
     ) -> Result<Response<InterceptorManifest>, Status> {
-        Ok(Response::new(bindings::manifest()))
+        self.authorize(&request)
+            .map_err(AuthorizationFailure::into_status)?;
+        let mut manifest = bindings::manifest();
+        manifest.expected_audience = self.expected_audience().to_string();
+        Ok(Response::new(manifest))
     }
 
     async fn snapshot_provider_profiles(
         &self,
-        _request: Request<ProviderProfileSnapshotRequest>,
+        request: Request<ProviderProfileSnapshotRequest>,
     ) -> Result<Response<ProviderProfileSnapshot>, Status> {
+        self.authorize(&request)
+            .map_err(AuthorizationFailure::into_status)?;
         use sha2::{Digest, Sha256};
 
         let mut policy_service = self.policy_service.clone();
@@ -1157,6 +1232,8 @@ impl GatewayInterceptor for GatewayInterceptorService {
         &self,
         request: Request<InterceptorEvaluation>,
     ) -> Result<Response<InterceptorResult>, Status> {
+        self.authorize(&request)
+            .map_err(AuthorizationFailure::into_status)?;
         use interceptor_evaluation::Phase;
         let r = request.into_inner();
         match (r.method.as_str(), &r.phase) {
@@ -1362,6 +1439,7 @@ mod tests {
                     SigningKey::generate(&mut OsRng).verifying_key(),
                 )),
             },
+            authentication: AuthenticationMode::Insecure,
         }
     }
 

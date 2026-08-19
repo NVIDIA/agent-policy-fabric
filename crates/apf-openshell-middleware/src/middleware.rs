@@ -19,10 +19,12 @@ use apf_policy_eval::{
 use prost::Message;
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tonic::service::interceptor::InterceptedService;
 use tonic::{Request, Response, Status};
 
-use crate::auth::{AuthenticatedCaller, ExtensionAuthVerifier, ExtensionCallerKind};
+use apf_openshell_auth::{
+    Authenticated, AuthenticatedCaller, AuthenticationMode, AuthorizationFailure,
+    ExtensionAuthVerifier, ExtensionCallerKind,
+};
 use apf_proto::supervisor_middleware_v1::{
     self as wire, supervisor_middleware_server::SupervisorMiddleware,
     supervisor_middleware_server::SupervisorMiddlewareServer,
@@ -63,35 +65,9 @@ pub struct SupervisorMiddlewareService {
     authentication: AuthenticationMode,
 }
 
-#[derive(Clone)]
-enum AuthenticationMode {
-    Required { expected_audience: String },
-    Insecure,
-}
-
-enum AuthorizationFailure {
-    MissingCaller,
-    CallerNotAllowed,
-}
-
-impl AuthorizationFailure {
-    fn into_status(self) -> Status {
-        match self {
-            Self::MissingCaller => {
-                Status::unauthenticated("OpenShell extension caller is not authenticated")
-            }
-            Self::CallerNotAllowed => Status::permission_denied(
-                "OpenShell extension caller is not authorized for this RPC",
-            ),
-        }
-    }
-}
-
 /// Size-limited supervisor middleware server protected by extension JWT authentication.
-pub type AuthenticatedSupervisorMiddlewareServer = InterceptedService<
-    SupervisorMiddlewareServer<SupervisorMiddlewareService>,
-    ExtensionAuthVerifier,
->;
+pub type AuthenticatedSupervisorMiddlewareServer =
+    Authenticated<SupervisorMiddlewareServer<SupervisorMiddlewareService>>;
 
 impl SupervisorMiddlewareService {
     /// Builds a size-limited server that authenticates every OpenShell call before dispatch.
@@ -106,7 +82,7 @@ impl SupervisorMiddlewareService {
                 expected_audience: verifier.audience().to_string(),
             },
         };
-        InterceptedService::new(service.into_size_limited_server(), verifier)
+        Authenticated::new(service.into_size_limited_server(), verifier)
     }
 
     /// Builds a size-limited server with authentication deliberately disabled.
@@ -129,34 +105,6 @@ impl SupervisorMiddlewareService {
             .max_decoding_message_size(GRPC_MESSAGE_BYTES)
             .max_encoding_message_size(GRPC_MESSAGE_BYTES)
     }
-
-    fn authorize<'a, T>(
-        &self,
-        request: &'a Request<T>,
-        allowed: &[ExtensionCallerKind],
-    ) -> Result<Option<&'a AuthenticatedCaller>, AuthorizationFailure> {
-        let AuthenticationMode::Required { .. } = &self.authentication else {
-            return Ok(None);
-        };
-        // The authenticated server inserts this extension before dispatch.
-        // Its absence fails closed if another runtime wraps the service
-        // incorrectly.
-        let caller = request
-            .extensions()
-            .get::<AuthenticatedCaller>()
-            .ok_or(AuthorizationFailure::MissingCaller)?;
-        if !allowed.contains(&caller.kind()) {
-            return Err(AuthorizationFailure::CallerNotAllowed);
-        }
-        Ok(Some(caller))
-    }
-
-    fn expected_audience(&self) -> &str {
-        match &self.authentication {
-            AuthenticationMode::Required { expected_audience } => expected_audience,
-            AuthenticationMode::Insecure => "",
-        }
-    }
 }
 
 impl fmt::Debug for SupervisorMiddlewareService {
@@ -172,26 +120,27 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         &self,
         request: Request<()>,
     ) -> Result<Response<wire::MiddlewareManifest>, Status> {
-        self.authorize(
-            &request,
-            &[
-                ExtensionCallerKind::Gateway,
-                ExtensionCallerKind::Supervisor,
-            ],
-        )
-        .map_err(AuthorizationFailure::into_status)?;
+        self.authentication
+            .authorize(
+                &request,
+                &[
+                    ExtensionCallerKind::Gateway,
+                    ExtensionCallerKind::Supervisor,
+                ],
+            )
+            .map_err(AuthorizationFailure::into_status)?;
         Ok(Response::new(wire::MiddlewareManifest {
             name: SERVICE_NAME.to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
             bindings: vec![wire::MiddlewareBinding {
                 operation: wire::SupervisorMiddlewareOperation::HttpRequest as i32,
                 phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
-                max_body_bytes: MAX_BODY_BYTES as u64,
+                max_payload_bytes: MAX_BODY_BYTES as u64,
                 // An empty binding timeout inherits the operator-owned
                 // deadline instead of silently shortening it.
                 timeout: String::new(),
             }],
-            expected_audience: self.expected_audience().to_string(),
+            expected_audience: self.authentication.expected_audience().to_string(),
         }))
     }
 
@@ -199,7 +148,8 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         &self,
         request: Request<wire::ValidateConfigRequest>,
     ) -> Result<Response<wire::ValidateConfigResponse>, Status> {
-        self.authorize(&request, &[ExtensionCallerKind::Gateway])
+        self.authentication
+            .authorize(&request, &[ExtensionCallerKind::Gateway])
             .map_err(AuthorizationFailure::into_status)?;
         let field_count = request
             .into_inner()
@@ -224,6 +174,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         request: Request<wire::HttpRequestEvaluation>,
     ) -> Result<Response<wire::HttpRequestResult>, Status> {
         let authenticated_sandbox = self
+            .authentication
             .authorize(&request, &[ExtensionCallerKind::Supervisor])
             .map_err(AuthorizationFailure::into_status)?
             .and_then(AuthenticatedCaller::sandbox_id)
@@ -250,6 +201,29 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 deny(CODE_EVALUATION_FAILED, "policy evaluation failed")
             });
         Ok(Response::new(response))
+    }
+
+    type EvaluateWebSocketSessionStream = std::pin::Pin<
+        Box<
+            dyn tonic::codegen::tokio_stream::Stream<
+                    Item = Result<wire::WebSocketSessionEventResult, Status>,
+                > + Send,
+        >,
+    >;
+
+    /// APF's manifest never advertises a `WEBSOCKET_MESSAGE` binding
+    /// (`describe()` above only binds `HttpRequest`/`PreCredentials`), so
+    /// OpenShell never dispatches to this RPC — it exists only to satisfy the
+    /// `SupervisorMiddleware` trait. Mirrors the unsupported default OpenShell's
+    /// own `InProcessMiddleware::open_websocket_session` documents for
+    /// HTTP-only implementations.
+    async fn evaluate_web_socket_session(
+        &self,
+        _request: Request<tonic::Streaming<wire::WebSocketSessionEvent>>,
+    ) -> Result<Response<Self::EvaluateWebSocketSessionStream>, Status> {
+        Err(Status::unimplemented(
+            "apf-content-policy does not inspect WebSocket sessions",
+        ))
     }
 }
 
@@ -867,7 +841,7 @@ mod tests {
             vec![wire::MiddlewareBinding {
                 operation: wire::SupervisorMiddlewareOperation::HttpRequest as i32,
                 phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
-                max_body_bytes: MAX_BODY_BYTES as u64,
+                max_payload_bytes: MAX_BODY_BYTES as u64,
                 timeout: String::new(),
             }]
         );

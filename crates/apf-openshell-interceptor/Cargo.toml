@@ -7,9 +7,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
-apf-proto         = { path = "../apf-proto" }
-apf-policy-client = { path = "../apf-policy-client" }
-apf-types         = { path = "../apf-types" }
+apf-openshell-auth = { path = "../apf-openshell-auth" }
+apf-proto           = { path = "../apf-proto" }
+apf-policy-client   = { path = "../apf-policy-client" }
+apf-types           = { path = "../apf-types" }
 
 
 anyhow        = "1"

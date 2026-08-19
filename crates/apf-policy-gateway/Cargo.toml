@@ -19,6 +19,7 @@ apf-types                   = { path = "../apf-types" }
 apf-policy-client           = { path = "../apf-policy-client" }
 apf-openshell-interceptor   = { path = "../apf-openshell-interceptor" }
 apf-openshell-middleware    = { path = "../apf-openshell-middleware" }
+apf-openshell-auth          = { path = "../apf-openshell-auth" }
 
 arc-swap           = "1"
 prost              = "0.13"

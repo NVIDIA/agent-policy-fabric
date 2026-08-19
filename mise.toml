@@ -73,12 +73,13 @@ until curl -sf http://127.0.0.1:19200/healthz >/dev/null 2>&1; do sleep 0.2; don
   --document-key-id apf-dev \
   --jwks-url "http://127.0.0.1:19200/.well-known/jwks.json" \
   --openshell-interceptor-addr 127.0.0.1:18202 \
+  --openshell-interceptor-allow-insecure-transport \
   --openshell-middleware-addr 127.0.0.1:9099 \
   --openshell-middleware-allow-insecure-transport &
 
 echo "APF dev stack running. Ctrl-C to stop."
 echo "  policy-service:  http://127.0.0.1:19200"
-echo "  interceptor gRPC: 127.0.0.1:18202"
+echo "  interceptor gRPC: 127.0.0.1:18202 (INSECURE local research mode)"
 echo "  middleware gRPC:  127.0.0.1:9099 (INSECURE local research mode)"
 wait
 """

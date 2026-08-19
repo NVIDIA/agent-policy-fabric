@@ -11,6 +11,10 @@ pub fn manifest() -> InterceptorManifest {
         name: "apf/policy-adapter".to_string(),
         failure_policy: "fail_closed".to_string(),
         provider_profiles: true,
+        // The real audience is instance-specific (depends on the configured
+        // trust profile) and is set by `GatewayInterceptorService::describe`
+        // before this manifest reaches a caller.
+        expected_audience: String::new(),
         bindings: vec![
             sandbox_policy_inject(),
             sandbox_policy_verify(),

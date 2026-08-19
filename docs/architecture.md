@@ -31,7 +31,7 @@ The host-side anchor for all APF enforcement. It embeds the local Policy Decisio
 | Evaluate | Builds `CedarEvaluator` from bundle; hot-swaps via `arc-swap` on bundle refresh |
 | gRPC surface | `EvaluationService`: `rpc Evaluate` over UDS |
 | Provenance trust | Verifies `provenance_token` JWT from `GetDocument`; rotates key via JWKS watcher |
-| Extension authentication | Serves supervisor middleware over HTTPS and verifies OpenShell extension JWTs against a separately provisioned trust profile |
+| Extension authentication | Serves the gateway interceptor and supervisor middleware over HTTPS and verifies OpenShell extension JWTs against a separately provisioned per-surface trust profile |
 | Audit | Bundle lifecycle events; evaluation events (wired in M5 audit milestone) |
 
 ### OpenShell — substrate adapter
@@ -100,8 +100,8 @@ OpenShell is the first supported runtime. APF integrates at two seams:
 OpenShell
 │
 ├── Gateway Interceptor  ◀────── apf-openshell-interceptor  (runs inside apf-policy-gateway)
-│   [OpenShell control plane]     fetches SandboxPolicy projection once per sandbox
-│   (sandbox admission)           injects as apf.nvidia.com/* annotations
+│   [OpenShell control plane]     verifies extension JWT over HTTPS; fetches SandboxPolicy
+│   (sandbox admission)           projection once per sandbox; injects as apf.nvidia.com/* annotations
 │
 └── Supervisor Middleware ◀────── apf-openshell-middleware   (runs inside apf-policy-gateway)
     [OpenShell data plane]        verifies extension JWT; binds caller sandbox identity
@@ -110,13 +110,26 @@ OpenShell
 
 The two seams map onto different OpenShell planes. APF's own control/data distinction is orthogonal: APF's control plane is policy distribution (service → gateway); both OpenShell seams sit on APF's data plane since in both cases APF is serving a decision or a projection, not distributing policy.
 
-**OpenShell owns:** sandbox lifecycle, network namespace, middleware registration, trusted service CAs, and minting a policy-authorized extension JWT for each caller. APF does not dictate how sandboxes run.
+**OpenShell owns:** sandbox lifecycle, network namespace, interceptor and middleware registration, trusted service CAs, and minting a policy-authorized extension JWT for each caller. APF does not dictate how sandboxes run.
 
-**APF owns:** the middleware server's TLS identity, the configured OpenShell caller trust anchor, what policy applies, whether a request is permitted, and what the response looks like.
+**APF owns:** both listeners' TLS identity, the configured OpenShell caller trust anchor, what policy applies, whether a request is permitted, and what the response looks like.
 
 The boundary is the `EvaluationService/Evaluate` RPC and the `SandboxPolicy` projection. A future runtime (e.g. another sandbox runtime) adds `crates/apf-<runtime>-*` adapter crates following the same pattern.
 
-The middleware listener starts in authenticated mode only when its bind address, extension trust profile, TLS certificate, and TLS key are all configured. Preflight validates the opened security-file inodes and parses the extension verifier and TLS server identity before any listener reports ready. This extension trust profile is independent of bundle-signing trust and policy-document provenance trust. Authenticated `Describe` advertises the exact configured audience in `MiddlewareManifest.expected_audience`; OpenShell compares that value with the registration after it authenticates the service. The explicit insecure mode removes both TLS and caller authentication and is limited to trusted local development or isolated research.
+Both listeners share one verifier (`apf-openshell-auth::ExtensionAuthVerifier`) and one
+authorization primitive; each starts in authenticated mode only when its own bind address,
+extension trust profile, TLS certificate, and TLS key are all configured. Preflight validates
+the opened security-file inodes and parses the extension verifier and TLS server identity
+before either listener reports ready. This extension trust profile is independent of
+bundle-signing trust and policy-document provenance trust, and independent per surface — the
+interceptor and middleware trust files are not interchangeable even though they share a format.
+Authenticated `Describe` advertises the exact configured audience in
+`InterceptorManifest.expected_audience`/`MiddlewareManifest.expected_audience`; OpenShell
+compares that value with the registration after it authenticates the service. The interceptor
+authorizes gateway callers only on every RPC (`Describe`, `SnapshotProviderProfiles`, `Evaluate`)
+since it has no supervisor caller; the middleware authorizes by caller-kind matrix and binds the
+supervisor token's sandbox ID (§4.3). The explicit insecure mode removes both TLS and caller
+authentication per surface and is limited to trusted local development or isolated research.
 
 ---
 
@@ -167,13 +180,20 @@ pre-compiled bytes — no runtime lowering happens at admission time.
 `apf-openshell-interceptor` runs as a gRPC server task **inside the
 `apf-policy-gateway` process**; it is not a separate binary.
 
+OpenShell sends one short-lived Ed25519 extension JWT in the gRPC `authorization` metadata
+over HTTPS, the same mechanism §4.3 describes for the middleware. The interceptor authenticates
+the token before dispatch and permits `Describe`, `SnapshotProviderProfiles`, and `Evaluate`
+only for gateway callers — the interceptor is exclusively called by the OpenShell gateway at
+admission time, so there is no supervisor caller to authorize and no sandbox-binding check on
+this surface.
+
 ```
 Agent          OpenShell Gateway    apf-openshell-interceptor   apf-policy-service
   │                   │             (inside apf-policy-gateway)        │
   │  spawn sandbox    │                    │                       │
   │──────────────────▶│                    │                       │
-  │                   │── interceptor ────▶│                       │
-  │                   │   hook fires        │                       │
+  │                   │── HTTPS + Bearer JWT ─▶│                       │
+  │                   │   interceptor hook fires; verify caller     │
   │                   │                    │── GetDocument ────────▶│
   │                   │                    │   (SandboxPolicy)      │
   │                   │                    │◀── body +              │
