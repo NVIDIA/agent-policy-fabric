@@ -486,14 +486,33 @@ impl GatewayInterceptorService {
         let has_merge_ops = op_json["mergeOperations"]
             .as_array()
             .is_some_and(|a| !a.is_empty());
-        let sets_auto_approval = op_json["settingKey"]
+        let setting_key = op_json["settingKey"]
             .as_str()
-            .or_else(|| op_json["setting_key"].as_str())
-            == Some("proposal_approval_mode")
+            .or_else(|| op_json["setting_key"].as_str());
+        let sets_auto_approval = setting_key == Some("proposal_approval_mode")
             && op_json["settingValue"]["stringValue"]
                 .as_str()
                 .or_else(|| op_json["setting_value"]["string_value"].as_str())
                 == Some("auto");
+        // Settings-only updates (setting_key present, no policy/mergeOps) pass
+        // through without modification. Injecting policy patches into a settings
+        // request would conflict with the mutually-exclusive proto fields.
+        if setting_key.is_some() && !has_policy && !has_merge_ops {
+            if sets_auto_approval {
+                let ctx = context::extract_provider(&eval);
+                warn!(
+                    correlation_id = %ctx.correlation_id,
+                    "UpdateConfig MODIFY_OPERATION denied: auto-approval attempt via settings"
+                );
+                return Ok(Response::new(deny_with_context(
+                    "automatic policy proposal approval is blocked; policy is managed by APF",
+                    &ctx.correlation_id,
+                    "",
+                    &eval.binding_id,
+                )));
+            }
+            return Ok(Response::new(allow()));
+        }
         if has_policy || has_merge_ops || sets_auto_approval {
             let ctx = context::extract_provider(&eval);
             let reason = if sets_auto_approval {
