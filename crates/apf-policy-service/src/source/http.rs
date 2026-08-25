@@ -50,6 +50,8 @@ struct BundleCache {
     /// SHA-256 hex digest of the fetched tar.gz — used for change detection
     /// without re-extracting the archive on every poll.
     bundle_digest: String,
+    /// Bundle manifest identifier from the verified bundle.
+    bundle_id: String,
 }
 
 impl BundleCache {
@@ -61,6 +63,7 @@ impl BundleCache {
         new_projections: BTreeMap<(String, String), PolicyProjection>,
         new_counter: u64,
         new_digest: String,
+        new_bundle_id: String,
     ) -> bool {
         if new_counter <= self.current_counter {
             return false;
@@ -68,6 +71,7 @@ impl BundleCache {
         self.projections = new_projections;
         self.current_counter = new_counter;
         self.bundle_digest = new_digest;
+        self.bundle_id = new_bundle_id;
         true
     }
 }
@@ -157,7 +161,7 @@ impl HttpBundleSource {
 
     async fn load_variant_inner(&self, variant: &str, url: &str) -> anyhow::Result<()> {
         let tar_gz = self.fetch_bundle_from(url).await?;
-        let (projections, counter, digest) = self.extract_and_compile(&tar_gz)?;
+        let (projections, counter, digest, bundle_id) = self.extract_and_compile(&tar_gz)?;
 
         let projection_count = projections.len();
 
@@ -166,6 +170,7 @@ impl HttpBundleSource {
         cache.projections = projections;
         cache.current_counter = counter;
         cache.bundle_digest = digest.clone();
+        cache.bundle_id = bundle_id;
 
         info!(
             url = %url,
@@ -285,13 +290,13 @@ impl HttpBundleSource {
             }
         }
 
-        let (projections, counter, digest) = self.extract_and_compile(&tar_gz)?;
+        let (projections, counter, digest, bundle_id) = self.extract_and_compile(&tar_gz)?;
         let projection_count = projections.len();
 
         let swapped = {
             let mut caches = self.caches.write().expect("cache lock poisoned");
             let cache = caches.entry(variant.to_string()).or_default();
-            cache.try_swap(projections, counter, digest.clone())
+            cache.try_swap(projections, counter, digest.clone(), bundle_id)
         };
 
         if swapped {
@@ -421,6 +426,14 @@ impl HttpBundleSource {
         self.audit = audit;
     }
 
+    /// The bundle manifest identifier for the given variant's currently
+    /// cached bundle. `""` selects the default/literal-URL variant. Returns
+    /// `None` when that variant has no cache entry yet (nothing fetched).
+    pub fn bundle_id(&self, variant: &str) -> Option<String> {
+        let caches = self.caches.read().expect("cache lock poisoned");
+        caches.get(variant).map(|c| c.bundle_id.clone())
+    }
+
     async fn fetch_bundle_from(&self, url: &str) -> anyhow::Result<Vec<u8>> {
         let mut req = self.http_client.get(url);
         if !self.auth_token.is_empty() {
@@ -447,7 +460,12 @@ impl HttpBundleSource {
     fn extract_and_compile(
         &self,
         tar_gz: &[u8],
-    ) -> anyhow::Result<(BTreeMap<(String, String), PolicyProjection>, u64, String)> {
+    ) -> anyhow::Result<(
+        BTreeMap<(String, String), PolicyProjection>,
+        u64,
+        String,
+        String,
+    )> {
         let tar_digest = hex::encode(Sha256::digest(tar_gz));
         let tmp_dir = tempfile::tempdir().map_err(|e| anyhow::anyhow!("create temp dir: {e}"))?;
 
@@ -463,7 +481,7 @@ impl HttpBundleSource {
         // rolled-back artifact never reaches the compiler or the cache.
         let bundle_bytes =
             std::fs::read(&manifest_path).map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
-        let counter = {
+        let (counter, bundle_id) = {
             let counter_store_guard = self
                 .counter_store
                 .lock()
@@ -477,7 +495,12 @@ impl HttpBundleSource {
                 self.verifier.as_ref(),
                 counter_store,
             )?;
-            outcome.monotonic_counter
+            let bundle_id = outcome
+                .bundle
+                .as_ref()
+                .map(|b| b.bundle_id.clone())
+                .unwrap_or_default();
+            (outcome.monotonic_counter, bundle_id)
         };
 
         let compiled = self
@@ -500,7 +523,7 @@ impl HttpBundleSource {
             })
             .collect();
 
-        Ok((projections, counter, tar_digest))
+        Ok((projections, counter, tar_digest, bundle_id))
     }
 }
 
@@ -538,6 +561,11 @@ impl PolicySource for HttpBundleSource {
         names.sort();
         names.dedup();
         names
+    }
+
+    fn is_ready(&self) -> bool {
+        let caches = self.caches.read().expect("cache lock poisoned");
+        caches.values().any(|c| !c.bundle_digest.is_empty())
     }
 
     async fn refresh(
@@ -648,6 +676,7 @@ mod tests {
             projections,
             current_counter: 5,
             bundle_digest: "cafebabe".to_string(),
+            bundle_id: "test-bundle".to_string(),
         };
 
         let source = make_test_source(cache);
@@ -661,22 +690,25 @@ mod tests {
 
     #[test]
     fn bundle_cache_swap_higher_counter_succeeds() {
-        let mut cache = BundleCache::default();
-        cache.current_counter = 3;
+        let mut cache = BundleCache {
+            current_counter: 3,
+            ..Default::default()
+        };
 
         let mut new_proj = BTreeMap::new();
         new_proj.insert(
             ("openshell.sandbox.v1".to_string(), "strict".to_string()),
             PolicyProjection {
                 bytes: vec![7, 8, 9],
-                digest: hex::encode(sha2::Sha256::digest(&[7, 8, 9])),
+                digest: hex::encode(sha2::Sha256::digest([7, 8, 9])),
                 version: 4,
             },
         );
 
-        assert!(cache.try_swap(new_proj, 4, "new-digest".to_string()));
+        assert!(cache.try_swap(new_proj, 4, "new-digest".to_string(), "b1".to_string()));
         assert_eq!(cache.current_counter, 4);
         assert_eq!(cache.bundle_digest, "new-digest");
+        assert_eq!(cache.bundle_id, "b1");
         assert!(
             cache
                 .projections
@@ -686,21 +718,32 @@ mod tests {
 
     #[test]
     fn bundle_cache_swap_equal_counter_is_rejected() {
-        let mut cache = BundleCache::default();
-        cache.current_counter = 5;
-        cache.bundle_digest = "old-digest".to_string();
+        let mut cache = BundleCache {
+            current_counter: 5,
+            bundle_digest: "old-digest".to_string(),
+            bundle_id: "old-bundle".to_string(),
+            ..Default::default()
+        };
 
-        assert!(!cache.try_swap(BTreeMap::new(), 5, "new-digest".to_string()));
+        assert!(!cache.try_swap(
+            BTreeMap::new(),
+            5,
+            "new-digest".to_string(),
+            "new-bundle".to_string()
+        ));
         assert_eq!(cache.current_counter, 5);
         assert_eq!(cache.bundle_digest, "old-digest");
+        assert_eq!(cache.bundle_id, "old-bundle");
     }
 
     #[test]
     fn bundle_cache_swap_lower_counter_is_rejected() {
-        let mut cache = BundleCache::default();
-        cache.current_counter = 10;
+        let mut cache = BundleCache {
+            current_counter: 10,
+            ..Default::default()
+        };
 
-        assert!(!cache.try_swap(BTreeMap::new(), 3, "x".to_string()));
+        assert!(!cache.try_swap(BTreeMap::new(), 3, "x".to_string(), "y".to_string()));
         assert_eq!(cache.current_counter, 10);
     }
 
@@ -735,6 +778,7 @@ mod tests {
             projections,
             current_counter: 1,
             bundle_digest: String::new(),
+            bundle_id: String::new(),
         };
         let source = make_test_source(cache);
 
@@ -743,5 +787,185 @@ mod tests {
         assert_eq!(names, vec!["default", "strict"]);
         assert_eq!(source.list("other.surface"), vec!["x"]);
         assert!(source.list("missing").is_empty());
+    }
+
+    // ── HTTP source boots and verifies without any local bundle ──
+
+    fn good_bundle_yaml(counter: u64) -> String {
+        format!(
+            r#"id: test-bundle
+policy_revision: {counter}
+not_before: "2026-01-01T00:00:00Z"
+expires_at: "2099-01-01T00:00:00Z"
+manifest: []
+runtime_compatibility: {{}}
+"#
+        )
+    }
+
+    /// Minimal signer/verifier for these tests only, independent of the
+    /// crate's real Ed25519/yaml-sigil signing paths. Wraps the payload
+    /// with a leading YAML comment carrying a keyed-hash "signature" —
+    /// comments are stripped by the YAML parser, so `find_bundle_manifest`'s
+    /// plain-YAML lookup still locates this file exactly as it would a real
+    /// signed artifact, while `verify()` performs an independent integrity
+    /// check that a missing or tampered signature fails.
+    struct TestKeyedVerifier {
+        key: [u8; 32],
+    }
+
+    impl TestKeyedVerifier {
+        fn new() -> Self {
+            Self { key: [7u8; 32] }
+        }
+
+        fn mac(key: &[u8; 32], payload: &[u8]) -> String {
+            let mut hasher = Sha256::new();
+            hasher.update(key);
+            hasher.update(payload);
+            hex::encode(hasher.finalize())
+        }
+
+        fn sign(&self, payload: &str) -> Vec<u8> {
+            let mac = Self::mac(&self.key, payload.as_bytes());
+            format!("# sig:{mac}\n{payload}").into_bytes()
+        }
+    }
+
+    impl BundleVerifier for TestKeyedVerifier {
+        fn verify(&self, artifact: &[u8]) -> Result<Vec<u8>, apf_types::VerifyError> {
+            let text = std::str::from_utf8(artifact)
+                .map_err(|e| apf_types::VerifyError::Verify(format!("not utf8: {e}")))?;
+            let (sig_line, rest) = text
+                .split_once('\n')
+                .ok_or_else(|| apf_types::VerifyError::Verify("missing signature line".into()))?;
+            let sig_hex = sig_line
+                .strip_prefix("# sig:")
+                .ok_or_else(|| apf_types::VerifyError::Verify("missing signature marker".into()))?;
+            let expected = Self::mac(&self.key, rest.as_bytes());
+            if sig_hex != expected {
+                return Err(apf_types::VerifyError::Verify("signature mismatch".into()));
+            }
+            Ok(rest.as_bytes().to_vec())
+        }
+    }
+
+    /// Packs `manifest_yaml` as `manifest.yaml` inside a single-file tar.gz,
+    /// matching the archive shape `extract_and_compile` expects to unpack.
+    fn pack_bundle_tar_gz(manifest_yaml: &[u8]) -> Vec<u8> {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(manifest_yaml.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "manifest.yaml", manifest_yaml)
+                .expect("append manifest to tar");
+            builder.finish().expect("finish tar");
+        }
+        let mut gz_bytes = Vec::new();
+        {
+            let mut encoder =
+                flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::default());
+            std::io::Write::write_all(&mut encoder, &tar_bytes).expect("gzip tar");
+            encoder.finish().expect("finish gzip");
+        }
+        gz_bytes
+    }
+
+    /// Starts a local axum server that serves `body` (with the given content
+    /// type) at `/bundle.tar.gz`, and returns its base URL. The server is
+    /// bound to an OS-assigned loopback port and runs for the life of the
+    /// test binary — acceptable for a short-lived unit test.
+    async fn serve_bundle(body: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        let app = axum::Router::new().route(
+            "/bundle.tar.gz",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test bundle");
+        });
+        format!("http://{addr}/bundle.tar.gz")
+    }
+
+    #[tokio::test]
+    async fn http_source_loads_without_a_local_bundle_path() {
+        let verifier = TestKeyedVerifier::new();
+        let artifact = verifier.sign(&good_bundle_yaml(1));
+        let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let compiler = apf_compiler::Compiler::new(vec![]);
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+            .expect("build http bundle source");
+        src.set_counter_store(
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store"),
+        );
+
+        assert!(!src.is_ready(), "source should not be ready before load");
+        src.load_initial()
+            .await
+            .expect("load_initial should succeed from the remote bundle alone");
+        assert!(src.is_ready());
+        assert_eq!(src.bundle_id(""), Some("test-bundle".to_string()));
+    }
+
+    #[tokio::test]
+    async fn http_source_rejects_unsigned_bundle() {
+        let verifier = TestKeyedVerifier::new();
+        // Plain YAML bytes, never passed through `verifier.sign(...)` — no
+        // `# sig:` marker line, so `verify()` rejects it.
+        let unsigned = good_bundle_yaml(1).into_bytes();
+        let url = serve_bundle(pack_bundle_tar_gz(&unsigned)).await;
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let compiler = apf_compiler::Compiler::new(vec![]);
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+            .expect("build http bundle source");
+        src.set_counter_store(
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store"),
+        );
+
+        let result = src.load_initial().await;
+        assert!(result.is_err(), "unsigned bundle should be rejected");
+        assert!(!src.is_ready());
+    }
+
+    #[tokio::test]
+    async fn http_source_rejects_replayed_counter() {
+        let verifier = TestKeyedVerifier::new();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+
+        // Pre-seed the persistent counter store at the same revision the
+        // remote bundle will claim, simulating a bundle this host already
+        // accepted in a prior run.
+        {
+            let mut seed_store =
+                CounterStore::load_or_init(&counter_path).expect("init counter store");
+            seed_store.check_and_advance(1).expect("seed counter");
+        }
+
+        let artifact = verifier.sign(&good_bundle_yaml(1));
+        let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
+
+        let compiler = apf_compiler::Compiler::new(vec![]);
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+            .expect("build http bundle source");
+        src.set_counter_store(
+            CounterStore::load_or_init(&counter_path).expect("reload counter store"),
+        );
+
+        let result = src.load_initial().await;
+        assert!(result.is_err(), "replayed counter should be rejected");
     }
 }

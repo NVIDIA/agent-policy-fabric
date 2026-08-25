@@ -76,6 +76,15 @@ pub trait PolicySource: Send + Sync {
     /// All policy names available for `surface_id`.
     fn list(&self, surface_id: &str) -> Vec<String>;
 
+    /// Whether this source has a verified bundle loaded and can serve
+    /// requests. `LocalBundleSource` is always ready once constructed — the
+    /// initial local bundle is loaded synchronously before it exists.
+    /// `HttpBundleSource` overrides this: it is not ready until at least one
+    /// variant has completed a successful fetch and verification.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     /// Reload the policy bundle.
     ///
     /// - `LocalBundleSource`: `bundle_path` is required; points to the new

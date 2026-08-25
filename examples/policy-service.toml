@@ -23,7 +23,7 @@ key_id = "apf-dev"
 
 [policy_source]
 backend = "artifactory"
-artifactory_url = "https://REDACTED-REGISTRY/generic-local/signed-bundles/governed-{variant}/latest.tar.gz"
+artifactory_url = "<artifact-base-url>/signed-bundles/governed-{variant}/latest.tar.gz"
 artifactory_token_file = "/etc/apf/artifactory-token"
 artifactory_poll_interval_secs = 30
 

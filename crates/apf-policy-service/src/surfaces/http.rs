@@ -6,7 +6,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use axum::Router;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
@@ -18,13 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use apf_proto::runtime_v1alpha1::{OpenShellContext, RuntimeContext, runtime_context};
 
-use crate::runtime::core::PolicyServiceCore;
+use crate::runtime::core::DocumentSigner;
 use crate::source::{PolicyResolver, PolicySource};
 
 /// Shared state for the HTTP surface handlers.
 #[derive(Clone)]
 pub struct HttpState {
-    pub core: Arc<ArcSwap<PolicyServiceCore>>,
     pub source: Arc<dyn PolicySource>,
     pub resolver: Arc<dyn PolicyResolver>,
     /// Empty = no restriction; non-empty = only these kinds are served.
@@ -32,6 +30,11 @@ pub struct HttpState {
     /// Gates the non-ops routes. `None` means they aren't mounted at all —
     /// see `router()`.
     pub bearer_token: Option<Arc<str>>,
+    /// Present when the daemon signs vended documents. Independent of which
+    /// `source` is active — the signing key is a CLI-level identity, not
+    /// bundle content — so this is populated the same way for local and
+    /// HTTP policy sources.
+    pub document_signer: Option<Arc<DocumentSigner>>,
 }
 
 impl HttpState {
@@ -151,7 +154,7 @@ struct ReadyzBody {
 }
 
 async fn readyz(State(s): State<HttpState>) -> (StatusCode, Json<ReadyzBody>) {
-    if s.core.load().bundle.digest_hex.is_empty() {
+    if !s.source.is_ready() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ReadyzBody {
@@ -300,7 +303,7 @@ struct JwkEntry {
 
 async fn jwks(State(s): State<HttpState>) -> Json<JwksResponse> {
     let mut keys = Vec::new();
-    if let Some(ref vi) = s.core.load().document_signer {
+    if let Some(ref vi) = s.document_signer {
         let pk = vi.signing_key.verifying_key();
         keys.push(JwkEntry {
             kty: "OKP".to_string(),

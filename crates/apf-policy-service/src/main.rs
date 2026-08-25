@@ -332,11 +332,6 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         info!(path = %config_path.display(), "loaded config");
     }
 
-    let bundle_path = args
-        .bundle_path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("--bundle-path (or APF_BUNDLE_PATH) is required"))?;
-
     let trust_store = TrustStore::load_from_dir(&args.trust_root_dir).map_err(|e| {
         anyhow::anyhow!(
             "load trust roots from {}: {e}",
@@ -372,6 +367,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             signing_key: sk,
         }
     };
+    let signer = Arc::new(document_signer);
 
     let mut counter_store = CounterStore::load_or_init(&args.counter_store)
         .map_err(|e| anyhow::anyhow!("load counter store: {e}"))?;
@@ -383,68 +379,25 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
 
     let audit = PolicyServiceAudit::disabled();
 
-    let bundle_bytes = std::fs::read(&bundle_path)
-        .map_err(|e| anyhow::anyhow!("read bundle {}: {e}", bundle_path.display()))?;
-
-    let default_verifier = YamlSigilVerifier::new(trust_store.clone());
-
-    let loaded_bundle = load_and_verify_bundle(
-        &bundle_bytes,
-        &bundle_path,
-        &default_verifier,
-        &counter_store,
-        &audit,
-        SystemTime::now(),
-    )?;
-    counter_store
-        .check_and_advance(loaded_bundle.monotonic_counter)
-        .map_err(|e| anyhow::anyhow!("counter advance: {e}"))?;
-    info!(
-        path = %bundle_path.display(),
-        digest = %loaded_bundle.digest_hex,
-        counter = loaded_bundle.monotonic_counter,
-        "bundle verified and loaded"
-    );
-
-    let compiler = Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]);
-
-    let parsed_bundle = loaded_bundle.bundle.clone();
-    let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("."));
-    let members = parsed_bundle
-        .load_members(bundle_dir)
-        .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
-
     let allowed_kinds: Arc<HashSet<String>> = if args.surfaces.is_empty() {
         Arc::new(HashSet::new())
     } else {
         Arc::new(args.surfaces.iter().cloned().collect())
     };
 
-    let compiled = compiler
-        .lower_members(&members, None)
-        .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
-
-    if compiled.surfaces.is_empty() {
-        warn!(path = %bundle_path.display(), "bundle produced no projections; no projectors registered");
-    }
-    for s in &compiled.surfaces {
-        info!(kind = %s.kind, name = %s.name, bytes = s.bytes.len(), "loaded projection");
-    }
-    let projections = surfaces_to_projections(compiled.surfaces);
-
-    let signer = Arc::new(document_signer);
-    let core = Arc::new(ArcSwap::new(Arc::new(PolicyServiceCore {
-        bundle: loaded_bundle,
-        projections,
-        document_signer: Some(Arc::clone(&signer)),
-        audit: audit.clone(),
-    })));
-
-    let source: Arc<dyn PolicySource> = if args.policy_source == POLICY_SOURCE_HTTP {
+    // Local and HTTP bundle loading are mutually exclusive: each branch
+    // reads, verifies, and advances the anti-replay counter only for its
+    // own source. Neither branch touches the other's bundle path — in
+    // particular, HTTP mode never requires or reads a local bundle file,
+    // and never writes the fetched remote bundle to a local path.
+    let (source, bundle_id): (Arc<dyn PolicySource>, String) = if args.policy_source
+        == POLICY_SOURCE_HTTP
+    {
         let url = args.bundle_source_url.as_ref().ok_or_else(|| {
             anyhow::anyhow!("--bundle-source-url required when --policy-source=http")
         })?;
         let token = resolve_bundle_source_token(args)?;
+        let compiler = Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]);
         let mut src = HttpBundleSource::new(
             url,
             &token,
@@ -454,18 +407,79 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("build http bundle source: {e}"))?;
         src.set_counter_store(counter_store);
         src.set_audit(audit.clone());
+        // Fails closed: an unreachable, unsigned, expired, incompatible, or
+        // replayed remote bundle aborts startup here via `?`.
         src.load_initial().await?;
+        let bundle_id = src.bundle_id("").unwrap_or_default();
+        info!(url, bundle_id = %bundle_id, "http bundle source: initial bundle verified and loaded");
         let arc = Arc::new(src);
         arc.start_polling(Duration::from_secs(args.bundle_source_poll_interval_secs));
-        arc
+        (arc as Arc<dyn PolicySource>, bundle_id)
     } else {
+        let bundle_path = args.bundle_path.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--bundle-path (or APF_BUNDLE_PATH) is required when --policy-source=local"
+            )
+        })?;
+
+        let bundle_bytes = std::fs::read(&bundle_path)
+            .map_err(|e| anyhow::anyhow!("read bundle {}: {e}", bundle_path.display()))?;
+
+        let default_verifier = YamlSigilVerifier::new(trust_store.clone());
+
+        let loaded_bundle = load_and_verify_bundle(
+            &bundle_bytes,
+            &bundle_path,
+            &default_verifier,
+            &counter_store,
+            &audit,
+            SystemTime::now(),
+        )?;
+        counter_store
+            .check_and_advance(loaded_bundle.monotonic_counter)
+            .map_err(|e| anyhow::anyhow!("counter advance: {e}"))?;
+        info!(
+            path = %bundle_path.display(),
+            digest = %loaded_bundle.digest_hex,
+            counter = loaded_bundle.monotonic_counter,
+            "bundle verified and loaded"
+        );
+
+        let compiler = Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]);
+
+        let parsed_bundle = loaded_bundle.bundle.clone();
+        let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("."));
+        let members = parsed_bundle
+            .load_members(bundle_dir)
+            .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
+
+        let compiled = compiler
+            .lower_members(&members, None)
+            .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
+
+        if compiled.surfaces.is_empty() {
+            warn!(path = %bundle_path.display(), "bundle produced no projections; no projectors registered");
+        }
+        for s in &compiled.surfaces {
+            info!(kind = %s.kind, name = %s.name, bytes = s.bytes.len(), "loaded projection");
+        }
+        let projections = surfaces_to_projections(compiled.surfaces);
+        let bundle_id = parsed_bundle.bundle_id.clone();
+
+        let core = Arc::new(ArcSwap::new(Arc::new(PolicyServiceCore {
+            bundle: loaded_bundle,
+            projections,
+            document_signer: Some(Arc::clone(&signer)),
+            audit: audit.clone(),
+        })));
+
         let allowed_surfaces_set: Option<std::collections::BTreeSet<String>> =
             if args.surfaces.is_empty() {
                 None
             } else {
                 Some(args.surfaces.iter().cloned().collect())
             };
-        Arc::new(LocalBundleSource::with_reload(
+        let src = LocalBundleSource::with_reload(
             Arc::clone(&core),
             Arc::new(YamlSigilVerifier::new(trust_store.clone())),
             CounterStore::load_or_init(&args.counter_store)
@@ -474,7 +488,8 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             Some(Arc::clone(&signer)),
             allowed_surfaces_set,
             audit.clone(),
-        ))
+        );
+        (Arc::new(src) as Arc<dyn PolicySource>, bundle_id)
     };
 
     let resolver: Arc<dyn PolicyResolver> = match args.resolver.as_str() {
@@ -494,7 +509,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&allowed_kinds),
         Some(Arc::clone(&signer)),
         args.document_ttl_secs,
-        parsed_bundle.bundle_id.clone(),
+        bundle_id.clone(),
     ));
 
     if args.socket.exists() {
@@ -544,11 +559,11 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         }
         info!(%addr, "HTTP surface enabled");
         let http_state = HttpState {
-            core: Arc::clone(&core),
             source: Arc::clone(&source),
             resolver: Arc::clone(&resolver),
             allowed_kinds: Arc::clone(&allowed_kinds),
             bearer_token: Some(bearer_token),
+            document_signer: Some(Arc::clone(&signer)),
         };
         let app = http_router(http_state);
         let listener_tcp = tokio::net::TcpListener::bind(addr).await?;
@@ -565,4 +580,88 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apf_bundle::Ed25519Signer;
+    use apf_types::BundleSigner;
+
+    fn good_bundle_yaml(counter: u64) -> String {
+        format!(
+            r#"id: test-bundle
+policy_revision: {counter}
+not_before: "2026-01-01T00:00:00Z"
+expires_at: "2099-01-01T00:00:00Z"
+manifest: []
+runtime_compatibility: {{}}
+"#
+        )
+    }
+
+    #[test]
+    fn load_and_verify_bundle_rejects_tampered_content() {
+        let signer = Ed25519Signer::generate();
+        let verifier = signer.verifier();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_store =
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store");
+
+        let mut artifact = signer
+            .sign(good_bundle_yaml(1).as_bytes())
+            .expect("sign bundle");
+        let last = artifact.len() - 1;
+        artifact[last] ^= 0xFF;
+
+        let bundle_path = tmp.path().join("bundle.yaml");
+        let result = load_and_verify_bundle(
+            &artifact,
+            &bundle_path,
+            &verifier,
+            &counter_store,
+            &PolicyServiceAudit::disabled(),
+            SystemTime::now(),
+        );
+        assert!(result.is_err(), "tampered bundle should be rejected");
+    }
+
+    #[test]
+    fn load_and_verify_bundle_rejects_replayed_counter() {
+        let signer = Ed25519Signer::generate();
+        let verifier = signer.verifier();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let mut counter_store =
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store");
+
+        let first = signer
+            .sign(good_bundle_yaml(5).as_bytes())
+            .expect("sign bundle");
+        let bundle_path = tmp.path().join("bundle.yaml");
+        let loaded = load_and_verify_bundle(
+            &first,
+            &bundle_path,
+            &verifier,
+            &counter_store,
+            &PolicyServiceAudit::disabled(),
+            SystemTime::now(),
+        )
+        .expect("first load should succeed");
+        counter_store
+            .check_and_advance(loaded.monotonic_counter)
+            .expect("advance counter");
+
+        let replayed = signer
+            .sign(good_bundle_yaml(5).as_bytes())
+            .expect("sign bundle");
+        let result = load_and_verify_bundle(
+            &replayed,
+            &bundle_path,
+            &verifier,
+            &counter_store,
+            &PolicyServiceAudit::disabled(),
+            SystemTime::now(),
+        );
+        assert!(result.is_err(), "replayed counter should be rejected");
+    }
 }
