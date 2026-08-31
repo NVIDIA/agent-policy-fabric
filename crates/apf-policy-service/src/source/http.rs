@@ -14,7 +14,6 @@
 //! HEAD-first optimization avoids downloading unchanged bundles.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -475,13 +474,15 @@ impl HttpBundleSource {
             .unpack(tmp_dir.path())
             .map_err(|e| anyhow::anyhow!("unpack tar.gz: {e}"))?;
 
-        let manifest_path = find_bundle_manifest(tmp_dir.path())?;
+        let manifest_path =
+            apf_bundle::find_bundle_manifest(tmp_dir.path(), self.verifier.as_ref())
+                .map_err(|e| anyhow::anyhow!("find bundle manifest: {e}"))?;
 
         // Verify signature + counter before compiling, so an unsigned or
         // rolled-back artifact never reaches the compiler or the cache.
         let bundle_bytes =
             std::fs::read(&manifest_path).map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
-        let (counter, bundle_id) = {
+        let (counter, parsed_bundle) = {
             let counter_store_guard = self
                 .counter_store
                 .lock()
@@ -495,17 +496,22 @@ impl HttpBundleSource {
                 self.verifier.as_ref(),
                 counter_store,
             )?;
-            let bundle_id = outcome
+            let parsed_bundle = outcome
                 .bundle
-                .as_ref()
-                .map(|b| b.bundle_id.clone())
-                .unwrap_or_default();
-            (outcome.monotonic_counter, bundle_id)
+                .ok_or_else(|| anyhow::anyhow!("verified outcome missing parsed bundle"))?;
+            (outcome.monotonic_counter, parsed_bundle)
         };
+        let bundle_id = parsed_bundle.bundle_id.clone();
 
+        // Compile from the already-verified payload's members, not the raw
+        // on-disk file.
+        let bundle_dir = manifest_path.parent().unwrap_or_else(|| tmp_dir.path());
+        let members = parsed_bundle
+            .load_members(bundle_dir)
+            .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
         let compiled = self
             .compiler
-            .compile_file(&manifest_path)
+            .lower_members(&members, None)
             .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
         let projections = apf_compiler::surfaces_to_projections(compiled.surfaces)
@@ -581,53 +587,6 @@ impl PolicySource for HttpBundleSource {
             version: self.current_counter(),
         })
     }
-}
-
-/// Walk the extracted archive looking for the bundle manifest — the first
-/// yaml-sigil signed artifact whose payload deserialises as a [`Bundle`].
-///
-/// Candidates are sorted so `manifest.yaml` and files whose name contains
-/// `bundle` are tried first, avoiding unnecessary parse attempts in archives
-/// with many YAML files.
-fn find_bundle_manifest(extract_dir: &Path) -> anyhow::Result<PathBuf> {
-    let mut candidates = Vec::new();
-    collect_yaml_files(extract_dir, &mut candidates)?;
-
-    candidates.sort_by_key(|p| {
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name == "manifest.yaml" {
-            0
-        } else if name.contains("bundle") {
-            1
-        } else {
-            2
-        }
-    });
-
-    for path in &candidates {
-        if let Ok(bytes) = std::fs::read(path)
-            && apf_bundle::Bundle::from_payload_bytes(&bytes).is_ok()
-        {
-            return Ok(path.clone());
-        }
-    }
-    anyhow::bail!(
-        "no bundle manifest (.yaml) found in extracted archive at {}",
-        extract_dir.display()
-    )
-}
-
-fn collect_yaml_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_yaml_files(&path, out)?;
-        } else if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -803,18 +762,14 @@ runtime_compatibility: {{}}
         )
     }
 
-    /// Minimal signer/verifier for these tests only, independent of the
-    /// crate's real Ed25519/yaml-sigil signing paths. Wraps the payload
-    /// with a leading YAML comment carrying a keyed-hash "signature" —
-    /// comments are stripped by the YAML parser, so `find_bundle_manifest`'s
-    /// plain-YAML lookup still locates this file exactly as it would a real
-    /// signed artifact, while `verify()` performs an independent integrity
-    /// check that a missing or tampered signature fails.
-    struct TestKeyedVerifier {
+    /// Minimal signer/verifier for these tests, shaped like a real
+    /// yaml-sigil artifact: a payload document plus a separate signature
+    /// document.
+    struct TestSignedVerifier {
         key: [u8; 32],
     }
 
-    impl TestKeyedVerifier {
+    impl TestSignedVerifier {
         fn new() -> Self {
             Self { key: [7u8; 32] }
         }
@@ -828,25 +783,25 @@ runtime_compatibility: {{}}
 
         fn sign(&self, payload: &str) -> Vec<u8> {
             let mac = Self::mac(&self.key, payload.as_bytes());
-            format!("# sig:{mac}\n{payload}").into_bytes()
+            format!("{payload}---\nsig: {mac}\n").into_bytes()
         }
     }
 
-    impl BundleVerifier for TestKeyedVerifier {
+    impl BundleVerifier for TestSignedVerifier {
         fn verify(&self, artifact: &[u8]) -> Result<Vec<u8>, apf_types::VerifyError> {
             let text = std::str::from_utf8(artifact)
                 .map_err(|e| apf_types::VerifyError::Verify(format!("not utf8: {e}")))?;
-            let (sig_line, rest) = text
-                .split_once('\n')
-                .ok_or_else(|| apf_types::VerifyError::Verify("missing signature line".into()))?;
-            let sig_hex = sig_line
-                .strip_prefix("# sig:")
-                .ok_or_else(|| apf_types::VerifyError::Verify("missing signature marker".into()))?;
-            let expected = Self::mac(&self.key, rest.as_bytes());
-            if sig_hex != expected {
+            let (payload, sig_doc) = text.split_once("---\n").ok_or_else(|| {
+                apf_types::VerifyError::Verify("missing signature document".into())
+            })?;
+            let sig_hex = sig_doc
+                .strip_prefix("sig: ")
+                .and_then(|s| s.split_whitespace().next())
+                .ok_or_else(|| apf_types::VerifyError::Verify("missing signature field".into()))?;
+            if sig_hex != Self::mac(&self.key, payload.as_bytes()) {
                 return Err(apf_types::VerifyError::Verify("signature mismatch".into()));
             }
-            Ok(rest.as_bytes().to_vec())
+            Ok(payload.as_bytes().to_vec())
         }
     }
 
@@ -899,8 +854,12 @@ runtime_compatibility: {{}}
 
     #[tokio::test]
     async fn http_source_loads_without_a_local_bundle_path() {
-        let verifier = TestKeyedVerifier::new();
+        let verifier = TestSignedVerifier::new();
         let artifact = verifier.sign(&good_bundle_yaml(1));
+        assert!(
+            apf_bundle::Bundle::from_payload_bytes(&artifact).is_err(),
+            "a signed artifact should not parse as a bare Bundle"
+        );
         let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
 
         let tmp = tempfile::tempdir().expect("create temp dir");
@@ -921,9 +880,9 @@ runtime_compatibility: {{}}
 
     #[tokio::test]
     async fn http_source_rejects_unsigned_bundle() {
-        let verifier = TestKeyedVerifier::new();
+        let verifier = TestSignedVerifier::new();
         // Plain YAML bytes, never passed through `verifier.sign(...)` — no
-        // `# sig:` marker line, so `verify()` rejects it.
+        // signature document, so `verify()` rejects it.
         let unsigned = good_bundle_yaml(1).into_bytes();
         let url = serve_bundle(pack_bundle_tar_gz(&unsigned)).await;
 
@@ -942,7 +901,7 @@ runtime_compatibility: {{}}
 
     #[tokio::test]
     async fn http_source_rejects_replayed_counter() {
-        let verifier = TestKeyedVerifier::new();
+        let verifier = TestSignedVerifier::new();
         let tmp = tempfile::tempdir().expect("create temp dir");
         let counter_path = tmp.path().join("counter");
 

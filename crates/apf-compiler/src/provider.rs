@@ -170,6 +170,8 @@ struct CredentialDef {
     discoverable: Option<bool>,
     #[serde(default)]
     required: bool,
+    #[serde(default)]
+    description: String,
 }
 
 // Tagged on `kind` — the discriminator over the supported credential sources.
@@ -178,6 +180,10 @@ struct CredentialDef {
 enum SourceDef {
     HostEnv(HostEnvDef),
     Oauth2(OAuth2Def),
+    External(ExternalDef),
+    GoogleServiceAccountJwt(GoogleServiceAccountJwtDef),
+    AwsStsAssumeRole(AwsStsAssumeRoleDef),
+    TokenGrant(TokenGrantDef),
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +191,21 @@ enum SourceDef {
 struct HostEnvDef {
     #[serde(default)]
     name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalDef {
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "tokenUrl", default)]
+    token_url: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(rename = "refreshBeforeSeconds", default)]
+    refresh_before_seconds: i64,
+    #[serde(rename = "maxLifetimeSeconds", default)]
+    max_lifetime_seconds: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +223,86 @@ struct OAuth2Def {
     max_lifetime_seconds: i64,
     #[serde(default)]
     parameters: HashMap<String, String>,
+    #[serde(rename = "additionalOutputs", default)]
+    additional_outputs: Vec<RefreshOutputDef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RefreshMaterialDef {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    secret: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RefreshOutputDef {
+    output: String,
+    credential: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoogleServiceAccountJwtDef {
+    #[serde(rename = "refreshBeforeSeconds", default)]
+    refresh_before_seconds: i64,
+    #[serde(rename = "maxLifetimeSeconds", default)]
+    max_lifetime_seconds: i64,
+    #[serde(default)]
+    material: Vec<RefreshMaterialDef>,
+    #[serde(rename = "additionalOutputs", default)]
+    additional_outputs: Vec<RefreshOutputDef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AwsStsAssumeRoleDef {
+    #[serde(rename = "refreshBeforeSeconds", default)]
+    refresh_before_seconds: i64,
+    #[serde(rename = "maxLifetimeSeconds", default)]
+    max_lifetime_seconds: i64,
+    #[serde(default)]
+    material: Vec<RefreshMaterialDef>,
+    #[serde(rename = "additionalOutputs", default)]
+    additional_outputs: Vec<RefreshOutputDef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TokenGrantAudienceOverrideDef {
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    port: u32,
+    #[serde(default)]
+    path: String,
+    audience: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TokenGrantDef {
+    #[serde(rename = "tokenEndpoint")]
+    token_endpoint: String,
+    #[serde(default)]
+    audience: String,
+    #[serde(rename = "jwtSvidAudience", default)]
+    jwt_svid_audience: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(rename = "cacheTtlSeconds", default)]
+    cache_ttl_seconds: i64,
+    #[serde(rename = "audienceOverrides", default)]
+    audience_overrides: Vec<TokenGrantAudienceOverrideDef>,
+    #[serde(rename = "clientAssertionType", default)]
+    client_assertion_type: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +354,7 @@ fn to_credential(c: CredentialDef) -> ir::Credential {
         name: c.name,
         discoverable: c.discoverable,
         required: c.required,
+        description: c.description,
     }
 }
 
@@ -260,6 +362,13 @@ fn to_source(s: SourceDef) -> ir::CredentialSource {
     use ir::credential_source::Kind;
     let kind = match s {
         SourceDef::HostEnv(h) => Kind::HostEnv(ir::HostEnvSource { name: h.name }),
+        SourceDef::External(e) => Kind::External(ir::ExternalSource {
+            name: e.name,
+            token_url: e.token_url,
+            scopes: e.scopes,
+            refresh_before_seconds: e.refresh_before_seconds,
+            max_lifetime_seconds: e.max_lifetime_seconds,
+        }),
         SourceDef::Oauth2(o) => Kind::Oauth2(ir::OAuth2Source {
             grant: o.grant,
             token_url: o.token_url,
@@ -267,9 +376,59 @@ fn to_source(s: SourceDef) -> ir::CredentialSource {
             refresh_before_seconds: o.refresh_before_seconds,
             max_lifetime_seconds: o.max_lifetime_seconds,
             parameters: o.parameters,
+            additional_outputs: o.additional_outputs.into_iter().map(to_output).collect(),
+        }),
+        SourceDef::GoogleServiceAccountJwt(g) => {
+            Kind::GoogleServiceAccountJwt(ir::GoogleServiceAccountJwtSource {
+                refresh_before_seconds: g.refresh_before_seconds,
+                max_lifetime_seconds: g.max_lifetime_seconds,
+                material: g.material.into_iter().map(to_material).collect(),
+                additional_outputs: g.additional_outputs.into_iter().map(to_output).collect(),
+            })
+        }
+        SourceDef::AwsStsAssumeRole(a) => Kind::AwsStsAssumeRole(ir::AwsStsAssumeRoleSource {
+            refresh_before_seconds: a.refresh_before_seconds,
+            max_lifetime_seconds: a.max_lifetime_seconds,
+            material: a.material.into_iter().map(to_material).collect(),
+            additional_outputs: a.additional_outputs.into_iter().map(to_output).collect(),
+        }),
+        SourceDef::TokenGrant(t) => Kind::TokenGrant(ir::TokenGrantSource {
+            token_endpoint: t.token_endpoint,
+            audience: t.audience,
+            jwt_svid_audience: t.jwt_svid_audience,
+            scopes: t.scopes,
+            cache_ttl_seconds: t.cache_ttl_seconds,
+            audience_overrides: t.audience_overrides.into_iter().map(to_override).collect(),
+            client_assertion_type: t.client_assertion_type,
         }),
     };
     ir::CredentialSource { kind: Some(kind) }
+}
+
+fn to_material(m: RefreshMaterialDef) -> ir::RefreshMaterial {
+    ir::RefreshMaterial {
+        name: m.name,
+        description: m.description,
+        required: m.required,
+        secret: m.secret,
+    }
+}
+
+fn to_output(o: RefreshOutputDef) -> ir::RefreshOutput {
+    ir::RefreshOutput {
+        output: o.output,
+        credential: o.credential,
+    }
+}
+
+fn to_override(o: TokenGrantAudienceOverrideDef) -> ir::TokenGrantAudienceOverride {
+    ir::TokenGrantAudienceOverride {
+        host: o.host,
+        port: o.port,
+        path: o.path,
+        audience: o.audience,
+        scopes: o.scopes,
+    }
 }
 
 #[cfg(test)]

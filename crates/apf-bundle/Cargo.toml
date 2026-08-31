@@ -22,8 +22,10 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 thiserror = "2"
 
+yaml-sigil-core         = { version = "0.1.1-rc.3", registry = "artifactory", default-features = false }
 yaml-sigil-verification = { workspace = true }
 yaml-sigil-traits       = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile           = "3"
+yaml-sigil-signing = { workspace = true }

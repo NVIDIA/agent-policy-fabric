@@ -9,11 +9,15 @@ use tokio::sync::broadcast::error::RecvError;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::{info, warn};
 
-use crate::proto::openshell::sandbox::v1::NetworkEndpoint;
+use crate::proto::openshell::sandbox::v1::{
+    GraphqlOperation, L7Allow, L7DenyRule, L7QueryMatcher, L7Rule, McpOptions, NetworkEndpoint,
+};
 use crate::proto::openshell::v1::{
-    ImportProviderProfilesRequest, ProviderProfile, ProviderProfileCredential,
-    ProviderProfileDiscovery, ProviderProfileImportItem, UpdateProviderProfilesRequest,
-    open_shell_client::OpenShellClient,
+    ImportProviderProfilesRequest, ProviderCredentialRefresh, ProviderCredentialRefreshMaterial,
+    ProviderCredentialRefreshOutput, ProviderCredentialRefreshStrategy,
+    ProviderCredentialTokenGrant, ProviderCredentialTokenGrantAudienceOverride, ProviderProfile,
+    ProviderProfileCredential, ProviderProfileDiscovery, ProviderProfileImportItem,
+    UpdateProviderProfilesRequest, open_shell_client::OpenShellClient,
 };
 use apf_policy_client::PolicyClientHandle;
 use apf_proto::ProviderProfileSet;
@@ -67,6 +71,143 @@ pub struct CredentialYaml {
     pub query_param: String,
     #[serde(default)]
     pub path_template: String,
+    #[serde(default)]
+    pub refresh: Option<RefreshYaml>,
+    #[serde(default)]
+    pub token_grant: Option<TokenGrantYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RefreshYaml {
+    #[serde(default)]
+    strategy: String,
+    #[serde(default)]
+    token_url: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    refresh_before_seconds: i64,
+    #[serde(default)]
+    max_lifetime_seconds: i64,
+    #[serde(default)]
+    material: Vec<RefreshMaterialYaml>,
+    #[serde(default)]
+    additional_outputs: Vec<RefreshOutputYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RefreshMaterialYaml {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    secret: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RefreshOutputYaml {
+    #[serde(default)]
+    output: String,
+    #[serde(default)]
+    credential: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TokenGrantYaml {
+    #[serde(default)]
+    token_endpoint: String,
+    #[serde(default)]
+    audience: String,
+    #[serde(default)]
+    jwt_svid_audience: String,
+    #[serde(default)]
+    client_assertion_type: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    cache_ttl_seconds: i64,
+    #[serde(default)]
+    audience_overrides: Vec<TokenGrantAudienceOverrideYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TokenGrantAudienceOverrideYaml {
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    port: u32,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    audience: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+fn refresh_strategy_from_str(s: &str) -> i32 {
+    match s {
+        "static" => ProviderCredentialRefreshStrategy::Static,
+        "external" => ProviderCredentialRefreshStrategy::External,
+        "oauth2_refresh_token" => ProviderCredentialRefreshStrategy::Oauth2RefreshToken,
+        "oauth2_client_credentials" => ProviderCredentialRefreshStrategy::Oauth2ClientCredentials,
+        "google_service_account_jwt" => ProviderCredentialRefreshStrategy::GoogleServiceAccountJwt,
+        "aws_sts_assume_role" => ProviderCredentialRefreshStrategy::AwsStsAssumeRole,
+        _ => ProviderCredentialRefreshStrategy::Unspecified,
+    }
+    .into()
+}
+
+fn refresh_from_yaml(r: RefreshYaml) -> ProviderCredentialRefresh {
+    ProviderCredentialRefresh {
+        strategy: refresh_strategy_from_str(&r.strategy),
+        token_url: r.token_url,
+        scopes: r.scopes,
+        refresh_before_seconds: r.refresh_before_seconds,
+        max_lifetime_seconds: r.max_lifetime_seconds,
+        material: r
+            .material
+            .into_iter()
+            .map(|m| ProviderCredentialRefreshMaterial {
+                name: m.name,
+                description: m.description,
+                required: m.required,
+                secret: m.secret,
+            })
+            .collect(),
+        additional_outputs: r
+            .additional_outputs
+            .into_iter()
+            .map(|o| ProviderCredentialRefreshOutput {
+                output: o.output,
+                credential: o.credential,
+            })
+            .collect(),
+    }
+}
+
+fn token_grant_from_yaml(t: TokenGrantYaml) -> ProviderCredentialTokenGrant {
+    ProviderCredentialTokenGrant {
+        token_endpoint: t.token_endpoint,
+        audience: t.audience,
+        jwt_svid_audience: t.jwt_svid_audience,
+        client_assertion_type: t.client_assertion_type,
+        scopes: t.scopes,
+        cache_ttl_seconds: t.cache_ttl_seconds,
+        audience_overrides: t
+            .audience_overrides
+            .into_iter()
+            .map(|o| ProviderCredentialTokenGrantAudienceOverride {
+                host: o.host,
+                port: o.port,
+                path: o.path,
+                audience: o.audience,
+                scopes: o.scopes,
+            })
+            .collect(),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -85,6 +226,168 @@ pub struct EndpointYaml {
     tls: String,
     #[serde(default)]
     path: String,
+    #[serde(default)]
+    ports: Vec<u32>,
+    #[serde(default)]
+    allowed_ips: Vec<String>,
+    #[serde(default)]
+    rules: Vec<L7RuleYaml>,
+    #[serde(default)]
+    deny_rules: Vec<L7DenyRuleYaml>,
+    #[serde(default)]
+    allow_encoded_slash: bool,
+    #[serde(default)]
+    websocket_credential_rewrite: bool,
+    #[serde(default)]
+    request_body_credential_rewrite: bool,
+    #[serde(default)]
+    persisted_queries: String,
+    #[serde(default)]
+    graphql_persisted_queries: std::collections::HashMap<String, GraphqlOperationYaml>,
+    #[serde(default)]
+    graphql_max_body_bytes: u32,
+    #[serde(default)]
+    json_rpc_max_body_bytes: u32,
+    #[serde(default)]
+    mcp: Option<McpOptionsYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct L7RuleYaml {
+    #[serde(default)]
+    allow: Option<L7AllowYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct L7AllowYaml {
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    query: std::collections::HashMap<String, L7QueryMatcherYaml>,
+    #[serde(default)]
+    operation_type: String,
+    #[serde(default)]
+    operation_name: String,
+    #[serde(default)]
+    fields: Vec<String>,
+    #[serde(default)]
+    params: std::collections::HashMap<String, L7QueryMatcherYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct L7DenyRuleYaml {
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    query: std::collections::HashMap<String, L7QueryMatcherYaml>,
+    #[serde(default)]
+    operation_type: String,
+    #[serde(default)]
+    operation_name: String,
+    #[serde(default)]
+    fields: Vec<String>,
+    #[serde(default)]
+    params: std::collections::HashMap<String, L7QueryMatcherYaml>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct L7QueryMatcherYaml {
+    #[serde(default)]
+    glob: String,
+    #[serde(default)]
+    any: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct GraphqlOperationYaml {
+    #[serde(default)]
+    operation_type: String,
+    #[serde(default)]
+    operation_name: String,
+    #[serde(default)]
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct McpOptionsYaml {
+    #[serde(default)]
+    strict_tool_names: Option<bool>,
+    #[serde(default)]
+    allow_all_known_mcp_methods: Option<bool>,
+}
+
+fn l7query_from_yaml(m: L7QueryMatcherYaml) -> L7QueryMatcher {
+    L7QueryMatcher {
+        glob: m.glob,
+        any: m.any,
+    }
+}
+
+fn l7rule_from_yaml(r: L7RuleYaml) -> L7Rule {
+    L7Rule {
+        allow: r.allow.map(|a| L7Allow {
+            method: a.method,
+            path: a.path,
+            command: a.command,
+            query: a
+                .query
+                .into_iter()
+                .map(|(k, v)| (k, l7query_from_yaml(v)))
+                .collect(),
+            operation_type: a.operation_type,
+            operation_name: a.operation_name,
+            fields: a.fields,
+            params: a
+                .params
+                .into_iter()
+                .map(|(k, v)| (k, l7query_from_yaml(v)))
+                .collect(),
+        }),
+    }
+}
+
+fn l7deny_rule_from_yaml(d: L7DenyRuleYaml) -> L7DenyRule {
+    L7DenyRule {
+        method: d.method,
+        path: d.path,
+        command: d.command,
+        query: d
+            .query
+            .into_iter()
+            .map(|(k, v)| (k, l7query_from_yaml(v)))
+            .collect(),
+        operation_type: d.operation_type,
+        operation_name: d.operation_name,
+        fields: d.fields,
+        params: d
+            .params
+            .into_iter()
+            .map(|(k, v)| (k, l7query_from_yaml(v)))
+            .collect(),
+    }
+}
+
+fn graphql_operation_from_yaml(op: GraphqlOperationYaml) -> GraphqlOperation {
+    GraphqlOperation {
+        operation_type: op.operation_type,
+        operation_name: op.operation_name,
+        fields: op.fields,
+    }
+}
+
+fn mcp_options_from_yaml(m: McpOptionsYaml) -> McpOptions {
+    McpOptions {
+        strict_tool_names: m.strict_tool_names,
+        allow_all_known_mcp_methods: m.allow_all_known_mcp_methods,
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -127,7 +430,8 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
                 header_name: c.header_name,
                 query_param: c.query_param,
                 path_template: c.path_template,
-                ..Default::default()
+                refresh: c.refresh.map(refresh_from_yaml),
+                token_grant: c.token_grant.map(token_grant_from_yaml),
             })
             .collect(),
         endpoints: yaml
@@ -141,6 +445,26 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
                 enforcement: e.enforcement,
                 tls: e.tls,
                 path: e.path,
+                ports: e.ports,
+                allowed_ips: e.allowed_ips,
+                rules: e.rules.into_iter().map(l7rule_from_yaml).collect(),
+                deny_rules: e
+                    .deny_rules
+                    .into_iter()
+                    .map(l7deny_rule_from_yaml)
+                    .collect(),
+                allow_encoded_slash: e.allow_encoded_slash,
+                websocket_credential_rewrite: e.websocket_credential_rewrite,
+                request_body_credential_rewrite: e.request_body_credential_rewrite,
+                persisted_queries: e.persisted_queries,
+                graphql_persisted_queries: e
+                    .graphql_persisted_queries
+                    .into_iter()
+                    .map(|(k, v)| (k, graphql_operation_from_yaml(v)))
+                    .collect(),
+                graphql_max_body_bytes: e.graphql_max_body_bytes,
+                json_rpc_max_body_bytes: e.json_rpc_max_body_bytes,
+                mcp: e.mcp.map(mcp_options_from_yaml),
                 ..Default::default()
             })
             .collect(),
@@ -374,4 +698,104 @@ pub fn spawn_profile_reconciler(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_endpoint_survives_reconciliation() {
+        let yaml = br#"
+id: egress-gateway
+category: other
+endpoints:
+  - host: host.openshell.internal
+    port: 10443
+    path: /mcp/local
+    protocol: mcp
+    enforcement: enforce
+    mcp:
+      allow_all_known_mcp_methods: true
+"#;
+        let profile = profile_from_yaml(yaml).expect("parses");
+        let ep = &profile.endpoints[0];
+        assert_eq!(ep.protocol, "mcp");
+        let mcp = ep.mcp.as_ref().expect("mcp survives reconciliation");
+        assert_eq!(mcp.allow_all_known_mcp_methods, Some(true));
+    }
+
+    #[test]
+    fn rules_and_deny_rules_survive_reconciliation() {
+        let yaml = br#"
+id: p
+category: other
+endpoints:
+  - host: api.example
+    port: 443
+    protocol: mcp
+    rules:
+      - allow:
+          method: tools/call
+          params:
+            name:
+              any: [read_file]
+    deny_rules:
+      - method: tools/call
+        params:
+          name:
+            any: [delete_file]
+    json_rpc_max_body_bytes: 131072
+"#;
+        let profile = profile_from_yaml(yaml).expect("parses");
+        let ep = &profile.endpoints[0];
+        assert_eq!(ep.json_rpc_max_body_bytes, 131_072);
+        let allow = ep.rules[0].allow.as_ref().expect("allow present");
+        assert_eq!(allow.method, "tools/call");
+        assert_eq!(allow.params["name"].any, vec!["read_file".to_string()]);
+        assert_eq!(ep.deny_rules[0].method, "tools/call");
+        assert_eq!(
+            ep.deny_rules[0].params["name"].any,
+            vec!["delete_file".to_string()]
+        );
+    }
+
+    #[test]
+    fn external_refresh_survives_reconciliation() {
+        let yaml = br#"
+id: calendar-read
+category: messaging
+credentials:
+  - name: calendar_read_token
+    description: Microsoft Graph read access token for the calendar tool
+    env_vars: [CALENDAR_CLI_ACCESS_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: external
+      token_url: https://login.microsoftonline.com/common/oauth2/v2.0/token
+      scopes:
+        - https://graph.microsoft.com/Calendars.Read
+      refresh_before_seconds: 600
+      max_lifetime_seconds: 3600
+"#;
+        let profile = profile_from_yaml(yaml).expect("parses");
+        let cred = &profile.credentials[0];
+        assert_eq!(
+            cred.description,
+            "Microsoft Graph read access token for the calendar tool"
+        );
+        let refresh = cred.refresh.as_ref().expect("refresh survives");
+        assert_eq!(
+            refresh.strategy,
+            i32::from(ProviderCredentialRefreshStrategy::External)
+        );
+        assert_eq!(
+            refresh.token_url,
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        );
+        assert_eq!(refresh.refresh_before_seconds, 600);
+        assert_eq!(refresh.max_lifetime_seconds, 3600);
+    }
 }

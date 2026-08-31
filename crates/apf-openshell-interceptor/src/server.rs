@@ -219,6 +219,34 @@ fn operation_has_annotations(eval: &InterceptorEvaluation) -> bool {
         .is_some_and(serde_json::Value::is_object)
 }
 
+/// Report whether an `UpdateConfig` operation is settings-only (a `settingKey`
+/// with no `policy` or `mergeOperations`). Settings-only updates skip policy
+/// patch injection at `MODIFY_OPERATION` and must be recognized the same way
+/// at `VALIDATE`, or they get denied for a provenance token that was never
+/// injected in the first place.
+fn is_settings_only_update_config(op_json: &serde_json::Value) -> bool {
+    let has_policy = !op_json["policy"].is_null();
+    let has_merge_ops = op_json["mergeOperations"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty());
+    let setting_key = op_json["settingKey"]
+        .as_str()
+        .or_else(|| op_json["setting_key"].as_str());
+    setting_key.is_some() && !has_policy && !has_merge_ops
+}
+
+/// Report whether an `UpdateConfig` operation sets `proposal_approval_mode` to `auto`.
+fn sets_auto_approval(op_json: &serde_json::Value) -> bool {
+    let setting_key = op_json["settingKey"]
+        .as_str()
+        .or_else(|| op_json["setting_key"].as_str());
+    setting_key == Some("proposal_approval_mode")
+        && op_json["settingValue"]["stringValue"]
+            .as_str()
+            .or_else(|| op_json["setting_value"]["string_value"].as_str())
+            == Some("auto")
+}
+
 /// Canonical spec-digest over a bare sandbox `policy` JSON value.
 fn compute_spec_digest_from_policy(policy: &serde_json::Value) -> String {
     let digest_input = serde_json::json!({ "policy": policy });
@@ -555,18 +583,11 @@ impl GatewayInterceptorService {
         let has_merge_ops = op_json["mergeOperations"]
             .as_array()
             .is_some_and(|a| !a.is_empty());
-        let setting_key = op_json["settingKey"]
-            .as_str()
-            .or_else(|| op_json["setting_key"].as_str());
-        let sets_auto_approval = setting_key == Some("proposal_approval_mode")
-            && op_json["settingValue"]["stringValue"]
-                .as_str()
-                .or_else(|| op_json["setting_value"]["string_value"].as_str())
-                == Some("auto");
+        let sets_auto_approval = sets_auto_approval(&op_json);
         // Settings-only updates (setting_key present, no policy/mergeOps) pass
         // through without modification. Injecting policy patches into a settings
         // request would conflict with the mutually-exclusive proto fields.
-        if setting_key.is_some() && !has_policy && !has_merge_ops {
+        if is_settings_only_update_config(&op_json) {
             if sets_auto_approval {
                 let ctx = context::extract_provider(&eval);
                 warn!(
@@ -774,6 +795,29 @@ impl GatewayInterceptorService {
     ) -> Result<Response<InterceptorResult>, Status> {
         let op_json =
             context::operation_struct(&eval).map_or(serde_json::Value::Null, util::struct_to_json);
+
+        // Settings-only updates never get a provenance-token annotation at
+        // MODIFY_OPERATION (see handle_config_refresh), so they must be
+        // recognized and passed through here too, rather than denied for a
+        // token that was never injected in the first place.
+        if is_settings_only_update_config(&op_json) {
+            if sets_auto_approval(&op_json) {
+                let ctx = context::extract_provider(&eval);
+                warn!(
+                    correlation_id = %ctx.correlation_id,
+                    "UpdateConfig VALIDATE denied: auto-approval attempt via settings"
+                );
+                return Ok(Response::new(deny_with_context(
+                    "automatic policy proposal approval is blocked; policy is managed by APF",
+                    &ctx.correlation_id,
+                    "",
+                    &eval.binding_id,
+                )));
+            }
+            info!("UpdateConfig VALIDATE allowed: settings-only update");
+            return Ok(Response::new(allow()));
+        }
+
         let annotations = &op_json["annotations"];
         let correlation_id = annotations["apf.nvidia.com/correlation-id"]
             .as_str()
@@ -1593,6 +1637,131 @@ mod tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    /// Build an `UpdateConfig` evaluation for a settings-only update (`setting_key`
+    /// present, no `policy`/`mergeOperations`) at the given phase.
+    fn settings_only_update_config_evaluation(
+        phase: crate::proto::interceptor_evaluation::Phase,
+    ) -> InterceptorEvaluation {
+        InterceptorEvaluation {
+            binding_id: "config-policy-settings-only".to_string(),
+            method: "UpdateConfig".to_string(),
+            phase: Some(phase),
+            principal: [("subject".to_string(), "operator-subject".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn settings_only_operation_fields(setting_key: &str, string_value: &str) -> ProstStruct {
+        let setting_value_fields = [(
+            "stringValue".to_string(),
+            ProstValue {
+                kind: Some(Kind::StringValue(string_value.to_string())),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let fields = [
+            (
+                "settingKey".to_string(),
+                ProstValue {
+                    kind: Some(Kind::StringValue(setting_key.to_string())),
+                },
+            ),
+            (
+                "settingValue".to_string(),
+                ProstValue {
+                    kind: Some(Kind::StructValue(ProstStruct {
+                        fields: setting_value_fields,
+                    })),
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        ProstStruct { fields }
+    }
+
+    #[tokio::test]
+    async fn update_config_modify_operation_allows_settings_only() {
+        use crate::proto::{ModifyOperationEvaluation, interceptor_evaluation::Phase};
+        let service = service();
+        let eval = settings_only_update_config_evaluation(Phase::ModifyOperation(
+            ModifyOperationEvaluation {
+                proposed_operation: Some(settings_only_operation_fields(
+                    "providers_v2_enabled",
+                    "true",
+                )),
+            },
+        ));
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed);
+        assert!(result.patches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_config_modify_operation_denies_auto_approval_setting() {
+        use crate::proto::{ModifyOperationEvaluation, interceptor_evaluation::Phase};
+        let service = service();
+        let eval = settings_only_update_config_evaluation(Phase::ModifyOperation(
+            ModifyOperationEvaluation {
+                proposed_operation: Some(settings_only_operation_fields(
+                    "proposal_approval_mode",
+                    "auto",
+                )),
+            },
+        ));
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn update_config_validate_allows_settings_only() {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        let service = service();
+        let eval = settings_only_update_config_evaluation(Phase::Validate(ValidateEvaluation {
+            proposed_operation: Some(settings_only_operation_fields(
+                "agent_policy_proposals_enabled",
+                "false",
+            )),
+            ..Default::default()
+        }));
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn update_config_validate_denies_auto_approval_setting() {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        let service = service();
+        let eval = settings_only_update_config_evaluation(Phase::Validate(ValidateEvaluation {
+            proposed_operation: Some(settings_only_operation_fields(
+                "proposal_approval_mode",
+                "auto",
+            )),
+            ..Default::default()
+        }));
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
     }
 
     #[tokio::test]

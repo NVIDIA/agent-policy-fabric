@@ -32,6 +32,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::signing::yaml_sigil::decompose_member;
 
 /// Top-level bundle as it appears in the yaml-sigil artifact payload.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -131,9 +134,9 @@ impl Bundle {
     }
 
     /// Read and classify every manifest member, resolving paths relative to
-    /// `bundle_dir`. Callers MUST verify the signature and per-member hashes
-    /// before calling this — a member must not be parsed before its hash is
-    /// confirmed.
+    /// `bundle_dir`. Callers must already have verified `self`'s own
+    /// signature (`Bundle::from_payload_bytes` only accepts a verified
+    /// payload); each member's hash against `entry.sha256` is checked here.
     pub fn load_members(&self, bundle_dir: &Path) -> Result<BundleMembers, MemberLoadError> {
         let mut members = BundleMembers::default();
         for entry in &self.manifest {
@@ -142,6 +145,14 @@ impl Bundle {
                 path: entry.path.clone(),
                 source,
             })?;
+            let computed = hex::encode(Sha256::digest(&raw));
+            if !computed.eq_ignore_ascii_case(&entry.sha256) {
+                return Err(MemberLoadError::HashMismatch {
+                    path: entry.path.clone(),
+                    declared: entry.sha256.clone(),
+                    computed,
+                });
+            }
             // A member may itself be a yaml-sigil signed artifact; take its
             // payload when signed, the bytes verbatim when not.
             let content = member_content(&entry.path, &raw)?;
@@ -302,10 +313,10 @@ fn metadata_name<'a>(
 /// are themselves yaml-sigil signed artifacts: a signed member yields its
 /// payload stream, an unsigned member its bytes verbatim. A member that carries
 /// a malformed signing attempt is rejected.
-fn member_content(_path: &str, raw: &[u8]) -> Result<Vec<u8>, MemberLoadError> {
-    // Members are treated as plain bytes. If per-member signing is required
-    // in future, wire a BundleVerifier here.
-    Ok(raw.to_vec())
+fn member_content(path: &str, raw: &[u8]) -> Result<Vec<u8>, MemberLoadError> {
+    decompose_member(raw).map_err(|_| MemberLoadError::Decompose {
+        path: path.to_string(),
+    })
 }
 
 /// Flatten `policy.grants[]` of one `HostToolPolicy` document into JSON values
@@ -347,6 +358,12 @@ pub enum MemberLoadError {
     },
     #[error("manifest member {path} carries a malformed signing attempt")]
     Decompose { path: String },
+    #[error("manifest member {path}: sha256 mismatch (declared {declared}, computed {computed})")]
+    HashMismatch {
+        path: String,
+        declared: String,
+        computed: String,
+    },
     #[error("manifest member {path}: {doc_kind} document has no name")]
     MissingName { path: String, doc_kind: String },
     #[error("duplicate {kind} document named {name}")]
@@ -358,31 +375,43 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Tests use plain payload bytes directly — no signing in unit tests.
-    // Signing/verification integration tests live in crates/apf-bundle/tests/.
-    fn payload(yaml: &str) -> Vec<u8> {
-        yaml.as_bytes().to_vec()
+    // `load_members` hashes each member's raw on-disk bytes against the
+    // manifest's declared `sha256`, so manifests are built from the real
+    // member content rather than a hardcoded digest.
+    fn sha256_hex(bytes: &[u8]) -> String {
+        hex::encode(Sha256::digest(bytes))
     }
 
-    // Alias so test bodies read naturally after replacing make_signed_artifact.
-    fn make_signed_artifact(yaml: &str) -> Vec<u8> {
-        payload(yaml)
+    fn bundle_yaml(id: &str, manifest_entries: &[(&str, &[u8])]) -> String {
+        let mut manifest = String::new();
+        for (path, content) in manifest_entries {
+            manifest.push_str(&format!(
+                "  - path: {path}\n    sha256: {}\n",
+                sha256_hex(content)
+            ));
+        }
+        format!(
+            "apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1\n\
+             kind: PolicyBundle\n\
+             id: {id}\n\
+             policy_revision: 1\n\
+             not_before: \"2026-01-01T00:00:00Z\"\n\
+             expires_at: \"2099-01-01T00:00:00Z\"\n\
+             manifest:\n{manifest}runtime_compatibility: {{}}\n"
+        )
     }
 
-    static BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: test-bundle
-description: parser test bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: host-tool-policies/outlook.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-  - path: sandbox/default-policy.yaml
-    sha256: 1111111111111111111111111111111111111111111111111111111111111111
-runtime_compatibility: {}
-"#;
+    fn sign_yaml_sigil(payload: &str, key: &ed25519_dalek::SigningKey, keyid: &str) -> Vec<u8> {
+        yaml_sigil_signing::sign_yaml(&yaml_sigil_signing::SignYamlParams {
+            payload: payload.as_bytes(),
+            algorithm: yaml_sigil_traits::AlgorithmId::Ed25519,
+            key: yaml_sigil_traits::signing::SigningKey::Ed25519(key),
+            keyid: Some(keyid),
+            append_missing_final_newline: true,
+            yaml_backend: yaml_sigil_core::preferred_yaml_backend(),
+        })
+        .expect("sign member with yaml-sigil")
+    }
 
     static HOST_TOOL_POLICY_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: HostToolPolicy
@@ -401,8 +430,18 @@ policy:
 
     #[test]
     fn parses_canonical_field_names() {
-        let artifact = make_signed_artifact(BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let mut artifact = bundle_yaml(
+            "test-bundle",
+            &[
+                (
+                    "host-tool-policies/outlook.yaml",
+                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
+                ),
+                ("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes()),
+            ],
+        );
+        artifact.push_str("description: parser test bundle\n");
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         assert_eq!(parsed.bundle_id, "test-bundle");
         assert_eq!(parsed.monotonic_counter, 1);
         assert_eq!(parsed.description.as_deref(), Some("parser test bundle"));
@@ -426,8 +465,17 @@ policy:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "test-bundle",
+            &[
+                (
+                    "host-tool-policies/outlook.yaml",
+                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
+                ),
+                ("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes()),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         // SandboxPolicy member → collected by name, verbatim.
@@ -441,18 +489,6 @@ policy:
         assert_eq!(members.grants.len(), 1);
         assert_eq!(members.grants[0]["tool"], "outlook");
     }
-
-    static POLICY_RULE_BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: policy-rule-bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: policy-rules/outlook.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-runtime_compatibility: {}
-"#;
 
     static POLICY_RULE_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyRule
@@ -476,8 +512,11 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(POLICY_RULE_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "policy-rule-bundle",
+            &[("policy-rules/outlook.yaml", POLICY_RULE_MEMBER.as_bytes())],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         assert_eq!(members.policy_rules.len(), 1);
@@ -485,18 +524,6 @@ spec:
         assert_eq!(name, "outlook-grants");
         assert_eq!(body, POLICY_RULE_MEMBER.as_bytes());
     }
-
-    static POLICY_ANNOTATOR_BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: policy-annotator-bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: policy-annotators/secrets.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-runtime_compatibility: {}
-"#;
 
     static POLICY_ANNOTATOR_MEMBER: &str = r"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyAnnotator
@@ -523,8 +550,14 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(POLICY_ANNOTATOR_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "policy-annotator-bundle",
+            &[(
+                "policy-annotators/secrets.yaml",
+                POLICY_ANNOTATOR_MEMBER.as_bytes(),
+            )],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         assert_eq!(members.policy_annotators.len(), 1);
@@ -532,20 +565,6 @@ spec:
         assert_eq!(name, "secret-detector");
         assert_eq!(body, POLICY_ANNOTATOR_MEMBER.as_bytes());
     }
-
-    static POLICY_EFFECT_BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: policy-effect-bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: policy-effects/redact.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-  - path: policy-findings/secret.yaml
-    sha256: 1111111111111111111111111111111111111111111111111111111111111111
-runtime_compatibility: {}
-"#;
 
     static POLICY_EFFECT_MEMBER: &str = r"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyEffect
@@ -581,8 +600,20 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(POLICY_EFFECT_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "policy-effect-bundle",
+            &[
+                (
+                    "policy-effects/redact.yaml",
+                    POLICY_EFFECT_MEMBER.as_bytes(),
+                ),
+                (
+                    "policy-findings/secret.yaml",
+                    POLICY_FINDING_MEMBER.as_bytes(),
+                ),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         assert_eq!(members.policy_effects.len(), 1);
@@ -613,8 +644,20 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(POLICY_EFFECT_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "policy-effect-bundle",
+            &[
+                (
+                    "policy-effects/redact.yaml",
+                    POLICY_EFFECT_MEMBER.as_bytes(),
+                ),
+                (
+                    "policy-findings/secret.yaml",
+                    POLICY_EFFECT_MEMBER.as_bytes(),
+                ),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let result = parsed.load_members(tmp.path());
         assert!(matches!(
             result,
@@ -622,20 +665,6 @@ spec:
                 if kind == "PolicyEffect" && name == "redact-body"
         ));
     }
-
-    static FEDERATED_BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: federated-bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: policy-definitions/grants.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-  - path: policy-data/outlook.yaml
-    sha256: 1111111111111111111111111111111111111111111111111111111111111111
-runtime_compatibility: {}
-"#;
 
     static POLICY_DEFINITION_MEMBER: &str = r"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyDefinition
@@ -675,8 +704,17 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(FEDERATED_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "federated-bundle",
+            &[
+                (
+                    "policy-definitions/grants.yaml",
+                    POLICY_DEFINITION_MEMBER.as_bytes(),
+                ),
+                ("policy-data/outlook.yaml", POLICY_DATA_MEMBER.as_bytes()),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         assert_eq!(members.policy_definitions.len(), 1);
@@ -707,8 +745,17 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(FEDERATED_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "federated-bundle",
+            &[
+                (
+                    "policy-definitions/grants.yaml",
+                    POLICY_DATA_MEMBER.as_bytes(),
+                ),
+                ("policy-data/outlook.yaml", POLICY_DATA_MEMBER.as_bytes()),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let result = parsed.load_members(tmp.path());
         assert!(matches!(
             result,
@@ -716,20 +763,6 @@ spec:
                 if kind == "PolicyData" && name == "outlook-team-grants"
         ));
     }
-
-    static PROVIDER_BUNDLE_YAML: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyBundle
-id: provider-bundle
-policy_revision: 1
-not_before: "2026-01-01T00:00:00Z"
-expires_at: "2099-01-01T00:00:00Z"
-manifest:
-  - path: providers/gitlab.yaml
-    sha256: 0000000000000000000000000000000000000000000000000000000000000000
-  - path: providers/nvidia.yaml
-    sha256: 1111111111111111111111111111111111111111111111111111111111111111
-runtime_compatibility: {}
-"#;
 
     static GITLAB_PROVIDER_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: Provider
@@ -762,8 +795,14 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(PROVIDER_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "provider-bundle",
+            &[
+                ("providers/gitlab.yaml", GITLAB_PROVIDER_MEMBER.as_bytes()),
+                ("providers/nvidia.yaml", NVIDIA_PROVIDER_MEMBER.as_bytes()),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         assert_eq!(members.providers.len(), 2);
@@ -790,8 +829,14 @@ spec:
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(PROVIDER_BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        let artifact = bundle_yaml(
+            "provider-bundle",
+            &[
+                ("providers/gitlab.yaml", GITLAB_PROVIDER_MEMBER.as_bytes()),
+                ("providers/nvidia.yaml", GITLAB_PROVIDER_MEMBER.as_bytes()),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let result = parsed.load_members(tmp.path());
         assert!(matches!(
             result,
@@ -801,8 +846,8 @@ spec:
 
     #[test]
     fn load_members_handles_signed_member() {
-        // A member that is itself a yaml-sigil signed artifact contributes its
-        // payload, not the signature carrier.
+        // A member that is itself a real yaml-sigil signed artifact
+        // contributes its payload, not the signature carrier.
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("host-tool-policies")).unwrap();
         std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
@@ -811,16 +856,33 @@ spec:
             HOST_TOOL_POLICY_MEMBER,
         )
         .unwrap();
-        // Sign the sandbox member as a standalone yaml-sigil artifact.
-        let signed_member = make_signed_artifact(SANDBOX_MEMBER);
+
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let signed_member = sign_yaml_sigil(SANDBOX_MEMBER, &key, "test-key");
+        assert_ne!(
+            signed_member,
+            SANDBOX_MEMBER.as_bytes(),
+            "a signed member's on-disk bytes must differ from its payload"
+        );
         std::fs::write(
             tmp.path().join("sandbox/default-policy.yaml"),
             &signed_member,
         )
         .unwrap();
 
-        let artifact = make_signed_artifact(BUNDLE_YAML);
-        let parsed = parse_bundle(&artifact).expect("parse");
+        // The manifest's declared sha256 is over the on-disk bytes,
+        // signature carrier included.
+        let artifact = bundle_yaml(
+            "test-bundle",
+            &[
+                (
+                    "host-tool-policies/outlook.yaml",
+                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
+                ),
+                ("sandbox/default-policy.yaml", &signed_member),
+            ],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
 
         // The signed member's payload — not the carrier — is what gets vended.
@@ -829,5 +891,46 @@ spec:
             .get("default")
             .expect("sandbox policy present");
         assert_eq!(body, SANDBOX_MEMBER.as_bytes());
+    }
+
+    #[test]
+    fn load_members_rejects_a_member_hash_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
+        // The on-disk bytes don't match SANDBOX_MEMBER, so the manifest's
+        // declared hash (computed from SANDBOX_MEMBER) won't match either.
+        std::fs::write(
+            tmp.path().join("sandbox/default-policy.yaml"),
+            "kind: SandboxPolicy\nmetadata:\n  name: tampered\n",
+        )
+        .unwrap();
+
+        let artifact = bundle_yaml(
+            "test-bundle",
+            &[("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes())],
+        );
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
+        let result = parsed.load_members(tmp.path());
+        assert!(matches!(
+            result,
+            Err(MemberLoadError::HashMismatch { path, .. }) if path == "sandbox/default-policy.yaml"
+        ));
+    }
+
+    #[test]
+    fn load_members_rejects_a_malformed_signing_attempt() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
+        // A signature marker (`---\n`) with no signature document after it.
+        let malformed: &[u8] = b"kind: SandboxPolicy\n---\n";
+        std::fs::write(tmp.path().join("sandbox/default-policy.yaml"), malformed).unwrap();
+
+        let artifact = bundle_yaml("test-bundle", &[("sandbox/default-policy.yaml", malformed)]);
+        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
+        let result = parsed.load_members(tmp.path());
+        assert!(matches!(
+            result,
+            Err(MemberLoadError::Decompose { path }) if path == "sandbox/default-policy.yaml"
+        ));
     }
 }

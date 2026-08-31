@@ -67,3 +67,16 @@ impl BundleVerifier for YamlSigilVerifier {
         }
     }
 }
+
+/// Structural decomposition only, not trust verification: unsigned bytes
+/// pass through verbatim, a well-formed signature yields its payload, and a
+/// broken signing attempt is rejected rather than treated as plain content.
+pub fn decompose_member(raw: &[u8]) -> Result<Vec<u8>, MalformedMemberSignature> {
+    match yaml_sigil_core::decompose_artifact(raw) {
+        yaml_sigil_core::DecompositionOutcome::Unsigned => Ok(raw.to_vec()),
+        yaml_sigil_core::DecompositionOutcome::Signed(ranges) => Ok(raw[ranges.payload].to_vec()),
+        yaml_sigil_core::DecompositionOutcome::Malformed => Err(MalformedMemberSignature),
+    }
+}
+
+pub struct MalformedMemberSignature;

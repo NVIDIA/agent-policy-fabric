@@ -213,6 +213,8 @@ pub fn run() -> Result<(), String> {
     // a leak of the private signing format into unrelated code.
     const ALLOWLIST: &[&str] = &[
         "crates/apf-bundle/src/signing/yaml_sigil.rs",
+        "crates/apf-bundle/src/manifest.rs",
+        "crates/apf-bundle/src/bundle.rs",
         "crates/apf-compile/src/main.rs",
     ];
 

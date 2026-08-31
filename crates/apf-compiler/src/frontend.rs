@@ -972,6 +972,17 @@ pub(crate) struct NetworkEndpointDef {
     json_rpc_max_body_bytes: u32,
     #[serde(default)]
     mcp: Option<McpConfigDef>,
+    #[serde(default)]
+    credential_binding: Option<NetworkCredentialBindingDef>,
+    #[serde(default)]
+    allow_uninspected_credentials: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NetworkCredentialBindingDef {
+    #[serde(default)]
+    provider: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1178,6 +1189,10 @@ pub(crate) fn to_endpoint(e: NetworkEndpointDef) -> ir::NetworkEndpoint {
             strict_tool_names: m.strict_tool_names,
             allow_all_known_mcp_methods: m.allow_all_known_mcp_methods,
         }),
+        credential_binding: e.credential_binding.map(|b| ir::NetworkCredentialBinding {
+            provider: b.provider,
+        }),
+        allow_uninspected_credentials: e.allow_uninspected_credentials,
     }
 }
 
