@@ -22,8 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY . .
 
-# apf-proto/build.rs uses contracts/proto-ir/ if present (vendored via `mise run vendor-proto`),
-# avoiding the need for buf or BSR credentials inside the container.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release -p apf-policy-service -p apf-compile && \

@@ -10,13 +10,6 @@ run = "cargo xtask dag-guard"
 [tasks.buf-lint]
 run = "buf lint contracts/"
 
-[tasks.vendor-proto]
-description = "Export APF IR proto types from BSR into contracts/proto-ir/ (run before docker build, gitignored)"
-run = """
-buf export REDACTED-SCHEMA-REGISTRY/agent-policy-fabric/core --output contracts/proto-ir/
-echo "Proto types exported to contracts/proto-ir/ (gitignored — re-run when BSR module updates)"
-"""
-
 [tasks.sign-bundle]
 description = "Re-sign examples/demo-bundle after policy changes"
 run = """
