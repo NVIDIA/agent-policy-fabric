@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "google/protobuf/timestamp.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/signature.proto";
+
+
+// PolicyBundle is a versioned, time-bounded collection of policy documents.
+message PolicyBundle {
+  // Envelope fields reserved for future use.
+  BundleMetadata metadata = 1;
+  // Stable globally-scoped identifier for this bundle.
+  string id = 2;
+  // Human-readable description of the bundle's purpose and scope.
+  string description = 3;
+  // Monotonically increasing revision counter per bundle id.
+  // Two bundles with the same id and policy_revision but conflicting content
+  // must be treated as an integrity failure.
+  uint64 policy_revision = 4;
+  // Earliest time at which the bundle is considered valid.
+  google.protobuf.Timestamp not_before = 5;
+  // Time after which the bundle must no longer be accepted.
+  google.protobuf.Timestamp expires_at = 6;
+  // Member documents included in this bundle, each identified by path and digest.
+  repeated BundleMember manifest = 7;
+  // Signature over the bundle contents.  Absent means unsigned.
+  optional BundleSignature signature = 8;
+}
+
+// BundleMetadata is reserved for future envelope fields.
+message BundleMetadata {}
+
+// BundleMember identifies one document in the bundle.
+message BundleMember {
+  // Path to the document relative to the bundle root.
+  string path = 1;
+  // SHA-256 hex digest of the document at path.
+  string sha256 = 2;
+}

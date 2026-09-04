@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "yaml_sigil/v1alpha1/yaml_sigil.proto";
+
+
+// BundleSignature carries the signature over a PolicyBundle.
+// Exactly one kind must be set.
+message BundleSignature {
+  oneof kind {
+    // Raw Ed25519 signature, used when yaml-sigil tooling is not in the signing pipeline.
+    Ed25519Signature ed25519 = 1;
+    // Structured yaml-sigil signature, used when the bundle is signed via the yaml-sigil toolchain.
+    yaml_sigil.v1alpha1.YamlSigilSignature yaml_sigil = 2;
+  }
+}
+
+// Ed25519Signature is a raw Ed25519 signature: 64 bytes, pure EdDSA, no prehash.
+message Ed25519Signature {
+  // Lookup hint for the verification key.  Never proof of signer identity.
+  // When present: 1–1024 UTF-8 octets.
+  optional string key_id = 1;
+  // Raw 64-byte signature value.
+  bytes signature = 2;
+}

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+
+// PolicyFinding is a named, reusable observation type attached to a deny
+// decision or emitted alongside an allow by a PolicyEffect. Bundle members of
+// this kind are compiled at load time and referenced by name via @apf_finding.
+message PolicyFinding {
+  // Identity and display fields for this finding document.
+  ObjectMeta metadata = 1;
+  // The finding body.
+  PolicyFindingSpec spec = 2;
+}
+
+// PolicyFindingSpec defines the observation that is emitted when this finding
+// fires.
+message PolicyFindingSpec {
+  // Human-readable description of this finding's purpose.
+  string description = 1;
+  // Finding category, e.g. "secret_detected". Surfaced as Finding.kind.
+  // Authored as `type` in YAML.
+  string kind = 2;
+  // Observation severity.
+  Severity severity = 3;
+  // Static label within the category. Overridden by label_source when both
+  // are set.
+  optional string label = 4;
+  // context.annotations.<key> path from which the label is read at evaluation
+  // time. Takes precedence over label when the annotation is present.
+  optional string label_source = 5;
+}
+
+// Severity classifies the urgency of a PolicyFinding observation.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_LOW = 1;
+  SEVERITY_MEDIUM = 2;
+  SEVERITY_HIGH = 3;
+  SEVERITY_CRITICAL = 4;
+}

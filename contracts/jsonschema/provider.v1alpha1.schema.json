@@ -1,0 +1,495 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NVIDIA/APF/contracts/jsonschema/provider.v1alpha1.schema.json",
+  "title": "APF Provider v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nvidia.agent-policy-fabric.policy/v1alpha1" },
+    "kind": { "const": "Provider" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "endpoints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/providerEndpoint" }
+        },
+        "binaries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/binary" }
+        },
+        "credentials": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/credential" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name"],
+      "not": { "required": ["namespace"] },
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 0 },
+        "title": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "providerEndpoint": {
+      "allOf": [
+        { "$ref": "#/$defs/networkEndpoint" },
+        {
+          "required": ["host"],
+          "properties": {
+            "host": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "networkEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "host": { "type": "string" },
+        "path": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "protocol": { "enum": ["tcp", "rest", "websocket", "graphql", "sql", "json-rpc", "mcp"] },
+        "tls": { "enum": ["terminate", "passthrough"] },
+        "enforcement": { "enum": ["enforce", "audit"] },
+        "access": { "enum": ["read-only", "read-write", "full"] },
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/l7Rule" }
+        },
+        "allowed_ips": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "deny_rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/l7DenyRule" }
+        },
+        "allow_encoded_slash": { "type": "boolean" },
+        "websocket_credential_rewrite": { "type": "boolean" },
+        "request_body_credential_rewrite": { "type": "boolean" },
+        "persisted_queries": { "enum": ["deny", "allow_registered"] },
+        "graphql_persisted_queries": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/graphqlOperation" }
+        },
+        "graphql_max_body_bytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "json_rpc_max_body_bytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "mcp": { "$ref": "#/$defs/mcpConfig" },
+        "credential_binding": { "$ref": "#/$defs/networkCredentialBinding" },
+        "allow_uninspected_credentials": { "type": "boolean" }
+      },
+      "anyOf": [
+        { "required": ["port"] },
+        { "required": ["ports"] }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "const": "tcp" } }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["access"] },
+                { "required": ["rules"] },
+                { "required": ["deny_rules"] },
+                { "required": ["enforcement"] }
+              ]
+            }
+          }
+        },
+        {
+          "not": {
+            "required": ["access", "rules"]
+          }
+        },
+        {
+          "if": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "enum": ["json-rpc", "mcp"] } }
+          },
+          "then": {
+            "not": { "required": ["access"] }
+          }
+        },
+        {
+          "if": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "const": "json-rpc" } }
+          },
+          "then": {
+            "required": ["rules"],
+            "properties": { "rules": { "minItems": 1 } }
+          }
+        },
+        {
+          "if": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "enum": ["rest", "websocket", "graphql", "sql"] } }
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["access"] },
+              {
+                "required": ["rules"],
+                "properties": { "rules": { "minItems": 1 } }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "const": "mcp" } }
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["mcp"],
+                "properties": {
+                  "mcp": {
+                    "required": ["allow_all_known_mcp_methods"],
+                    "properties": { "allow_all_known_mcp_methods": { "const": true } }
+                  }
+                }
+              },
+              {
+                "required": ["rules"],
+                "properties": { "rules": { "minItems": 1 } }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": ["deny_rules"],
+            "properties": { "deny_rules": { "minItems": 1 } }
+          },
+          "then": {
+            "required": ["protocol"],
+            "properties": { "protocol": { "enum": ["rest", "websocket", "graphql", "sql", "json-rpc", "mcp"] } }
+          }
+        }
+      ]
+    },
+    "binary": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "envVars": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "style": { "enum": ["bearer", "header", "query", "path", "basic", "cookie"] },
+        "header": { "type": "string", "minLength": 1 },
+        "queryParam": { "type": "string", "minLength": 1 },
+        "pathTemplate": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/$defs/credentialSource" },
+        "discoverable": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "description": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["style"],
+            "properties": { "style": { "enum": ["bearer", "header"] } }
+          },
+          "then": { "required": ["header"] }
+        },
+        {
+          "if": {
+            "required": ["style"],
+            "properties": { "style": { "const": "query" } }
+          },
+          "then": { "required": ["queryParam"] }
+        },
+        {
+          "if": {
+            "required": ["style"],
+            "properties": { "style": { "const": "path" } }
+          },
+          "then": { "required": ["pathTemplate"] }
+        }
+      ]
+    },
+    "credentialSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "host-env" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "oauth2" },
+            "grant": { "enum": ["client-credentials", "refresh-token"] },
+            "tokenUrl": { "type": "string", "format": "uri" },
+            "scopes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "refreshBeforeSeconds": { "type": "integer", "minimum": 0 },
+            "maxLifetimeSeconds": { "type": "integer", "minimum": 0 },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "additionalOutputs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/refreshOutput" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "external" },
+            "name": { "type": "string", "minLength": 1 },
+            "tokenUrl": { "type": "string", "format": "uri" },
+            "scopes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "refreshBeforeSeconds": { "type": "integer", "minimum": 0 },
+            "maxLifetimeSeconds": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "google-service-account-jwt" },
+            "refreshBeforeSeconds": { "type": "integer", "minimum": 0 },
+            "maxLifetimeSeconds": { "type": "integer", "minimum": 0 },
+            "material": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/refreshMaterial" }
+            },
+            "additionalOutputs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/refreshOutput" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "aws-sts-assume-role" },
+            "refreshBeforeSeconds": { "type": "integer", "minimum": 0 },
+            "maxLifetimeSeconds": { "type": "integer", "minimum": 0 },
+            "material": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/refreshMaterial" }
+            },
+            "additionalOutputs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/refreshOutput" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "token-grant" },
+            "tokenEndpoint": { "type": "string", "format": "uri" },
+            "audience": { "type": "string", "minLength": 1 },
+            "jwtSvidAudience": { "type": "string", "minLength": 1 },
+            "scopes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "cacheTtlSeconds": { "type": "integer", "minimum": 0 },
+            "audienceOverrides": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/tokenGrantAudienceOverride" }
+            },
+            "clientAssertionType": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "refreshMaterial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "required": { "type": "boolean" },
+        "secret": { "type": "boolean" }
+      }
+    },
+    "refreshOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output", "credential"],
+      "properties": {
+        "output": { "type": "string", "minLength": 1 },
+        "credential": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tokenGrantAudienceOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audience"],
+      "properties": {
+        "host": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "path": { "type": "string" },
+        "audience": { "type": "string", "minLength": 1 },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "networkCredentialBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 }
+      }
+    },
+    "l7Rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow"],
+      "properties": {
+        "allow": { "$ref": "#/$defs/l7Allow" }
+      }
+    },
+    "l7Allow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "path": { "type": "string" },
+        "command": { "type": "string", "minLength": 1 },
+        "query": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/queryMatcher" }
+        },
+        "operation_type": { "enum": ["query", "mutation", "subscription", "*"] },
+        "operation_name": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/queryMatcher" }
+        }
+      }
+    },
+    "l7DenyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "path": { "type": "string" },
+        "command": { "type": "string", "minLength": 1 },
+        "query": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/queryMatcher" }
+        },
+        "operation_type": { "enum": ["query", "mutation", "subscription", "*"] },
+        "operation_name": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/queryMatcher" }
+        }
+      }
+    },
+    "queryMatcher": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      ]
+    },
+    "graphqlOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_type": { "enum": ["query", "mutation", "subscription"] },
+        "operation_name": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "mcpConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_body_bytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "strict_tool_names": { "type": "boolean" },
+        "allow_all_known_mcp_methods": { "type": "boolean" }
+      }
+    }
+  }
+}

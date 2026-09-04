@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NVIDIA/APF/contracts/jsonschema/policy-effect.v1alpha1.schema.json",
+  "title": "APF PolicyEffect v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nvidia.agent-policy-fabric.policy/v1alpha1" },
+    "kind": { "const": "PolicyEffect" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "verdict": { "enum": ["allow", "warn", "escalate"] },
+        "reason": { "type": "string" },
+        "message": { "type": "string" },
+        "body": { "$ref": "#/$defs/body" },
+        "headers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/header" }
+        },
+        "finding": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "$ref": "#/$defs/inlineFinding" }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name"],
+      "not": { "required": ["namespace"] },
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 0 },
+        "title": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replace": { "type": "string" },
+        "patches": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/bodyPatch" }
+        }
+      }
+    },
+    "bodyPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "path"],
+      "properties": {
+        "op": { "enum": ["replace", "add", "remove"] },
+        "path": { "type": "string", "minLength": 1 },
+        "value": true,
+        "source": { "type": "string" }
+      }
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "action"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "action": { "enum": ["set", "add", "remove"] },
+        "value": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "inlineFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "severity"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "label": { "type": "string" },
+        "severity": { "enum": ["low", "medium", "high", "critical"] },
+        "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "label_source": { "type": "string" }
+      }
+    }
+  }
+}

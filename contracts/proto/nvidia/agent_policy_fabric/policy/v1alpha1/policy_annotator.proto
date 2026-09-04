@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+
+// PolicyAnnotator is a pre-processor that derives annotation values from raw
+// request fields before Cedar evaluation. Bundle members of this kind are
+// compiled at load time; the results are injected into the Cedar context under
+// context.annotations so Cedar policies can condition on them.
+message PolicyAnnotator {
+  // Identity and display fields for this annotator document.
+  ObjectMeta metadata = 1;
+  // The annotator body.
+  PolicyAnnotatorSpec spec = 2;
+}
+
+// PolicyAnnotatorSpec defines the set of annotations this document derives.
+message PolicyAnnotatorSpec {
+  // Human-readable description of this annotator's purpose.
+  string description = 1;
+  // Annotation derivations evaluated in document order.
+  repeated AnnotationSpec annotations = 2;
+}
+
+// AnnotationSpec defines one annotation value derived from the raw request.
+message AnnotationSpec {
+  // Key under context.annotations in Cedar policies.
+  string name = 1;
+  // Type of the emitted annotation value.
+  AnnotationOutput output = 2;
+  // Rule combinator for bool output. Ignored for non-bool output.
+  SetTrueIf set_true_if = 3;
+  // Value selection strategy for string output. Ignored for non-string output.
+  SetValueFrom set_value_from = 4;
+  // Match rules evaluated in document order.
+  repeated AnnotationRule rules = 5;
+}
+
+// AnnotationRule is one match condition inside an AnnotationSpec.
+// The operand fields (pattern, value, suffix, prefix, substring, threshold)
+// are op-specific; the compiler validates presence at load time.
+message AnnotationRule {
+  // Field selector resolved against the raw request:
+  // body_text, body_json.<json-pointer>, args.<name>,
+  // target.host, target.path, target.method, or user_subject.
+  string field = 1;
+  // Match operation kind.
+  AnnotationOp op = 2;
+  // Regex pattern for regex_match.
+  optional string pattern = 3;
+  // Comparison operand for equals; also the label a matching rule emits
+  // under string output.
+  optional string value = 4;
+  // Operand for endswith.
+  optional string suffix = 5;
+  // Operand for startswith.
+  optional string prefix = 6;
+  // Operand for contains.
+  optional string substring = 7;
+  // Numeric operand for gte / lte / length.
+  optional int64 threshold = 8;
+}
+
+// Type of the value emitted by an AnnotationSpec.
+enum AnnotationOutput {
+  ANNOTATION_OUTPUT_UNSPECIFIED = 0;
+  ANNOTATION_OUTPUT_BOOL = 1;
+  ANNOTATION_OUTPUT_STRING = 2;
+  ANNOTATION_OUTPUT_INTEGER = 3;
+}
+
+// How a bool annotation combines its rules.
+enum SetTrueIf {
+  SET_TRUE_IF_UNSPECIFIED = 0;
+  // Annotation is true when any rule matches.
+  SET_TRUE_IF_ANY = 1;
+  // Annotation is true only when all rules match.
+  SET_TRUE_IF_ALL = 2;
+}
+
+// How a string annotation selects its value.
+enum SetValueFrom {
+  SET_VALUE_FROM_UNSPECIFIED = 0;
+  // Value is taken from the first rule whose match condition fires.
+  SET_VALUE_FROM_FIRST_MATCH = 1;
+}
+
+// Match operation kind for an AnnotationRule.
+enum AnnotationOp {
+  ANNOTATION_OP_UNSPECIFIED = 0;
+  ANNOTATION_OP_REGEX_MATCH = 1;
+  ANNOTATION_OP_EQUALS = 2;
+  ANNOTATION_OP_ENDSWITH = 3;
+  ANNOTATION_OP_STARTSWITH = 4;
+  ANNOTATION_OP_CONTAINS = 5;
+  ANNOTATION_OP_LENGTH = 6;
+  ANNOTATION_OP_GTE = 7;
+  ANNOTATION_OP_LTE = 8;
+  ANNOTATION_OP_PASSTHROUGH = 9;
+}

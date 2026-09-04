@@ -2,10 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// APF IR types: PolicyRule (incl. PolicyRuleRole), SandboxPolicy, PolicyBundle,
+// APF IR types: PolicyRule (incl. PolicyRuleRole), SandboxPolicy,
 // Provider, PolicyEffect, PolicyFinding, etc.
-const APF_CORE_MODULE: &str = "REDACTED-SCHEMA-REGISTRY/agent-policy-fabric/core";
-
 const OPENSHELL_COMMIT: &str = "8d67250a5d17348eb96c4fa46226b06d8041f2ba";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,19 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let v1 = "nvidia/agent_policy_fabric/policy/v1alpha1";
 
-    // --- APF core IR types: use vendored copy if present, else fetch from BSR ---
-    // Vendored: run `mise run vendor-proto` once locally, commit contracts/proto-ir/.
-    // Docker builds then work without buf or BSR credentials.
-    let vendor_dir = manifest_dir.join("../../contracts/proto-ir");
-    let apf_export =
-        if vendor_dir.exists() && vendor_dir.join(v1).join("policy_rule.proto").exists() {
-            println!("cargo:warning=apf-proto: using vendored proto-ir (contracts/proto-ir/)");
-            vendor_dir.clone()
-        } else {
-            let d = out_dir.join("apf-core-export");
-            export_bsr(APF_CORE_MODULE, &d)?;
-            d
-        };
+    // --- APF core IR types: checked-in copy from the APF contract module. ---
     let ir_protos: Vec<PathBuf> = [
         "object_meta.proto",
         "policy_rule.proto",
@@ -38,12 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "provider.proto",
         "policy_effect.proto",
         "policy_finding.proto",
-        "host_tool_policy.proto",
-        "policy_definition.proto",
-        "policy_data.proto",
     ]
     .iter()
-    .map(|f| apf_export.join(v1).join(f))
+    .map(|f| contracts.join(v1).join(f))
     .collect();
 
     // --- Fetch OpenShell protos from git ---
@@ -90,27 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(&descriptor_path)
         .compile_protos(
             &all_protos.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
-            &[
-                apf_export.as_path(),
-                os_export.as_path(),
-                contracts.as_path(),
-            ],
+            &[os_export.as_path(), contracts.as_path()],
         )?;
 
-    Ok(())
-}
-
-fn export_bsr(module: &str, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = std::fs::remove_dir_all(out);
-    std::fs::create_dir_all(out)?;
-    let status = Command::new("buf")
-        .args(["export", module, "--output"])
-        .arg(out)
-        .status()
-        .map_err(|e| format!("could not run `buf export {module}`: {e}"))?;
-    if !status.success() {
-        return Err(format!("`buf export {module}` failed with {status}").into());
-    }
     Ok(())
 }
 

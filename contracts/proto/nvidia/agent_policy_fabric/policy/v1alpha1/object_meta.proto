@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+// ObjectMeta carries the identity and display fields shared by all APF policy
+// document kinds (SandboxPolicy, Provider, PolicyRule, …). These are
+// authoring-time fields written by the policy author; there are no
+// server-assigned fields here.
+message ObjectMeta {
+  // Canonical identifier for this document within its kind, e.g. "default".
+  string name = 1;
+  // Logical grouping for documents that share a domain.
+  string namespace = 2;
+  // Monotonically increasing document revision within this name.
+  uint32 version = 3;
+  // Human-readable display name.
+  string title = 4;
+  // Human-readable description of the document's purpose.
+  string description = 5;
+}

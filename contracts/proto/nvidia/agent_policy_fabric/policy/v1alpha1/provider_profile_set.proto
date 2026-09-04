@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+// ProviderProfileSet is the compiled surface served at
+// openshell.provider-profile.v1/default. It contains all provider profiles
+// in one atomic fetch, eliminating per-profile round trips.
+//
+// Each entry in profiles is the raw YAML bytes of one provider profile
+// document, in bundle manifest order.
+message ProviderProfileSet {
+  repeated bytes profiles = 1;
+}

@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "nvidia/agent_policy_fabric/policy/v1alpha1/policy_annotator.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/policy_effect.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/policy_finding.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/policy_rule.proto";
+
+// PolicySet is the compiled surface served at apf.policy.v1/{bundle-id}.
+// It contains all Cedar policy inputs needed to build a local evaluator and
+// make PDP decisions. Fetched atomically — one document, one provenance JWT,
+// consistent snapshot of the full policy for this bundle.
+//
+// PolicyRule order is part of evaluation semantics (rules are tried in order);
+// the repeated fields here carry bundle manifest order.
+message PolicySet {
+  // PolicyRule documents in manifest order.
+  repeated PolicyRule rules = 1;
+  // PolicyAnnotator documents in manifest order.
+  repeated PolicyAnnotator annotators = 2;
+  // PolicyEffect documents in manifest order.
+  repeated PolicyEffect effects = 3;
+  // PolicyFinding documents in manifest order.
+  repeated PolicyFinding findings = 4;
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NVIDIA/APF/contracts/jsonschema/policy-bundle.v1alpha1.schema.json",
+  "title": "APF PolicyBundle v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "id", "policy_revision", "not_before", "expires_at"],
+  "properties": {
+    "apiVersion": { "const": "nvidia.agent-policy-fabric.policy/v1alpha1" },
+    "kind": { "const": "PolicyBundle" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "policy_revision": { "type": "integer", "minimum": 0 },
+    "not_before": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "manifest": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/manifestEntry" },
+      "uniqueItems": true
+    },
+    "runtime_compatibility": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/runtimeCompatibility" }
+    }
+  },
+  "$defs": {
+    "manifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
+    "runtimeCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_version": { "type": "string", "minLength": 1 },
+        "max_version": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "google/protobuf/struct.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+
+// PolicyRuleRole determines how the evaluator interprets a PolicyRule's
+// Cedar statements relative to other rules in the same bundle.
+enum PolicyRuleRole {
+  POLICY_RULE_ROLE_UNSPECIFIED = 0;
+  // Grant rules permit specific tools and capabilities. At least one Grant
+  // rule must fire a Cedar permit for an MCP tool call to be allowed. Grant
+  // rules have no effect on non-MCP (HTTP) traffic.
+  POLICY_RULE_ROLE_GRANT = 1;
+  // Control rules apply to all traffic (MCP and non-MCP). Cedar forbids stop
+  // evaluation immediately. Cedar permits on Control rules pass traffic
+  // through for content inspection but do NOT count toward satisfying the
+  // "at least one Grant fired" requirement — they cannot rescue an ungranted
+  // MCP call.
+  POLICY_RULE_ROLE_CONTROL = 2;
+}
+
+// PolicyRule is the canonical APF request-evaluation policy document. A
+// bundle member of this kind is compiled into one entry of the
+// apf.policy-rules.v1 projection and evaluated per request by the engine
+// matching its language.
+message PolicyRule {
+  // Identity and display fields for this rule document.
+  ObjectMeta metadata = 1;
+  // The rule body.
+  PolicyRuleSpec spec = 2;
+}
+
+// PolicyRuleSpec is the rule body.
+message PolicyRuleSpec {
+  // Human-readable description of what the rule enforces.
+  string description = 1;
+  // Evaluation language of the definition, e.g. "cedar". Unregistered
+  // languages fail compilation rather than passing through unevaluated.
+  string language = 2;
+  // Language-native type schema for the definition, e.g. a Cedar schema in
+  // human syntax. Absent means the definition is compiled without schema
+  // validation.
+  optional string schema = 3;
+  // Language-native policy statements, evaluated per request.
+  string definition = 4;
+  // Opaque contributor data document accompanying the rule; not consulted by
+  // the allow/deny decision.
+  google.protobuf.Struct data = 5;
+  // Role of this rule in the evaluation pipeline. Defaults to GRANT when
+  // absent for backward compatibility with bundles authored before this field
+  // was introduced.
+  PolicyRuleRole role = 6;
+}

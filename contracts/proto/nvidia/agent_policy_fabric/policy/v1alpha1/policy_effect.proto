@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "google/protobuf/struct.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/policy_finding.proto";
+
+// PolicyEffect defines the post-processing actions and observations attached
+// to a fired permit policy via @apf_effect. Bundle members of this kind are
+// compiled at load time and referenced by name.
+message PolicyEffect {
+  // Identity and display fields for this effect document.
+  ObjectMeta metadata = 1;
+  // The effect body.
+  PolicyEffectSpec spec = 2;
+}
+
+// PolicyEffectSpec defines the mutations and verdict an effect applies when
+// its permit policy fires.
+message PolicyEffectSpec {
+  // Human-readable description of this effect's purpose.
+  string description = 1;
+  // Advisory verdict: the strongest verdict across all fired effects wins.
+  Verdict verdict = 2;
+  // Machine-readable reason tag surfaced on the deny/warn path.
+  optional string reason = 3;
+  // Human-readable message surfaced alongside the verdict.
+  optional string message = 4;
+  // Body mutation: a full replacement or a list of RFC 6902 patches.
+  // Exactly one of body.replace or body.patches must be set when body is
+  // present.
+  optional BodySpec body = 5;
+  // Header mutations applied in document order.
+  repeated HeaderSpec headers = 6;
+  // Finding emitted alongside the decision: a reference to a PolicyFinding
+  // by name, or an inline definition local to this effect.
+  optional FindingRef finding = 7;
+}
+
+// Advisory verdict attached to an allow decision. Stronger verdicts win when
+// multiple effects fire on the same request.
+enum Verdict {
+  VERDICT_UNSPECIFIED = 0;
+  VERDICT_ALLOW = 1;
+  VERDICT_WARN = 2;
+  VERDICT_ESCALATE = 3;
+}
+
+// Body mutation: full replacement or a list of RFC 6902 JSON Patch operations.
+// Exactly one of replace or patches must be set.
+message BodySpec {
+  // Replace the entire request body with this static string.
+  optional string replace = 1;
+  // RFC 6902 patch sequence applied in order.
+  repeated PatchSpec patches = 2;
+}
+
+// One RFC 6902 JSON Patch operation. For replace/add, exactly one of value or
+// source must be set. For remove, neither may be set.
+message PatchSpec {
+  PatchOp op = 1;
+  // JSON Pointer path to the target location.
+  string path = 2;
+  // Static operand for replace/add operations.
+  optional google.protobuf.Value value = 3;
+  // context.annotations.<key> path from which the operand is read at
+  // evaluation time. Mutually exclusive with value.
+  optional string source = 4;
+}
+
+// RFC 6902 patch operation kind.
+enum PatchOp {
+  PATCH_OP_UNSPECIFIED = 0;
+  PATCH_OP_REPLACE = 1;
+  PATCH_OP_ADD = 2;
+  PATCH_OP_REMOVE = 3;
+}
+
+// One HTTP header mutation. For set/add, exactly one of value or source must
+// be set. For remove, neither may be set.
+message HeaderSpec {
+  // Header name, e.g. "X-APF-Event".
+  string name = 1;
+  HeaderAction action = 2;
+  // Static operand for set/add operations.
+  optional string value = 3;
+  // context.annotations.<key> path from which the operand is read at
+  // evaluation time. Mutually exclusive with value.
+  optional string source = 4;
+}
+
+// Header mutation kind.
+enum HeaderAction {
+  HEADER_ACTION_UNSPECIFIED = 0;
+  HEADER_ACTION_SET = 1;
+  HEADER_ACTION_ADD = 2;
+  HEADER_ACTION_REMOVE = 3;
+}
+
+// Finding attached to an effect: either a reference to a PolicyFinding by
+// name, or an inline definition local to this effect.
+message FindingRef {
+  oneof kind {
+    // Name of a PolicyFinding document in the same bundle.
+    string reference = 1;
+    // Inline finding definition, not requiring a separate PolicyFinding.
+    InlineFinding inline = 2;
+  }
+}
+
+// Inline finding definition inside a PolicyEffect. Structurally equivalent to
+// PolicyFindingSpec but scoped to this effect alone.
+message InlineFinding {
+  // Finding category, e.g. "model_downgrade". Authored as `type` in YAML.
+  string kind = 1;
+  // Static label within the category. Overridden by label_source when both
+  // are set.
+  optional string label = 2;
+  // Observation severity.
+  Severity severity = 3;
+  // Detector confidence in percent (0–100).
+  optional uint32 confidence = 4;
+  // context.annotations.<key> path from which the label is read at evaluation
+  // time. Takes precedence over label when the annotation is present.
+  optional string label_source = 5;
+}

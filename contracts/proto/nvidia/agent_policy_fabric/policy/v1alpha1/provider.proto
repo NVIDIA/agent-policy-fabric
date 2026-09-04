@@ -1,0 +1,218 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+// NetworkEndpoint and NetworkBinary are defined in sandbox_policy.proto and
+// reused here so a provider endpoint and a sandbox network endpoint share one
+// type.
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/sandbox_policy.proto";
+
+// Provider is the canonical APF provider policy document. A bundle member of
+// this kind is translated into a provider profile projection vended to the
+// requesting gateway.
+message Provider {
+  // Identity and display fields for this provider document.
+  ObjectMeta metadata = 1;
+  // The provider body.
+  ProviderSpec spec = 2;
+}
+
+// ProviderSpec is the provider body.
+message ProviderSpec {
+  // OpenShell category, one of: "inference", "agent", "source-control",
+  // "messaging", "data", "knowledge", "other".
+  string type = 1;
+  // Allowed network destinations (host:port plus optional L7) for this provider.
+  repeated NetworkEndpoint endpoints = 2;
+  // Binary identities permitted to initiate this provider's connections,
+  // e.g. a tool CLI path. Maps to ProviderProfile.binaries.
+  repeated NetworkBinary binaries = 3;
+  // Credentials this provider injects.
+  repeated Credential credentials = 4;
+}
+
+// Credential is a flat credential definition authored inline on
+// Provider.credentials[]. It maps directly to ProviderProfileCredential.
+message Credential {
+  // Environment variables the credential is injected as.
+  repeated string env_vars = 1;
+  // How the credential is sent: "bearer", "header", "query", or "path".
+  // Empty defaults to "bearer".
+  string style = 2;
+  // Header name when style is "header".
+  string header = 3;
+  // Query parameter name when style is "query".
+  string query_param = 4;
+  // Path template when style is "path".
+  string path_template = 5;
+  // How the credential is obtained.
+  CredentialSource source = 6;
+  // Credential identifier.
+  string name = 7;
+  // Whether the credential is eligible for local discovery.
+  optional bool discoverable = 8;
+  // Whether the credential is required.
+  bool required = 9;
+  // Human-readable description of the credential's purpose.
+  string description = 10;
+}
+
+// CredentialSource is the mechanism by which a credential is acquired. The set
+// of mechanisms is extensible: new branches are added without breaking the
+// wire.
+message CredentialSource {
+  oneof kind {
+    // Static credential supplied in the host environment.
+    HostEnvSource host_env = 1;
+    // Credential obtained via an OAuth2 grant.
+    OAuth2Source oauth2 = 2;
+    // Static credential supplied in the host environment by a refresher
+    // external to APF/OpenShell.
+    ExternalSource external = 3;
+    // Credential minted by assuming a Google service account via a signed JWT.
+    GoogleServiceAccountJwtSource google_service_account_jwt = 4;
+    // Credential minted via AWS STS AssumeRole.
+    AwsStsAssumeRoleSource aws_sts_assume_role = 5;
+    // Credential minted dynamically via an OAuth2 token grant at use time.
+    TokenGrantSource token_grant = 6;
+  }
+}
+
+// HostEnvSource is a static credential supplied in the host environment.
+message HostEnvSource {
+  // Host env var to read, when different from the injected env var.
+  string name = 1;
+}
+
+// ExternalSource is a static credential supplied in the host environment,
+// refreshed on its own schedule by a mechanism external to APF/OpenShell
+// (e.g. a sidecar or host-side agent). OpenShell tracks refresh status for
+// this credential but does not mint or refresh the value itself.
+message ExternalSource {
+  // Host env var to read, when different from the injected env var.
+  string name = 1;
+  // OAuth2 token endpoint URL, tracked for expiry purposes only.
+  string token_url = 2;
+  // OAuth2 scopes the credential was issued for.
+  repeated string scopes = 3;
+  // Seconds before expiry to mark the credential as due for refresh.
+  int64 refresh_before_seconds = 4;
+  // Maximum credential lifetime in seconds.
+  int64 max_lifetime_seconds = 5;
+}
+
+// OAuth2Source obtains the credential via an OAuth2 grant.
+message OAuth2Source {
+  // OAuth2 grant: "client-credentials" or "refresh-token".
+  string grant = 1;
+  // OAuth2 token endpoint URL.
+  string token_url = 2;
+  // OAuth2 scopes to request.
+  repeated string scopes = 3;
+  // Seconds before expiry to refresh.
+  int64 refresh_before_seconds = 4;
+  // Maximum credential lifetime in seconds.
+  int64 max_lifetime_seconds = 5;
+  // Inputs the grant requires, mapping each parameter to the host environment
+  // variable that supplies its value, e.g. {"client_id": "ACME_CLIENT_ID",
+  // "client_secret": "ACME_CLIENT_SECRET"}. Values are resolved at runtime;
+  // the document never carries the secrets themselves.
+  map<string, string> parameters = 6;
+  // Additional credentials minted by the same refresh, beyond the primary
+  // credential this source is attached to.
+  repeated RefreshOutput additional_outputs = 7;
+}
+
+// RefreshMaterial declares one named input a minting strategy requires,
+// e.g. a service account private key or an AWS role ARN. The document
+// declares the shape; values are resolved at runtime and never carried here.
+message RefreshMaterial {
+  // Semantic input name the strategy expects, e.g. "private_key".
+  string name = 1;
+  // Human-readable description of the input.
+  string description = 2;
+  // Whether the strategy requires this input to mint a credential.
+  bool required = 3;
+  // Whether the input's runtime value is security-sensitive.
+  bool secret = 4;
+}
+
+// RefreshOutput declares that a single refresh operation mints more than one
+// credential. Each output maps a strategy-defined semantic output id to a
+// sibling credential whose env_vars receive the minted value.
+message RefreshOutput {
+  // Strategy-defined semantic output id, e.g. "session_token".
+  string output = 1;
+  // Sibling credential name whose env_vars receive this output.
+  string credential = 2;
+}
+
+// GoogleServiceAccountJwtSource mints the credential by exchanging a signed
+// service-account JWT.
+message GoogleServiceAccountJwtSource {
+  // Seconds before expiry to refresh.
+  int64 refresh_before_seconds = 1;
+  // Maximum credential lifetime in seconds.
+  int64 max_lifetime_seconds = 2;
+  // Named inputs this strategy requires (e.g. the service account key).
+  repeated RefreshMaterial material = 3;
+  // Additional credentials minted by the same refresh.
+  repeated RefreshOutput additional_outputs = 4;
+}
+
+// AwsStsAssumeRoleSource mints the credential by assuming an AWS IAM role via
+// STS.
+message AwsStsAssumeRoleSource {
+  // Seconds before expiry to refresh.
+  int64 refresh_before_seconds = 1;
+  // Maximum credential lifetime in seconds.
+  int64 max_lifetime_seconds = 2;
+  // Named inputs this strategy requires (e.g. the role ARN).
+  repeated RefreshMaterial material = 3;
+  // Additional credentials minted by the same refresh (e.g. paired
+  // secret_access_key/session_token outputs).
+  repeated RefreshOutput additional_outputs = 4;
+}
+
+// TokenGrantAudienceOverride selects an endpoint and overrides the audience
+// (and optionally scopes) requested for it.
+message TokenGrantAudienceOverride {
+  // Optional: endpoint host selector. If omitted, inherits the provider
+  // endpoint host.
+  string host = 1;
+  // Optional: endpoint port selector. If omitted, matches the provider
+  // endpoint port.
+  uint32 port = 2;
+  // Optional: endpoint path selector. If omitted, inherits the provider
+  // endpoint path.
+  string path = 3;
+  // Resource audience to request for matching endpoints.
+  string audience = 4;
+  // Optional: OAuth2 scopes to request. If omitted, inherits the token
+  // grant's scopes.
+  repeated string scopes = 5;
+}
+
+// TokenGrantSource mints the credential dynamically via an OAuth2 grant at
+// use time, rather than on a refresh schedule.
+message TokenGrantSource {
+  // OAuth2 token endpoint URL.
+  string token_endpoint = 1;
+  // Optional: default resource audience to request from the token service.
+  string audience = 2;
+  // Optional: audience to request when fetching the JWT-SVID used to
+  // authenticate to the token endpoint. If omitted, derived from
+  // token_endpoint.
+  string jwt_svid_audience = 3;
+  // Optional: OAuth2 scopes to request.
+  repeated string scopes = 4;
+  // Optional: override token cache TTL in seconds. If 0 or omitted, uses the
+  // expires_in value from the token response.
+  int64 cache_ttl_seconds = 5;
+  // Optional: endpoint-specific resource audience overrides.
+  repeated TokenGrantAudienceOverride audience_overrides = 6;
+  // Optional: OAuth2 client_assertion_type value. If omitted, the default is
+  // urn:ietf:params:oauth:client-assertion-type:jwt-bearer.
+  string client_assertion_type = 7;
+}

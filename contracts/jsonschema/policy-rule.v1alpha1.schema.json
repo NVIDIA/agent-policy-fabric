@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NVIDIA/APF/contracts/jsonschema/policy-rule.v1alpha1.schema.json",
+  "title": "APF PolicyRule v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nvidia.agent-policy-fabric.policy/v1alpha1" },
+    "kind": { "const": "PolicyRule" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "definition"],
+      "properties": {
+        "description": { "type": "string" },
+        "language": { "const": "cedar" },
+        "schema": { "type": "string" },
+        "definition": { "type": "string", "minLength": 1 },
+        "data": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "role": { "enum": ["capability", "grant", "control"] }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name"],
+      "not": { "required": ["namespace"] },
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 0 },
+        "title": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

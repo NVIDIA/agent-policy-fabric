@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+
+// SandboxPolicy is the canonical APF sandbox runtime policy document.
+// A bundle member of this kind is lowered into a substrate-native projection
+// and vended to the requesting gateway.
+message SandboxPolicy {
+  // Identity and display fields for this policy document.
+  ObjectMeta metadata = 1;
+  // The policy body: security configuration for the sandbox.
+  SandboxPolicySpec spec = 2;
+}
+
+// SandboxPolicySpec is the policy body: the sandbox security configuration.
+message SandboxPolicySpec {
+  // Filesystem access policy.
+  FilesystemPolicy filesystem = 1;
+  // Landlock configuration.
+  LandlockPolicy landlock = 2;
+  // Process execution policy.
+  ProcessPolicy process = 3;
+  // Network access policies keyed by name, e.g. "github", "gitlab".
+  map<string, NetworkPolicyRule> network_policies = 4;
+}
+
+// FilesystemPolicy declares which paths the sandbox may read or write.
+message FilesystemPolicy {
+  // When true, the sandbox working directory is automatically added as read-write.
+  bool include_workdir = 1;
+  // Paths the sandbox may read but not write.
+  repeated string read_only = 2;
+  // Paths the sandbox may read and write.
+  repeated string read_write = 3;
+}
+
+// LandlockPolicy configures the Linux Landlock LSM for the sandbox process.
+message LandlockPolicy {
+  // Compatibility mode: "best_effort" silently degrades on kernels without
+  // Landlock support; "hard_requirement" aborts sandbox creation instead.
+  string compatibility = 1;
+}
+
+// ProcessPolicy governs the identity under which the sandbox process runs.
+message ProcessPolicy {
+  // Unix user name to run the sandboxed process as.
+  string run_as_user = 1;
+  // Unix group name to run the sandboxed process as.
+  string run_as_group = 2;
+}
+
+// NetworkPolicyRule groups the endpoints and binary identities that form one
+// named network access policy for the sandbox.
+message NetworkPolicyRule {
+  // Human-readable name for this policy rule. Defaults to the map key when omitted.
+  string name = 1;
+  // Allowed endpoint (host:port) pairs with optional L7 inspection config.
+  repeated NetworkEndpoint endpoints = 2;
+  // Allowed binary identities. Only processes matching a listed binary may
+  // initiate connections governed by this rule.
+  repeated NetworkBinary binaries = 3;
+}
+
+// NetworkEndpoint declares one allowed network destination with optional L7
+// inspection configuration.
+message NetworkEndpoint {
+  // Hostname or host glob pattern. Exact match is case-insensitive.
+  string host = 1;
+  // Single port. Normalized into ports when ports is empty.
+  uint32 port = 2;
+  // Application protocol for L7 inspection: "rest", "websocket", "graphql",
+  // "sql", or "" for L4-only.
+  string protocol = 3;
+  // TLS handling: "terminate" to decrypt and inspect, "passthrough" (default)
+  // to forward without inspection.
+  string tls = 4;
+  // Enforcement mode: "enforce" to block violations, "audit" (default) to
+  // log without blocking.
+  string enforcement = 5;
+  // Access preset shorthand: "read-only", "read-write", or "full". Mutually
+  // exclusive with rules.
+  string access = 6;
+  // Explicit L7 allow rules. Mutually exclusive with access.
+  repeated L7Rule rules = 7;
+  // Resolved IP addresses or CIDR ranges permitted for this endpoint.
+  repeated string allowed_ips = 8;
+  // Multiple ports. When non-empty, this endpoint covers all listed ports
+  // and port is set to the first entry.
+  repeated uint32 ports = 9;
+  // Explicit L7 deny rules. Evaluated after allow rules; matching requests
+  // are blocked regardless of any allow rule.
+  repeated L7DenyRule deny_rules = 10;
+  // When true, percent-encoded '/' (%2F) in path segments is preserved
+  // rather than rejected.
+  bool allow_encoded_slash = 11;
+  // GraphQL persisted-query behavior: "deny" (default) rejects all persisted
+  // queries; "allow_registered" permits only those listed in
+  // graphql_persisted_queries.
+  string persisted_queries = 12;
+  // Registry of trusted GraphQL persisted queries keyed by hash or id.
+  // Used when persisted_queries is "allow_registered".
+  map<string, GraphqlOperation> graphql_persisted_queries = 13;
+  // Maximum GraphQL request body bytes to buffer for inspection.
+  // Defaults to 65536.
+  uint32 graphql_max_body_bytes = 14;
+  // HTTP path glob that scopes this endpoint on a shared host:port API.
+  // Empty means all paths.
+  string path = 15;
+  // When true, credential placeholders in client-to-server WebSocket text
+  // messages are rewritten before forwarding.
+  bool websocket_credential_rewrite = 16;
+  // When true, credential placeholders in textual HTTP request bodies are
+  // rewritten before forwarding.
+  bool request_body_credential_rewrite = 17;
+  // Maximum JSON-RPC-over-HTTP request body bytes to buffer for inspection.
+  // Defaults to 65536 when unset. Used by protocol "json-rpc" and "mcp".
+  uint32 json_rpc_max_body_bytes = 18;
+  // MCP-only policy and inspection options. Only used when protocol is "mcp".
+  McpOptions mcp = 19;
+  // Explicit binding authority for static credentials from an attached
+  // endpointless provider profile. Profiles that already define endpoints
+  // continue to use those profile endpoints as their credential boundary.
+  NetworkCredentialBinding credential_binding = 20;
+  // Explicitly permits credential-bearing traffic to use paths that cannot be
+  // inspected or rewritten. Defaults to false. This is a security-sensitive
+  // escape hatch and must be explicitly approved.
+  bool allow_uninspected_credentials = 21;
+}
+
+// NetworkCredentialBinding declares which attached provider's static
+// credentials may be resolved for requests admitted by an endpoint.
+message NetworkCredentialBinding {
+  // Name of the provider attached to this sandbox whose static credentials
+  // may be resolved for requests admitted by this endpoint.
+  string provider = 1;
+}
+
+// MCP options for endpoints with protocol "mcp". Controls how the supervisor
+// proxy inspects MCP Streamable HTTP request bodies and evaluates per-tool
+// policy. Mirrors OpenShell's McpOptions (sandbox.proto field 23).
+message McpOptions {
+  // When unset or true, the supervisor enforces MCP-recommended tool-name
+  // syntax (^[A-Za-z0-9_.-]{1,128}$) before policy evaluation.
+  optional bool strict_tool_names = 1;
+  // When true, omitted rule methods use the endpoint MCP method profile
+  // (allow all MCP-family methods unless narrowed by tool-specific rules).
+  optional bool allow_all_known_mcp_methods = 2;
+}
+
+// GraphqlOperation classifies a trusted GraphQL persisted query.
+message GraphqlOperation {
+  // Operation type: "query", "mutation", or "subscription".
+  string operation_type = 1;
+  // Operation name, if known.
+  string operation_name = 2;
+  // Root field names selected by the operation.
+  repeated string fields = 3;
+}
+
+// L7Rule wraps a single allow action at layer 7.
+message L7Rule {
+  // The allow action this rule grants.
+  L7Allow allow = 1;
+}
+
+// L7Allow declares one permitted L7 action. Unused fields are ignored;
+// only the fields relevant to the endpoint's protocol are evaluated.
+message L7Allow {
+  // HTTP method (REST): GET, POST, etc. or "*" for any.
+  // Protocol method (JSON-RPC/MCP): JSON-RPC method name or glob.
+  string method = 1;
+  // URL path glob pattern (REST): "/repos/**", or "**" for any.
+  string path = 2;
+  // SQL command (SQL): SELECT, INSERT, etc. or "*" for any.
+  string command = 3;
+  // Query parameter matchers keyed by parameter name (REST).
+  map<string, L7QueryMatcher> query = 4;
+  // GraphQL operation type: "query", "mutation", "subscription", or "*".
+  string operation_type = 5;
+  // GraphQL operation name glob. "*" matches any operation name.
+  string operation_name = 6;
+  // GraphQL root field globs. Omit to match all fields.
+  repeated string fields = 7;
+  // reserved 8;
+  // MCP/JSON-RPC params matcher map. Currently only params.name is supported
+  // for MCP tools/call filtering. Generic JSON-RPC rejects params matchers.
+  map<string, L7QueryMatcher> params = 9;
+}
+
+// L7DenyRule declares one prohibited L7 action. Evaluated after allow rules;
+// a matching request is blocked regardless of any allow rule.
+message L7DenyRule {
+  // HTTP method (REST): GET, POST, etc. or "*" for any.
+  // Protocol method (JSON-RPC/MCP): JSON-RPC method name or glob.
+  string method = 1;
+  // URL path glob pattern (REST).
+  string path = 2;
+  // SQL command (SQL): SELECT, INSERT, etc. or "*" for any.
+  string command = 3;
+  // Query parameter matchers keyed by parameter name (REST).
+  map<string, L7QueryMatcher> query = 4;
+  // GraphQL operation type: "query", "mutation", "subscription", or "*".
+  string operation_type = 5;
+  // GraphQL operation name glob.
+  string operation_name = 6;
+  // GraphQL root field globs.
+  repeated string fields = 7;
+  // reserved 8;
+  // MCP/JSON-RPC params matcher map. Currently only params.name is supported
+  // for MCP tools/call filtering. Generic JSON-RPC rejects params matchers.
+  map<string, L7QueryMatcher> params = 9;
+}
+
+// L7QueryMatcher matches the value of one HTTP query parameter.
+// Exactly one of glob or any should be set.
+message L7QueryMatcher {
+  // Match when the parameter value matches this single glob pattern.
+  string glob = 1;
+  // Match when the parameter value matches any of these glob patterns.
+  repeated string any = 2;
+}
+
+// NetworkBinary identifies a process by its binary path for network policy
+// matching.
+message NetworkBinary {
+  // Absolute or home-relative path to the binary.
+  string path = 1;
+}
