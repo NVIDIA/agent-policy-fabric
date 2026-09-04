@@ -132,5 +132,5 @@ The interceptor establishes **what the sandbox can reach** (network policy). The
 
 ## Architecture
 
-See `docs/architecture.md` for sequence diagrams of both seams.
+See `docs/governed-path.md` for the admission and per-request flows of both seams.
 See `docs/policy-model.md` for the policy model and document schemas.

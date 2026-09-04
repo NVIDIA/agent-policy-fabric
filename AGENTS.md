@@ -1,7 +1,9 @@
 # APF — Agent Instructions
 
 APF (Agent Policy Fabric) is the policy layer for agentic workloads. It decides what
-AI agents may do and enforces those decisions at the network, tool, and credential layer.
+AI agents may do — at sandbox admission and on every request — and hands those decisions
+to the sandbox runtime, which enforces them. Tool invocation and credential handling are
+out of scope for this repository and belong to the network egress gateway.
 
 ---
 
@@ -15,11 +17,13 @@ AI agents may do and enforces those decisions at the network, tool, and credenti
 | `apf-compiler` | lib | Bundle compilation: frontend, passes, merge, `Projector` trait |
 | `apf-proto` | lib | Generated gRPC bindings from `contracts/proto/` |
 | `apf-policy-client` | lib | gRPC client for `PolicyService` |
-| `apf-policy-service` | **service** | PAP — compile, sign, store, serve bundles. Never evaluates requests. |
+| `apf-policy-service` | **service** | PAP — verify, project, store, serve signed bundles. Never evaluates requests; does not author or sign (that is `apf-compile`, run offline). |
 | `apf-policy-gateway` | **service** | Host-side policy agent — sandbox policy projection and local PDP. |
 | `apf-openshell-projector` | **adapter** | Compiles APF policy IR into OpenShell-native projections; registered in `apf-policy-service`. |
 | `apf-openshell-interceptor` | **adapter** | OpenShell gateway interceptor; runs inside `apf-policy-gateway` at sandbox admission. |
 | `apf-openshell-middleware` | **adapter** | OpenShell supervisor middleware; runs inside `apf-policy-gateway` per egress request. |
+| `apf-openshell-auth` | **adapter** (leaf) | Extension-JWT caller verification shared by the interceptor and middleware. |
+| `apf-compile` | **service** | CLI for offline bundle compilation and signing; runs in the enterprise policy-authoring + publish path, not on the host. |
 
 **Service** = `[[bin]]` target AND `publish = false` in `Cargo.toml`.  
 **Adapter** = name prefix `apf-openshell-` (or `apf-<runtime>-*` for future runtimes). Library crates cannot depend on adapters; service binaries can.
@@ -31,7 +35,7 @@ AI agents may do and enforces those decisions at the network, tool, and credenti
 | Changing | Read first |
 |---|---|
 | Any crate or wire contract | `docs/architecture.md` — component responsibilities, data flow, control/data plane split |
-| `contracts/proto/` | `docs/architecture.md` §4 (sequence diagrams) and the `buf lint` / `buf breaking` rules below |
+| `contracts/proto/` | `docs/governed-path.md` and `docs/policy-publishing.md` §6 (flows that use the wire contracts) and the `buf lint` / `buf breaking` rules below |
 | `crates/apf-openshell-*` | `docs/architecture.md` §3 — OpenShell seams and adapter responsibilities |
 | Any service crate | Run `cargo xtask dag-guard` after changes |
 
@@ -60,7 +64,7 @@ Dependency direction: `contracts/ → crates/<lib> → crates/<service> → crat
   (no adapter deps of its own, e.g. `apf-openshell-auth`) may be shared by
   other adapters; two business-logic adapters may not depend on each other directly
 - `openshell_*` imports in library crate source
-- `yaml_sigil_*` imports outside `apf-policy-service/src/signing/yaml_sigil_backend.rs`
+- `yaml_sigil_*` imports outside `apf-bundle`'s signing backend (`crates/apf-bundle/src/signing/yaml_sigil.rs`)
 
 ---
 
@@ -70,7 +74,7 @@ Dependency direction: `contracts/ → crates/<lib> → crates/<service> → crat
 Adding a second runtime means adding `crates/apf-<runtime>-*` adapter crates —
 no changes to shared library or service crates are needed.
 
-**Signing seam.** All signing goes through `BundleSigner`/`BundleVerifier` (in `apf-types`). Default Ed25519 impl is in `apf-bundle`. The yaml-sigil private backend is the only exception and stays feature-gated in `apf-policy-service`.
+**Signing seam.** All signing goes through `BundleSigner`/`BundleVerifier` (in `apf-types`). Default Ed25519 impl is in `apf-bundle`. The yaml-sigil private backend is the only exception and stays feature-gated in `apf-bundle`.
 
 **Org-workflow seam.** Public service binaries must compile without private org dependencies. Org-specific behavior belongs in a private composition binary wired through APF traits — never inlined in the public service crate.
 

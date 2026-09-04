@@ -53,7 +53,7 @@ CI publishes the signed bundle to Artifactory with a version derived from the co
 
 ## 4. Evolution with a Dedicated Cloud PAP
 
-The GitOps model described above is the current supported path. As `apf-policy-service` evolves into a dedicated cloud-hosted PAP (see [architecture.md §7.2](architecture.md)), it will be the natural home for bundling, signing, and publication as first-class service APIs:
+The GitOps model described above is the current supported path. As `apf-policy-service` evolves into a dedicated cloud-hosted PAP (see [architecture.md §5.2](architecture.md)), it will be the natural home for bundling, signing, and publication as first-class service APIs:
 
 - Teams submit policy documents to the PAP directly, or via lightweight CI steps that no longer need to run `apf-compile` themselves
 - The PAP handles aggregation, compilation, signing, and versioning internally
@@ -95,3 +95,44 @@ In that model the CI pipeline becomes a validation gate — lint, dry-run compil
 ```
 
 Each team contributes to the document kinds they own. The security team's annotator and rule are available to all other rules in the same bundle — a `prompt-injection-detector` annotator written once is automatically visible to the coding assistant team's capability rules without any coordination between the two teams.
+
+## 6. Distribution and Hot-Swap
+
+`verify_bundle()` (signature, manifest hashes, expiry, `runtime_compatibility`, monotonic
+counter) runs once, inside `apf-policy-service`, when it ingests a bundle from its upstream
+source — not on every gateway poll. `apf-policy-gateway`'s hot-swap path (`digest_watcher` →
+`GetDocument` → decode → build evaluator → swap) does not re-verify the bundle signature or
+the `provenance_token` JWT; it trusts the `GetDocument` response over the local UDS transport.
+
+```
+Upstream Source            apf-policy-service              apf-policy-gateway
+      │                             │                               │
+      │◀────── fetch bundle ────────│                               │
+      │─────── bundle bytes ───────▶│                               │
+      │                             │ verify_bundle()               │
+      │                             │ • BundleVerifier (sig)        │
+      │                             │ • manifest hashes             │
+      │                             │ • expiry                      │
+      │                             │ • runtime_compatibility       │
+      │                             │ • monotonic counter           │
+      │                             │ store in PolicySource         │
+      │                             │                               │
+      │                             │◀──── GetDocument (poll) ──────│ digest_watcher
+      │                             │                               │
+      │                             │ digest unchanged?             │
+      │                             │───────── 304 / same ─────────▶│ no-op
+      │                             │                               │
+      │                             │ digest changed:               │
+      │                             │───── GetDocumentResponse ────▶│
+      │                             │ body + provenance_token       │
+      │                             │ (not re-verified here)        │
+      │                             │                               │
+      │                             │                               │ decode PolicySet
+      │                             │                               │ build CedarEvaluator
+      │                             │                               │ arc-swap (lock-free)
+      │                             │                               │
+      │                             │                               │ ✓ new bundle live
+```
+
+The gateway keeps the last known good evaluator if a fetch fails; a bad bundle never
+replaces a working one.
