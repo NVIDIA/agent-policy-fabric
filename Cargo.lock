@@ -663,9 +663,9 @@ dependencies = [
 
 [[package]]
 name = "buf-tools"
-version = "1.70.0-hotfix.1"
+version = "1.72.0-hotfix.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50d72de488e1a23e640c909c16764fe6018221b47bb133a9e04e650b722fbbf7"
+checksum = "fa9d1b2508fb498ef0dabb48c81bb8f4b2eafb08d45d95486c2681f1b26a92d7"
 dependencies = [
  "dirs",
  "flate2",
@@ -2109,6 +2109,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "libredox"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2341,6 +2347,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "noyalib"
+version = "0.0.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaf7471054ff3fcc857fe8c5c674df7d107d2cb3072ac664a244f20b6d8dae01"
+dependencies = [
+ "hashbrown 0.17.1",
+ "indexmap 2.14.0",
+ "libm",
+ "memchr",
+ "rustc-hash",
+ "serde",
+ "serde_core",
+ "smallvec",
 ]
 
 [[package]]
@@ -3008,6 +3030,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustc-literal-escaper"
@@ -4514,17 +4542,16 @@ dependencies = [
 
 [[package]]
 name = "yaml-sigil-core"
-version = "0.1.1-rc.4"
-source = "sparse+https://REDACTED-REGISTRY/index/"
-checksum = "48f38e00ea6274aade5417174023c1e7f3f8ba5b3816a45e24c30c17279e4d56"
+version = "0.5.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ca28fea80a47a6b28fd10ae04e78332d71a6e85cdaa6fe8725a0cf584a37caa"
 dependencies = [
  "base64 0.22.1",
  "buf-tools",
  "buffa",
  "buffa-build",
- "prost-build",
+ "noyalib",
  "serde",
- "serde_yaml",
  "thiserror",
  "tracing",
  "yaml-sigil-traits",
@@ -4532,16 +4559,14 @@ dependencies = [
 
 [[package]]
 name = "yaml-sigil-signing"
-version = "0.1.1-rc.4"
-source = "sparse+https://REDACTED-REGISTRY/index/"
-checksum = "3b2dafc7f1461a72734a4b9ac5d47cc0e270fcaaf1f73704134183b02623e280"
+version = "0.5.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1e1d91d6f46127e0e8232b7e6b39fd06e5012f392c5415f5b97aeaf4b2846b4"
 dependencies = [
  "base64 0.22.1",
  "buffa",
- "ecdsa",
  "ed25519-dalek",
  "p256",
- "sha2 0.10.9",
  "thiserror",
  "tracing",
  "yaml-sigil-core",
@@ -4551,22 +4576,19 @@ dependencies = [
 
 [[package]]
 name = "yaml-sigil-traits"
-version = "0.1.1-rc.4"
-source = "sparse+https://REDACTED-REGISTRY/index/"
-checksum = "d80c4685bd294da9a546e13e6533fe86b13302d738a3d25be5c4160e59e60bc1"
+version = "0.4.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a877411fba7d655b46a6616917fe9c25a1dd3695e0661993e48af249d2c0bac9"
 dependencies = [
- "ed25519-dalek",
- "p256",
  "thiserror",
 ]
 
 [[package]]
 name = "yaml-sigil-transcription"
-version = "0.1.1-rc.4"
-source = "sparse+https://REDACTED-REGISTRY/index/"
-checksum = "c81367907a1f80c4af2102755b971479d17b78ab21edcc95bab58042b3f0af67"
+version = "0.5.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0470ef628bf5645a869f90d1cc6fdf3989d433b9e2fde9029ec555d1b0544a13"
 dependencies = [
- "thiserror",
  "tracing",
  "yaml-sigil-core",
  "yaml-sigil-traits",
@@ -4574,17 +4596,16 @@ dependencies = [
 
 [[package]]
 name = "yaml-sigil-verification"
-version = "0.1.1-rc.4"
-source = "sparse+https://REDACTED-REGISTRY/index/"
-checksum = "11cfb7a096d8fd340d60b3bd2d2e424bf52ebfe7b14284e6b6004988be0ec934"
+version = "0.5.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37527966228fa878c2451e153b33ffcb17d73e4d48e973e29a14072814d58b6b"
 dependencies = [
  "base64 0.22.1",
- "ecdsa",
+ "curve25519-dalek",
  "ed25519-dalek",
  "p256",
  "sha2 0.10.9",
  "signature",
- "thiserror",
  "tracing",
  "yaml-sigil-core",
  "yaml-sigil-traits",

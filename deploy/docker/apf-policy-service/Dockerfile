@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # APF Policy Service image.
 #
-# Build from repo root (Artifactory token required for yaml-sigil deps):
-#   docker build \
-#     --secret id=artifactory_token,env=CARGO_REGISTRIES_ARTIFACTORY_TOKEN \
-#     -f deploy/docker/apf-policy-service/Dockerfile -t apf-policy-service:demo --target demo .
+# Build from repo root:
+#   docker build -f deploy/docker/apf-policy-service/Dockerfile -t apf-policy-service:demo --target demo .
 #
 # Targets:
 #   runtime  — minimal production image
@@ -28,8 +26,6 @@ COPY . .
 # avoiding the need for buf or BSR credentials inside the container.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    --mount=type=secret,id=artifactory_token \
-    CARGO_REGISTRIES_ARTIFACTORY_TOKEN=$(cat /run/secrets/artifactory_token 2>/dev/null || true) \
     cargo build --release -p apf-policy-service -p apf-compile && \
     cp target/release/apf-policy-service /apf-policy-service && \
     cp target/release/apf-compile /apf-compile

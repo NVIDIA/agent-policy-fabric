@@ -20,8 +20,6 @@ COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    --mount=type=secret,id=artifactory_token \
-    CARGO_REGISTRIES_ARTIFACTORY_TOKEN=$(cat /run/secrets/artifactory_token 2>/dev/null || true) \
     cargo build --release -p apf-policy-gateway && \
     cp target/release/apf-policy-gateway /apf-policy-gateway
 

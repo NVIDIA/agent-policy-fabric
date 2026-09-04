@@ -408,7 +408,6 @@ mod tests {
             key: yaml_sigil_traits::signing::SigningKey::Ed25519(key),
             keyid: Some(keyid),
             append_missing_final_newline: true,
-            yaml_backend: yaml_sigil_core::preferred_yaml_backend(),
         })
         .expect("sign member with yaml-sigil")
     }
