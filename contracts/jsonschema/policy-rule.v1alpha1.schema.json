@@ -22,7 +22,7 @@
           "type": "object",
           "additionalProperties": true
         },
-        "role": { "enum": ["capability", "grant", "control"] }
+        "role": { "enum": ["capability", "control"] }
       }
     }
   },

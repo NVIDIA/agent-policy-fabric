@@ -8,6 +8,9 @@
 # Not committed; run vendor-proto before `docker compose build` or `mise run dev`.
 /contracts/proto-ir/
 
+# CI-fetched yaml-sigil proto; not committed.
+/contracts/third_party/
+
 # Signed bundle artifacts — generated; re-create with `mise run sign-bundle`.
 # The dev-signed examples/demo-bundle/demo-bundle.yaml IS committed (dev key only).
 # Add per-directory ignores here if local signing artifacts appear elsewhere.

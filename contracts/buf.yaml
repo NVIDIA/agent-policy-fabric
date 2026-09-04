@@ -1,9 +1,7 @@
 version: v2
 modules:
   - path: proto
-    name: REDACTED-SCHEMA-REGISTRY/agent-policy-fabric/core
-deps:
-  - REDACTED-SCHEMA-REGISTRY/grpc-wg/yaml-sigil
+  - path: third_party/yaml-sigil/proto
 lint:
   use:
     - STANDARD
