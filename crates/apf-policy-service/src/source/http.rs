@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, trace, warn};
 
 use super::{PolicyProjection, PolicySource};
-use crate::runtime::audit::{BundleAuditMetadata, PolicyRejectAudit, PolicyServiceAudit};
+use crate::runtime::audit::{BundleAuditMetadata, PolicyServiceAudit};
 use crate::runtime::runtime_context::RuntimeContext;
 use apf_bundle::CounterStore;
 use apf_types::BundleVerifier;
@@ -44,7 +44,10 @@ struct BundleCache {
     /// version are computed once at cache-population time so `get()` is a
     /// cheap clone instead of a per-call SHA-256.
     projections: BTreeMap<(String, String), PolicyProjection>,
-    /// Monotonic counter from the bundle manifest (`policy_revision`).
+    /// Monotonic counter from the bundle manifest (`policy_revision`), for
+    /// this variant only. See `HttpBundleSource::counter_store` for the
+    /// separate, source-wide counter that gates whether a fetched bundle
+    /// is accepted at all.
     current_counter: u64,
     /// SHA-256 hex digest of the fetched tar.gz — used for change detection
     /// without re-extracting the archive on every poll.
@@ -57,6 +60,17 @@ impl BundleCache {
     /// Atomically swap the cache contents if `new_counter` strictly exceeds
     /// the current counter (monotonic-counter anti-rollback). Returns `true`
     /// when the swap is accepted.
+    ///
+    /// This check is redundant with `HttpBundleSource::counter_store`'s own
+    /// monotonic check under normal, sequential polling — it only rejects
+    /// here if something has already gone wrong upstream. Its real job is
+    /// concurrency safety: two writers for the same variant (e.g. an
+    /// on-demand `load_variant` call racing the background poll loop) can
+    /// each independently pass the counter-store check, since that check
+    /// only requires each write to exceed whatever was persisted *at the
+    /// time it ran* — it does not order writers against each other. This
+    /// check is what stops the slower writer from clobbering a newer
+    /// result the faster one already applied to this cache.
     fn try_swap(
         &mut self,
         new_projections: BTreeMap<(String, String), PolicyProjection>,
@@ -79,10 +93,11 @@ impl BundleCache {
 /// serves projections from per-variant in-memory caches.
 ///
 /// The URL can be a literal (`https://.../bundle.tar.gz`) or a template with
-/// a `{variant}` placeholder (`https://.../governed-{variant}/latest.tar.gz`).
-/// When a template is used, each resolved variant gets its own
-/// [`BundleCache`], enabling the [`ClaimsResolver`] to route different users
-/// to different policy bundles.
+/// a `{variant}` placeholder (`https://.../governed-{variant}/latest.tar.gz`),
+/// filled in with [`ResolvedPolicy::variant`]. When a template is used,
+/// each resolved variant gets its own [`BundleCache`], enabling a
+/// [`PolicyResolver`] to route different callers to different bundle
+/// editions.
 pub struct HttpBundleSource {
     url_template: String,
     auth_token: String,
@@ -91,23 +106,33 @@ pub struct HttpBundleSource {
     caches: Arc<RwLock<BTreeMap<String, BundleCache>>>,
     http_client: reqwest::Client,
     /// Persistent counter store for cross-restart anti-rollback.
-    counter_store: Mutex<Option<CounterStore>>,
-    /// Audit emitter for policy lifecycle events on the hot-swap path.
+    ///
+    /// One counter sequence for the whole source, shared by every resolved
+    /// `{variant}` in `caches` above — not one counter per variant. A
+    /// bundle fetched for one variant can be rejected here even if its
+    /// counter is newer than that same variant's own last accepted bundle,
+    /// as long as some other variant already advanced this shared counter
+    /// further.
+    counter_store: Mutex<CounterStore>,
+    /// Audit emitter for policy lifecycle events on the load and hot-swap paths.
     audit: PolicyServiceAudit,
     /// Verifies every fetched bundle's signature against the trust store
-    /// before it's compiled or served — see `super::verify_bundle_bytes`.
+    /// before it's compiled or served — see `extract_and_compile`.
     verifier: Arc<dyn BundleVerifier>,
 }
 
 impl HttpBundleSource {
     /// Build a new source. `url` may contain `{variant}` for template-based
-    /// multi-bundle resolution. `verifier` is mandatory: an HTTP-fetched
-    /// bundle is never trusted on transport (token/TLS) alone.
+    /// multi-bundle resolution. `verifier` and `counter_store` are both
+    /// mandatory: an HTTP-fetched bundle is never trusted on transport
+    /// (token/TLS) alone, and can't be checked for rollback without a
+    /// counter store to check it against.
     pub fn new(
         url: &str,
         token: &str,
         compiler: apf_compiler::Compiler,
         verifier: Arc<dyn BundleVerifier>,
+        counter_store: CounterStore,
     ) -> anyhow::Result<Self> {
         let http_client = reqwest::Client::builder()
             .build()
@@ -118,7 +143,7 @@ impl HttpBundleSource {
             compiler,
             caches: Arc::new(RwLock::new(BTreeMap::new())),
             http_client,
-            counter_store: Mutex::new(None),
+            counter_store: Mutex::new(counter_store),
             audit: PolicyServiceAudit,
             verifier,
         })
@@ -151,8 +176,11 @@ impl HttpBundleSource {
             .await
     }
 
-    /// Fetch and cache a specific variant. Used at startup for the default
-    /// variant and lazily for template-resolved variants.
+    /// Fetch and cache one resolved `{variant}` on demand — the
+    /// counterpart to the background poll loop, for a caller that
+    /// resolves a variant on a cache miss (e.g. a request surface routing
+    /// by claims) rather than waiting for the next poll cycle to
+    /// populate it.
     pub async fn load_variant(&self, variant: &str) -> anyhow::Result<()> {
         let url = self.resolve_url(variant);
         self.load_variant_inner(variant, &url).await
@@ -160,16 +188,21 @@ impl HttpBundleSource {
 
     async fn load_variant_inner(&self, variant: &str, url: &str) -> anyhow::Result<()> {
         let tar_gz = self.fetch_bundle_from(url).await?;
+        // Fails closed and persists the counter before returning — see
+        // `extract_and_compile`. A verified-but-unpersisted bundle never
+        // reaches the cache below.
         let (projections, counter, digest, bundle_id) = self.extract_and_compile(&tar_gz)?;
 
         let projection_count = projections.len();
 
-        let mut caches = self.caches.write().expect("cache lock poisoned");
-        let cache = caches.entry(variant.to_string()).or_default();
-        cache.projections = projections;
-        cache.current_counter = counter;
-        cache.bundle_digest = digest.clone();
-        cache.bundle_id = bundle_id;
+        {
+            let mut caches = self.caches.write().expect("cache lock poisoned");
+            let cache = caches.entry(variant.to_string()).or_default();
+            cache.projections = projections;
+            cache.current_counter = counter;
+            cache.bundle_digest = digest.clone();
+            cache.bundle_id = bundle_id;
+        }
 
         info!(
             url = %url,
@@ -289,6 +322,13 @@ impl HttpBundleSource {
             }
         }
 
+        // `extract_and_compile` verifies, compiles, and persists the counter
+        // before returning — a bundle that fails any of those steps (an
+        // unpersisted counter included) propagates as `Err` here, which
+        // `poll_for_update`'s caller logs and treats as "try again next
+        // cycle" rather than a fatal poll-loop error. That's what keeps the
+        // in-memory counter from ever running ahead of the durable one: this
+        // point is only reached once persistence has already succeeded.
         let (projections, counter, digest, bundle_id) = self.extract_and_compile(&tar_gz)?;
         let projection_count = projections.len();
 
@@ -299,26 +339,6 @@ impl HttpBundleSource {
         };
 
         if swapped {
-            if let Some(ref mut store) = *self
-                .counter_store
-                .lock()
-                .expect("counter store lock poisoned")
-                && let Err(e) = store.check_and_advance(counter)
-            {
-                warn!(
-                    counter,
-                    error = %e,
-                    "persistent counter advance failed; in-memory swap accepted"
-                );
-                self.emit_hot_swap_reject(
-                    "policy.hot_swap_rejected.counter_persist_failed",
-                    format!("persistent counter advance failed: {e}"),
-                    true,
-                    counter,
-                    &digest,
-                );
-            }
-
             let metadata = BundleAuditMetadata::from_counter_and_digest(counter, &digest);
             if let Err(e) = self.audit.emit_policy_hot_swap(&metadata, &digest, counter) {
                 warn!(error = %e, "audit emission failed for policy hot-swap");
@@ -338,7 +358,7 @@ impl HttpBundleSource {
                 "http bundle source: bundle counter not newer; ignoring"
             );
             self.emit_hot_swap_reject(
-                "policy.hot_swap_rejected.counter_not_newer",
+                "policy.bundle_rejected.counter_not_newer",
                 format!("bundle counter {counter} not newer than current"),
                 false,
                 counter,
@@ -357,9 +377,7 @@ impl HttpBundleSource {
         digest: &str,
     ) {
         let meta = BundleAuditMetadata::from_counter_and_digest(counter, digest);
-        let reject = PolicyRejectAudit::new(reason_code, message)
-            .with_retryable(retryable)
-            .with_bundle_counter(Some(counter))
+        let reject = super::reject_audit(reason_code, message, retryable, Some(counter))
             .with_metadata_source("http_bundle_source_poll");
         if let Err(e) =
             self.audit
@@ -414,13 +432,6 @@ impl HttpBundleSource {
             .unwrap_or(0)
     }
 
-    pub fn set_counter_store(&self, store: CounterStore) {
-        *self
-            .counter_store
-            .lock()
-            .expect("counter store lock poisoned") = Some(store);
-    }
-
     pub fn set_audit(&mut self, audit: PolicyServiceAudit) {
         self.audit = audit;
     }
@@ -455,6 +466,10 @@ impl HttpBundleSource {
     /// Returns `(projections, monotonic_counter, tar_gz_digest)`.
     /// Projections are returned with pre-computed SHA-256 digests so `get()`
     /// avoids per-call hashing.
+    /// Unpack the tar.gz, then verify, compile, and persist the bundle
+    /// through `BundleLoadContext` — the tar-unpack-and-find-manifest step
+    /// has to run first since verification needs the extracted manifest
+    /// bytes, not the raw tar.gz.
     #[allow(clippy::type_complexity)]
     fn extract_and_compile(
         &self,
@@ -477,57 +492,54 @@ impl HttpBundleSource {
         let manifest_path =
             apf_bundle::find_bundle_manifest(tmp_dir.path(), self.verifier.as_ref())
                 .map_err(|e| anyhow::anyhow!("find bundle manifest: {e}"))?;
-
-        // Verify signature + counter before compiling, so an unsigned or
-        // rolled-back artifact never reaches the compiler or the cache.
         let bundle_bytes =
             std::fs::read(&manifest_path).map_err(|e| anyhow::anyhow!("read manifest: {e}"))?;
-        let (counter, parsed_bundle) = {
-            let counter_store_guard = self
-                .counter_store
-                .lock()
-                .expect("counter store lock poisoned");
-            let counter_store = counter_store_guard.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("counter store not configured; cannot verify bundle")
-            })?;
-            let outcome = super::verify_bundle_bytes(
-                &bundle_bytes,
-                &manifest_path,
-                self.verifier.as_ref(),
-                counter_store,
-            )?;
+
+        let mut counter_store = self
+            .counter_store
+            .lock()
+            .expect("counter store lock poisoned");
+
+        let (projections, counter, bundle_id) = super::BundleLoadContext {
+            verifier: self.verifier.as_ref(),
+            counter_store: &mut counter_store,
+            audit: &self.audit,
+        }
+        .verify_and_advance(&bundle_bytes, &manifest_path, |outcome| {
             let parsed_bundle = outcome
                 .bundle
-                .ok_or_else(|| anyhow::anyhow!("verified outcome missing parsed bundle"))?;
-            (outcome.monotonic_counter, parsed_bundle)
-        };
-        let bundle_id = parsed_bundle.bundle_id.clone();
+                .clone()
+                .expect("outcome.ok guarantees bundle is present");
+            let bundle_id = parsed_bundle.bundle_id.clone();
 
-        // Compile from the already-verified payload's members, not the raw
-        // on-disk file.
-        let bundle_dir = manifest_path.parent().unwrap_or_else(|| tmp_dir.path());
-        let members = parsed_bundle
-            .load_members(bundle_dir)
-            .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
-        let compiled = self
-            .compiler
-            .lower_members(&members, None)
-            .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
+            // Compile from the already-verified payload's members, not the
+            // raw on-disk file.
+            let bundle_dir = manifest_path.parent().unwrap_or_else(|| tmp_dir.path());
+            let members = parsed_bundle
+                .load_members(bundle_dir)
+                .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
+            let compiled = self
+                .compiler
+                .lower_members(&members, None)
+                .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
-        let projections = apf_compiler::surfaces_to_projections(compiled.surfaces)
-            .into_iter()
-            .map(|(key, bytes)| {
-                let digest = hex::encode(Sha256::digest(&bytes));
-                (
-                    key,
-                    PolicyProjection {
-                        bytes,
-                        digest,
-                        version: counter,
-                    },
-                )
-            })
-            .collect();
+            let projections = apf_compiler::surfaces_to_projections(compiled.surfaces)
+                .into_iter()
+                .map(|(key, bytes)| {
+                    let digest = hex::encode(Sha256::digest(&bytes));
+                    (
+                        key,
+                        PolicyProjection {
+                            bytes,
+                            digest,
+                            version: outcome.monotonic_counter,
+                        },
+                    )
+                })
+                .collect();
+
+            Ok((projections, outcome.monotonic_counter, bundle_id))
+        })?;
 
         Ok((projections, counter, tar_digest, bundle_id))
     }
@@ -606,13 +618,16 @@ mod tests {
             apf_bundle::TrustStore::load_from_dir(empty_trust_dir.path())
                 .expect("load empty trust store"),
         ));
+        let counter_dir = tempfile::tempdir().expect("create counter dir");
+        let counter_store = CounterStore::load_or_init(&counter_dir.path().join("counter"))
+            .expect("init counter store");
         HttpBundleSource {
             url_template: String::new(),
             auth_token: String::new(),
             compiler: apf_compiler::Compiler::new(vec![]),
             caches: Arc::new(RwLock::new(caches)),
             http_client: reqwest::Client::new(),
-            counter_store: Mutex::new(None),
+            counter_store: Mutex::new(counter_store),
             audit: PolicyServiceAudit::default(),
             verifier,
         }
@@ -830,26 +845,40 @@ runtime_compatibility: {{}}
         gz_bytes
     }
 
-    /// Starts a local axum server that serves `body` (with the given content
-    /// type) at `/bundle.tar.gz`, and returns its base URL. The server is
-    /// bound to an OS-assigned loopback port and runs for the life of the
-    /// test binary — acceptable for a short-lived unit test.
-    async fn serve_bundle(body: Vec<u8>) -> String {
+    /// Starts a local axum server serving `/bundle.tar.gz` from a shared,
+    /// mutable body, returning its base URL alongside the handle used to
+    /// change what it serves after the server starts — needed to simulate a
+    /// poll fetching a newer bundle than the one served at startup.
+    /// `serve_bundle` is a fixed-body wrapper around this for tests that
+    /// never need to change the response.
+    async fn serve_bundle_dynamic() -> (String, Arc<Mutex<Vec<u8>>>) {
+        let body = Arc::new(Mutex::new(Vec::new()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");
         let addr = listener.local_addr().expect("local addr");
+        let shared = Arc::clone(&body);
         let app = axum::Router::new().route(
             "/bundle.tar.gz",
             axum::routing::get(move || {
-                let body = body.clone();
-                async move { body }
+                let shared = Arc::clone(&shared);
+                async move { shared.lock().expect("body lock").clone() }
             }),
         );
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve test bundle");
         });
-        format!("http://{addr}/bundle.tar.gz")
+        (format!("http://{addr}/bundle.tar.gz"), body)
+    }
+
+    /// Starts a local axum server that serves `body` at `/bundle.tar.gz` and
+    /// returns its base URL. The server is bound to an OS-assigned loopback
+    /// port and runs for the life of the test binary — acceptable for a
+    /// short-lived unit test.
+    async fn serve_bundle(body: Vec<u8>) -> String {
+        let (url, shared) = serve_bundle_dynamic().await;
+        *shared.lock().expect("body lock") = body;
+        url
     }
 
     #[tokio::test]
@@ -864,11 +893,10 @@ runtime_compatibility: {{}}
 
         let tmp = tempfile::tempdir().expect("create temp dir");
         let compiler = apf_compiler::Compiler::new(vec![]);
-        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+        let counter_store =
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store");
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier), counter_store)
             .expect("build http bundle source");
-        src.set_counter_store(
-            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store"),
-        );
 
         assert!(!src.is_ready(), "source should not be ready before load");
         src.load_initial()
@@ -876,6 +904,91 @@ runtime_compatibility: {{}}
             .expect("load_initial should succeed from the remote bundle alone");
         assert!(src.is_ready());
         assert_eq!(src.bundle_id(""), Some("test-bundle".to_string()));
+    }
+
+    #[tokio::test]
+    async fn http_source_persists_counter_on_initial_load() {
+        let verifier = TestSignedVerifier::new();
+        let artifact = verifier.sign(&good_bundle_yaml(2));
+        let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+        let compiler = apf_compiler::Compiler::new(vec![]);
+        let counter_store = CounterStore::load_or_init(&counter_path).expect("init counter store");
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier), counter_store)
+            .expect("build http bundle source");
+
+        src.load_initial()
+            .await
+            .expect("load_initial should succeed from the remote bundle alone");
+
+        let reloaded =
+            CounterStore::load_or_init(&counter_path).expect("reload counter store from disk");
+        assert_eq!(
+            reloaded.high_water_mark(),
+            2,
+            "initial load must persist the verified counter, not just cache it in memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_source_poll_defers_swap_when_persist_fails() {
+        let verifier = TestSignedVerifier::new();
+        let (url, body) = serve_bundle_dynamic().await;
+        *body.lock().expect("body lock") = pack_bundle_tar_gz(&verifier.sign(&good_bundle_yaml(1)));
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+
+        let compiler = apf_compiler::Compiler::new(vec![]);
+        let counter_store = CounterStore::load_or_init(&counter_path).expect("init counter store");
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier), counter_store)
+            .expect("build http bundle source");
+        src.load_initial()
+            .await
+            .expect("initial load should succeed");
+        assert_eq!(src.current_counter(), 1);
+
+        // Force the next persist attempt to fail with a real I/O error,
+        // deterministically regardless of the test process's privileges —
+        // unlike a permission-based block, which root bypasses. The atomic
+        // writer creates a `.tmp` sibling before renaming it into place;
+        // occupying that path with a directory makes the write fail with
+        // "is a directory," a structural error no uid can override.
+        std::fs::create_dir_all(counter_path.with_extension("tmp"))
+            .expect("occupy the .tmp path with a directory");
+
+        // `verifier` was moved into the source above; a fresh instance signs
+        // with the same fixed test key.
+        let verifier2 = TestSignedVerifier::new();
+        *body.lock().expect("body lock") =
+            pack_bundle_tar_gz(&verifier2.sign(&good_bundle_yaml(2)));
+
+        // `poll_variant` itself now propagates the persist failure as `Err`
+        // (via `extract_and_compile`) — it's `poll_for_update`, the loop the
+        // background task actually calls, that catches and logs per-variant
+        // errors so one variant's persist failure can't take down polling
+        // for the others.
+        let poll_result = src.poll_for_update().await;
+
+        assert!(
+            poll_result.is_ok(),
+            "a persist failure for one variant must not fail the overall poll: {poll_result:?}"
+        );
+        assert_eq!(
+            src.current_counter(),
+            1,
+            "the in-memory swap must be deferred, not applied, when persisting the new counter fails"
+        );
+
+        let reloaded =
+            CounterStore::load_or_init(&counter_path).expect("reload counter store from disk");
+        assert_eq!(
+            reloaded.high_water_mark(),
+            1,
+            "the persisted counter must stay at the last successfully-written value"
+        );
     }
 
     #[tokio::test]
@@ -888,11 +1001,10 @@ runtime_compatibility: {{}}
 
         let tmp = tempfile::tempdir().expect("create temp dir");
         let compiler = apf_compiler::Compiler::new(vec![]);
-        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+        let counter_store =
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store");
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier), counter_store)
             .expect("build http bundle source");
-        src.set_counter_store(
-            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store"),
-        );
 
         let result = src.load_initial().await;
         assert!(result.is_err(), "unsigned bundle should be rejected");
@@ -918,11 +1030,10 @@ runtime_compatibility: {{}}
         let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
 
         let compiler = apf_compiler::Compiler::new(vec![]);
-        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier))
+        let counter_store =
+            CounterStore::load_or_init(&counter_path).expect("reload counter store");
+        let src = HttpBundleSource::new(&url, "", compiler, Arc::new(verifier), counter_store)
             .expect("build http bundle source");
-        src.set_counter_store(
-            CounterStore::load_or_init(&counter_path).expect("reload counter store"),
-        );
 
         let result = src.load_initial().await;
         assert!(result.is_err(), "replayed counter should be rejected");

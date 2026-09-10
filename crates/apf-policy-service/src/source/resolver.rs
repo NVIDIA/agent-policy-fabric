@@ -19,8 +19,13 @@ use apf_proto::runtime_v1alpha1::{RuntimeContext, runtime_context};
 /// Result of resolving a policy name against runtime context.
 #[derive(Debug, Clone)]
 pub struct ResolvedPolicy {
-    /// Variant key for selecting the `HttpBundleSource` cache (e.g., "rw").
-    /// Empty string means no variant (use default cache).
+    /// Key selecting which of a `PolicySource`'s parallel caches serves
+    /// this caller for the same policy name. Its meaning is entirely up
+    /// to the [`PolicyResolver`] implementation — [`ClaimsResolver`] uses
+    /// a role suffix (e.g. `"rw"`, `"admin"`); [`PassthroughResolver`]
+    /// leaves it empty. Also the `{variant}` a template `HttpBundleSource`
+    /// URL resolves to. Empty string selects the source's single default
+    /// cache.
     pub variant: String,
     /// Document name to look up within the variant's projections.
     pub name: String,

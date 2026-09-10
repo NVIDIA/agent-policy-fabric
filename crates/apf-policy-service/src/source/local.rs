@@ -94,45 +94,41 @@ impl LocalBundleSource {
 
         let mut counter_store = counter_store_mutex.lock().expect("counter store lock");
 
-        let outcome = super::verify_bundle_bytes(
-            &bundle_bytes,
-            bundle_path,
-            verifier.as_ref(),
-            &counter_store,
-        )?;
+        // `verify_and_advance` only persists the counter once compilation
+        // below succeeds, so a compilation failure doesn't permanently
+        // consume the counter slot.
+        super::BundleLoadContext {
+            verifier: verifier.as_ref(),
+            counter_store: &mut counter_store,
+            audit: &self.audit,
+        }
+        .verify_and_advance(&bundle_bytes, bundle_path, |outcome| {
+            let parsed_bundle = outcome.bundle.clone().expect("verified bundle present");
+            let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("."));
+            let members = parsed_bundle
+                .load_members(bundle_dir)
+                .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
 
-        // Load and compile before advancing the counter so a compilation failure
-        // doesn't permanently consume the counter slot.
-        let parsed_bundle = outcome.bundle.expect("verified bundle present");
-        let bundle_dir = bundle_path.parent().unwrap_or_else(|| Path::new("."));
-        let members = parsed_bundle
-            .load_members(bundle_dir)
-            .map_err(|e| anyhow::anyhow!("load bundle members: {e}"))?;
+            let compiled = compiler
+                .lower_members(&members, self.allowed_surfaces.as_ref())
+                .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
-        let compiled = compiler
-            .lower_members(&members, self.allowed_surfaces.as_ref())
-            .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
+            let projections = surfaces_to_projections(compiled.surfaces);
 
-        let projections = surfaces_to_projections(compiled.surfaces);
-
-        // Advance only after successful compilation.
-        counter_store
-            .check_and_advance(outcome.monotonic_counter)
-            .map_err(|e| anyhow::anyhow!("counter advance: {e}"))?;
-
-        Ok(PolicyServiceCore {
-            bundle: LoadedBundle {
-                digest_hex: outcome.digest_hex,
-                monotonic_counter: outcome.monotonic_counter,
-                audit_metadata: BundleAuditMetadata::from_counter_and_digest(
-                    outcome.monotonic_counter,
-                    "",
-                ),
-                bundle: parsed_bundle,
-            },
-            projections,
-            document_signer: self.document_signer.clone(),
-            audit: self.audit.clone(),
+            Ok(PolicyServiceCore {
+                bundle: LoadedBundle {
+                    digest_hex: outcome.digest_hex.clone(),
+                    monotonic_counter: outcome.monotonic_counter,
+                    audit_metadata: BundleAuditMetadata::from_counter_and_digest(
+                        outcome.monotonic_counter,
+                        "",
+                    ),
+                    bundle: parsed_bundle,
+                },
+                projections,
+                document_signer: self.document_signer.clone(),
+                audit: self.audit.clone(),
+            })
         })
     }
 }
