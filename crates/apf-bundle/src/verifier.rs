@@ -18,12 +18,20 @@ use sha2::{Digest, Sha256};
 use apf_types::BundleVerifier;
 
 use crate::bundle::{Bundle, ManifestEntry};
-use crate::counter_store::CounterStore;
+use crate::counter_store::{CounterCheckError, CounterStore};
 
 #[derive(Debug, Clone)]
 pub struct VerifyOutcome {
     pub ok: bool,
+    /// SHA-256 of the artifact as presented: payload plus signature envelope.
+    /// Changes whenever the artifact is re-signed, even over identical
+    /// content, because ECDSA signatures are randomized.
     pub digest_hex: String,
+    /// SHA-256 of the verified payload document alone — the content at this
+    /// revision, including the manifest and its member hashes. Stable across
+    /// re-signing; empty when signature verification failed. This is what
+    /// the counter store binds an accepted counter to.
+    pub payload_digest_hex: String,
     /// Whether the bundle parsed far enough to read its fields.
     pub parsed: bool,
     pub monotonic_counter: u64,
@@ -59,6 +67,7 @@ pub fn verify_bundle(
             return VerifyOutcome {
                 ok: false,
                 digest_hex,
+                payload_digest_hex: String::new(),
                 parsed: false,
                 monotonic_counter: 0,
                 rejection_reasons: vec![format!("signature_invalid: {e}")],
@@ -66,6 +75,7 @@ pub fn verify_bundle(
             };
         }
     };
+    let payload_digest_hex = sha256_hex(&payload);
 
     // Step 2: parse the verified payload.
     let bundle = match Bundle::from_payload_bytes(&payload) {
@@ -74,6 +84,7 @@ pub fn verify_bundle(
             return VerifyOutcome {
                 ok: false,
                 digest_hex,
+                payload_digest_hex,
                 parsed: false,
                 monotonic_counter: 0,
                 rejection_reasons: vec![format!("bundle_parse_failed: {e}")],
@@ -88,17 +99,26 @@ pub fn verify_bundle(
     check_expiry(&bundle, now, &mut reasons);
     check_runtime_compat(&bundle, runtime_versions, &mut reasons);
 
-    if bundle.monotonic_counter <= counter_store.high_water_mark() {
-        reasons.push(format!(
-            "counter_regression: bundle counter {} <= high-water-mark {}",
-            bundle.monotonic_counter,
-            counter_store.high_water_mark()
-        ));
+    match counter_store.check(bundle.monotonic_counter, &payload_digest_hex) {
+        Ok(()) => {}
+        Err(CounterCheckError::Regression {
+            candidate,
+            high_water_mark,
+        }) => reasons.push(format!(
+            "counter_regression: bundle counter {candidate} <= high-water-mark {high_water_mark}"
+        )),
+        Err(CounterCheckError::ContentMismatch { counter, .. }) => reasons.push(format!(
+            "counter_content_mismatch: bundle counter {counter} already accepted with a different artifact"
+        )),
+        Err(e @ CounterCheckError::Persist { .. }) => {
+            reasons.push(format!("counter_check_failed: {e}"));
+        }
     }
 
     VerifyOutcome {
         ok: reasons.is_empty(),
         digest_hex,
+        payload_digest_hex,
         parsed: true,
         monotonic_counter: bundle.monotonic_counter,
         rejection_reasons: reasons,
@@ -244,7 +264,7 @@ runtime_compatibility: {{}}
         let s = signer();
         let v = s.verifier();
         let tmp = TempDir::new().unwrap();
-        let mut counter = empty_counter(tmp.path());
+        let counter = empty_counter(tmp.path());
         let artifact = s.sign(good_bundle_yaml(1).as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
@@ -252,7 +272,7 @@ runtime_compatibility: {{}}
             &artifact,
             &bundle_path,
             &v,
-            &mut counter,
+            &counter,
             SystemTime::now(),
             &no_versions(),
         );
@@ -265,7 +285,7 @@ runtime_compatibility: {{}}
         let s = signer();
         let v = s.verifier();
         let tmp = TempDir::new().unwrap();
-        let mut counter = empty_counter(tmp.path());
+        let counter = empty_counter(tmp.path());
         let mut artifact = s.sign(good_bundle_yaml(1).as_bytes()).unwrap();
         *artifact.last_mut().unwrap() ^= 0xff;
         let bundle_path = tmp.path().join("bundle.yaml");
@@ -274,7 +294,7 @@ runtime_compatibility: {{}}
             &artifact,
             &bundle_path,
             &v,
-            &mut counter,
+            &counter,
             SystemTime::now(),
             &no_versions(),
         );
@@ -291,7 +311,7 @@ runtime_compatibility: {{}}
         let s = signer();
         let v = s.verifier();
         let tmp = TempDir::new().unwrap();
-        let mut counter = empty_counter(tmp.path());
+        let counter = empty_counter(tmp.path());
         let yaml = good_bundle_yaml(1).replace("2099-01-01", "2020-01-01");
         let artifact = s.sign(yaml.as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
@@ -300,7 +320,7 @@ runtime_compatibility: {{}}
             &artifact,
             &bundle_path,
             &v,
-            &mut counter,
+            &counter,
             SystemTime::now(),
             &no_versions(),
         );
@@ -313,12 +333,86 @@ runtime_compatibility: {{}}
     }
 
     #[test]
+    fn accepts_same_counter_when_artifact_is_identical() {
+        let s = signer();
+        let v = s.verifier();
+        let tmp = TempDir::new().unwrap();
+        let mut counter = empty_counter(tmp.path());
+        let artifact = s.sign(good_bundle_yaml(2).as_bytes()).unwrap();
+        let bundle_path = tmp.path().join("bundle.yaml");
+        std::fs::write(&bundle_path, &artifact).unwrap();
+        let first = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
+        assert!(first.ok, "rejected: {:?}", first.rejection_reasons);
+        assert_eq!(
+            first.payload_digest_hex,
+            sha256_hex(good_bundle_yaml(2).as_bytes()),
+            "payload digest covers the signed document alone"
+        );
+        assert_ne!(
+            first.payload_digest_hex, first.digest_hex,
+            "payload digest must not include the signature envelope"
+        );
+        counter
+            .check_and_advance(2, &first.payload_digest_hex)
+            .unwrap();
+
+        let again = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
+        assert!(again.ok, "rejected: {:?}", again.rejection_reasons);
+    }
+
+    #[test]
+    fn rejects_same_counter_with_different_artifact() {
+        let s = signer();
+        let v = s.verifier();
+        let tmp = TempDir::new().unwrap();
+        let mut counter = empty_counter(tmp.path());
+        counter
+            .check_and_advance(2, &sha256_hex(good_bundle_yaml(2).as_bytes()))
+            .unwrap();
+
+        let yaml = good_bundle_yaml(2).replace("id: test-bundle", "id: other-bundle");
+        let artifact = s.sign(yaml.as_bytes()).unwrap();
+        let bundle_path = tmp.path().join("bundle.yaml");
+        std::fs::write(&bundle_path, &artifact).unwrap();
+        let out = verify_bundle(
+            &artifact,
+            &bundle_path,
+            &v,
+            &counter,
+            SystemTime::now(),
+            &no_versions(),
+        );
+        assert!(!out.ok);
+        assert!(
+            out.rejection_reasons
+                .iter()
+                .any(|r| r.starts_with("counter_content_mismatch"))
+        );
+    }
+
+    #[test]
     fn rejects_counter_regression() {
         let s = signer();
         let v = s.verifier();
         let tmp = TempDir::new().unwrap();
         let mut counter = empty_counter(tmp.path());
-        counter.check_and_advance(10).unwrap();
+        counter
+            .check_and_advance(10, &sha256_hex(b"newer"))
+            .unwrap();
         let artifact = s.sign(good_bundle_yaml(5).as_bytes()).unwrap();
         let bundle_path = tmp.path().join("bundle.yaml");
         std::fs::write(&bundle_path, &artifact).unwrap();
@@ -326,7 +420,7 @@ runtime_compatibility: {{}}
             &artifact,
             &bundle_path,
             &v,
-            &mut counter,
+            &counter,
             SystemTime::now(),
             &no_versions(),
         );
@@ -343,7 +437,7 @@ runtime_compatibility: {{}}
         let s = signer();
         let v = s.verifier();
         let tmp = TempDir::new().unwrap();
-        let mut counter = empty_counter(tmp.path());
+        let counter = empty_counter(tmp.path());
         let yaml = good_bundle_yaml(1).replace(
             "runtime_compatibility: {}",
             "runtime_compatibility:\n  openshell:\n    min_version: \"99.0.0\"\n",
@@ -357,7 +451,7 @@ runtime_compatibility: {{}}
             &artifact,
             &bundle_path,
             &v,
-            &mut counter,
+            &counter,
             SystemTime::now(),
             &versions,
         );

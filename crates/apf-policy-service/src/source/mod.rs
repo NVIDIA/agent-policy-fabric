@@ -114,7 +114,7 @@ impl BundleLoadContext<'_> {
 
         if let Err(e) = self
             .counter_store
-            .check_and_advance(outcome.monotonic_counter)
+            .check_and_advance(outcome.monotonic_counter, &outcome.payload_digest_hex)
         {
             let reject = reject_audit(
                 "policy.bundle_rejected.counter_persist_failed",
@@ -269,14 +269,16 @@ runtime_compatibility: {{}}
     }
 
     #[test]
-    fn verify_and_advance_rejects_replayed_counter_before_compiling() {
+    fn verify_and_advance_rejects_older_counter_before_compiling() {
         let signer = Ed25519Signer::generate();
         let verifier = signer.verifier();
         let tmp = tempfile::tempdir().expect("create temp dir");
         let counter_path = tmp.path().join("counter");
         let mut counter_store =
             CounterStore::load_or_init(&counter_path).expect("init counter store");
-        counter_store.check_and_advance(5).expect("seed counter");
+        counter_store
+            .check_and_advance(6, &"6".repeat(64))
+            .expect("seed counter");
 
         let artifact = signer
             .sign(good_bundle_yaml(5).as_bytes())
@@ -293,11 +295,107 @@ runtime_compatibility: {{}}
             compile_was_called = true;
             Ok(outcome.monotonic_counter)
         });
-        assert!(result.is_err(), "replayed counter should be rejected");
+        assert!(result.is_err(), "older counter should be rejected");
         assert!(
             !compile_was_called,
-            "verification must reject the replay before the compile step ever runs"
+            "verification must reject the rollback before the compile step ever runs"
         );
+    }
+
+    #[test]
+    fn verify_and_advance_reloads_identical_artifact_at_accepted_counter() {
+        let signer = Ed25519Signer::generate();
+        let verifier = signer.verifier();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+        let artifact = signer
+            .sign(good_bundle_yaml(2).as_bytes())
+            .expect("sign bundle");
+        let bundle_path = tmp.path().join("bundle.yaml");
+        let audit = PolicyServiceAudit::disabled();
+
+        {
+            let mut counter_store =
+                CounterStore::load_or_init(&counter_path).expect("init counter store");
+            BundleLoadContext {
+                verifier: &verifier,
+                counter_store: &mut counter_store,
+                audit: &audit,
+            }
+            .verify_and_advance(&artifact, &bundle_path, |_| Ok(()))
+            .expect("first load should succeed");
+        }
+        let counter_bytes = std::fs::read(&counter_path).expect("read counter file");
+
+        // A process restart reloads the store from disk and presents the
+        // bundle it was already serving.
+        let mut restarted =
+            CounterStore::load_or_init(&counter_path).expect("reload counter store");
+        let mut compile_was_called = false;
+        BundleLoadContext {
+            verifier: &verifier,
+            counter_store: &mut restarted,
+            audit: &audit,
+        }
+        .verify_and_advance(&artifact, &bundle_path, |_| {
+            compile_was_called = true;
+            Ok(())
+        })
+        .expect("the identical artifact must reload after a restart");
+        assert!(compile_was_called);
+        assert_eq!(restarted.high_water_mark(), 2);
+        assert_eq!(
+            std::fs::read(&counter_path).expect("read counter file"),
+            counter_bytes,
+            "reloading the accepted artifact must leave the counter file untouched"
+        );
+    }
+
+    #[test]
+    fn verify_and_advance_rejects_different_artifact_at_accepted_counter() {
+        let signer = Ed25519Signer::generate();
+        let verifier = signer.verifier();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+        let bundle_path = tmp.path().join("bundle.yaml");
+        let audit = PolicyServiceAudit::disabled();
+
+        let accepted = signer
+            .sign(good_bundle_yaml(2).as_bytes())
+            .expect("sign bundle");
+        let mut counter_store =
+            CounterStore::load_or_init(&counter_path).expect("init counter store");
+        BundleLoadContext {
+            verifier: &verifier,
+            counter_store: &mut counter_store,
+            audit: &audit,
+        }
+        .verify_and_advance(&accepted, &bundle_path, |_| Ok(()))
+        .expect("first load should succeed");
+
+        // Same revision, same trusted signer, different content.
+        let reissued = signer
+            .sign(
+                good_bundle_yaml(2)
+                    .replace("id: test-bundle", "id: reissued-bundle")
+                    .as_bytes(),
+            )
+            .expect("sign bundle");
+        let mut compile_was_called = false;
+        let result = BundleLoadContext {
+            verifier: &verifier,
+            counter_store: &mut counter_store,
+            audit: &audit,
+        }
+        .verify_and_advance(&reissued, &bundle_path, |_| {
+            compile_was_called = true;
+            Ok(())
+        });
+        assert!(
+            result.is_err(),
+            "a different artifact at an accepted counter must be rejected"
+        );
+        assert!(!compile_was_called);
     }
 }
 

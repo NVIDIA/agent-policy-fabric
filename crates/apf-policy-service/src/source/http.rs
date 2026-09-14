@@ -628,7 +628,7 @@ mod tests {
             caches: Arc::new(RwLock::new(caches)),
             http_client: reqwest::Client::new(),
             counter_store: Mutex::new(counter_store),
-            audit: PolicyServiceAudit::default(),
+            audit: PolicyServiceAudit,
             verifier,
         }
     }
@@ -1012,18 +1012,20 @@ runtime_compatibility: {{}}
     }
 
     #[tokio::test]
-    async fn http_source_rejects_replayed_counter() {
+    async fn http_source_rejects_older_bundle_than_persisted_counter() {
         let verifier = TestSignedVerifier::new();
         let tmp = tempfile::tempdir().expect("create temp dir");
         let counter_path = tmp.path().join("counter");
 
-        // Pre-seed the persistent counter store at the same revision the
-        // remote bundle will claim, simulating a bundle this host already
-        // accepted in a prior run.
+        // Pre-seed the persistent counter store past the revision the
+        // remote bundle will claim, simulating a newer bundle this host
+        // already accepted in a prior run.
         {
             let mut seed_store =
                 CounterStore::load_or_init(&counter_path).expect("init counter store");
-            seed_store.check_and_advance(1).expect("seed counter");
+            seed_store
+                .check_and_advance(2, &hex::encode(Sha256::digest(b"newer bundle")))
+                .expect("seed counter");
         }
 
         let artifact = verifier.sign(&good_bundle_yaml(1));
@@ -1036,6 +1038,85 @@ runtime_compatibility: {{}}
             .expect("build http bundle source");
 
         let result = src.load_initial().await;
-        assert!(result.is_err(), "replayed counter should be rejected");
+        assert!(result.is_err(), "older bundle should be rejected");
+        assert!(!src.is_ready());
+    }
+
+    /// A service restart re-fetches the bundle it was already serving and
+    /// must come back ready without touching the persisted counter.
+    #[tokio::test]
+    async fn http_source_restart_reloads_identical_bundle() {
+        let artifact = TestSignedVerifier::new().sign(&good_bundle_yaml(2));
+        let url = serve_bundle(pack_bundle_tar_gz(&artifact)).await;
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+
+        for run in ["initial", "restart"] {
+            let counter_store =
+                CounterStore::load_or_init(&counter_path).expect("load counter store");
+            let src = HttpBundleSource::new(
+                &url,
+                "",
+                apf_compiler::Compiler::new(vec![]),
+                Arc::new(TestSignedVerifier::new()),
+                counter_store,
+            )
+            .expect("build http bundle source");
+            src.load_initial()
+                .await
+                .unwrap_or_else(|e| panic!("{run} load should succeed: {e}"));
+            assert!(src.is_ready(), "{run}: source should be ready");
+            assert_eq!(src.current_counter(), 2, "{run}: cached counter");
+            assert_eq!(
+                std::fs::read(&counter_path).expect("read counter file"),
+                b"2\n",
+                "{run}: persisted counter"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn http_source_rejects_different_bundle_at_accepted_counter() {
+        let signer = TestSignedVerifier::new();
+        let (url, body) = serve_bundle_dynamic().await;
+        *body.lock().expect("body lock") = pack_bundle_tar_gz(&signer.sign(&good_bundle_yaml(2)));
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let counter_path = tmp.path().join("counter");
+
+        let first = HttpBundleSource::new(
+            &url,
+            "",
+            apf_compiler::Compiler::new(vec![]),
+            Arc::new(TestSignedVerifier::new()),
+            CounterStore::load_or_init(&counter_path).expect("init counter store"),
+        )
+        .expect("build http bundle source");
+        first
+            .load_initial()
+            .await
+            .expect("initial load should succeed");
+
+        // Same revision, same trusted signer, different content.
+        *body.lock().expect("body lock") = pack_bundle_tar_gz(
+            &signer.sign(&good_bundle_yaml(2).replace("id: test-bundle", "id: reissued-bundle")),
+        );
+        let restarted = HttpBundleSource::new(
+            &url,
+            "",
+            apf_compiler::Compiler::new(vec![]),
+            Arc::new(TestSignedVerifier::new()),
+            CounterStore::load_or_init(&counter_path).expect("reload counter store"),
+        )
+        .expect("build http bundle source");
+        let result = restarted.load_initial().await;
+        assert!(
+            result.is_err(),
+            "a different bundle at an accepted revision must be rejected"
+        );
+        assert!(!restarted.is_ready());
+        assert_eq!(
+            std::fs::read(&counter_path).expect("read counter file"),
+            b"2\n"
+        );
     }
 }
