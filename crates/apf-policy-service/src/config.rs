@@ -20,7 +20,7 @@ pub struct ServiceConfig {
     pub bundle_path: Option<PathBuf>,
     pub trust_root_dir: Option<PathBuf>,
     pub counter_store: Option<PathBuf>,
-    pub audit_log_path: Option<PathBuf>,
+    pub audit_log_dir: Option<PathBuf>,
     pub allowed_uid: Option<u32>,
     pub http_addr: Option<SocketAddr>,
     pub surfaces: Option<Vec<String>>,
@@ -83,7 +83,7 @@ impl ServiceConfig {
         bundle_path: &mut Option<PathBuf>,
         trust_root_dir: &mut PathBuf,
         counter_store: &mut PathBuf,
-        audit_log_path: &mut Option<PathBuf>,
+        audit_log_dir: &mut Option<PathBuf>,
         allowed_uid: &mut Option<u32>,
         verifier_signing_key: &mut Option<PathBuf>,
         verifier_key_id: &mut String,
@@ -117,8 +117,8 @@ impl ServiceConfig {
         {
             *counter_store = v.clone();
         }
-        if audit_log_path.is_none() {
-            *audit_log_path = self.audit_log_path.clone();
+        if audit_log_dir.is_none() {
+            *audit_log_dir = self.audit_log_dir.clone();
         }
         if allowed_uid.is_none() {
             *allowed_uid = self.allowed_uid;
@@ -184,7 +184,7 @@ pub fn snapshot(
     bundle_path: &Path,
     trust_root_dir: &Path,
     counter_store: &Path,
-    audit_log_path: Option<&Path>,
+    audit_log_dir: Option<&Path>,
     allowed_uid: Option<u32>,
     verifier_signing_key: Option<&Path>,
     verifier_key_id: &str,
@@ -205,7 +205,7 @@ pub fn snapshot(
         bundle_path: Some(bundle_path.to_path_buf()),
         trust_root_dir: Some(trust_root_dir.to_path_buf()),
         counter_store: Some(counter_store.to_path_buf()),
-        audit_log_path: audit_log_path.map(Path::to_path_buf),
+        audit_log_dir: audit_log_dir.map(Path::to_path_buf),
         allowed_uid,
         http_addr,
         surfaces: if surfaces.is_empty() {
@@ -256,7 +256,7 @@ socket = "/var/run/apf/apf-policy-service.sock"
 bundle_path = "/etc/apf/bundle.yaml"
 trust_root_dir = "/etc/apf/trust-roots"
 counter_store = "/var/lib/apf/counter"
-audit_log_path = "/var/log/apf/audit.jsonl"
+audit_log_dir = "/var/log/apf/audit"
 allowed_uid = 1000
 http_addr = "127.0.0.1:9090"
 surfaces = ["openshell.sandbox.v1", "openshell.provider-profile.v1"]

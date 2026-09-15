@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
 use std::time::Duration;
@@ -21,6 +22,7 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use tokio::net::UnixListener;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::{StreamExt, wrappers::UnixListenerStream};
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -85,6 +87,14 @@ struct ServeArgs {
         default_value = "/var/lib/apf/counter"
     )]
     counter_store: PathBuf,
+
+    /// Directory for JSONL audit logs; this component writes
+    /// `apf-policy-service-audit.jsonl` into it. One file per component, so a
+    /// seam moving to its own process later is not a log-path migration.
+    /// Required: the service refuses to start unconfigured, or if the
+    /// directory cannot be written.
+    #[arg(long, env = "APF_AUDIT_LOG_DIR")]
+    audit_log_dir: Option<PathBuf>,
 
     #[arg(long, env = "APF_DOCUMENT_SIGNING_KEY")]
     document_signing_key: Option<PathBuf>,
@@ -194,14 +204,28 @@ fn resolve_http_bearer_token(args: &ServeArgs) -> anyhow::Result<Option<Arc<str>
     Ok(Some(Arc::from(token)))
 }
 
+/// Empty is rejected rather than accepted: the source omits the Authorization
+/// header on an empty token, so a failed secret injection would silently fetch
+/// policy anonymously. Omitting both flags is how anonymous fetch is requested
+/// deliberately, and stays supported.
 fn resolve_bundle_source_token(args: &ServeArgs) -> anyhow::Result<String> {
     if let Some(path) = &args.bundle_source_token_file {
         let raw = std::fs::read_to_string(path).map_err(|e| {
             anyhow::anyhow!("read --bundle-source-token-file {}: {e}", path.display())
         })?;
-        return Ok(raw.trim().to_string());
+        let token = raw.trim();
+        if token.is_empty() {
+            anyhow::bail!(
+                "--bundle-source-token-file {} is empty; unset it to fetch anonymously",
+                path.display()
+            );
+        }
+        return Ok(token.to_string());
     }
     if let Some(token) = &args.bundle_source_token {
+        if token.is_empty() {
+            anyhow::bail!("--bundle-source-token is set but empty; unset it to fetch anonymously");
+        }
         warn!(
             "--bundle-source-token is visible in process arguments; prefer --bundle-source-token-file"
         );
@@ -262,7 +286,6 @@ async fn main() -> anyhow::Result<()> {
 async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
     if let Some(config_path) = &args.config.clone() {
         let cfg = config::load(config_path)?;
-        let mut _unused_audit: Option<PathBuf> = None;
         let mut _unused_key_id = args.document_key_id.clone();
         let mut _unused_prov_signer = String::new();
         let mut _unused_prov_oidc: Option<String> = None;
@@ -271,7 +294,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             &mut args.bundle_path,
             &mut args.trust_root_dir,
             &mut args.counter_store,
-            &mut _unused_audit,
+            &mut args.audit_log_dir,
             &mut args.allowed_uid,
             &mut args.document_signing_key,
             &mut _unused_key_id,
@@ -304,6 +327,28 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
     }
     info!(dir = %args.trust_root_dir.display(), count = trust_store.len(), "loaded trust roots");
 
+    // Posture is decided at points spread across startup, but is recorded as
+    // one event per boot: split across several records, a missing one cannot be
+    // told apart from a control that was fine.
+    let mut weakened: Vec<(&str, String)> = Vec::new();
+
+    // argv rather than the parsed value: the flag also accepts an env var,
+    // which is not argv-exposed, and a token passed alongside
+    // --bundle-source-token-file is still exposed even though it goes unused.
+    // Exposure does not depend on the source being HTTP, so this is not gated
+    // on it.
+    let token_in_argv = std::env::args_os().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--bundle-source-token" || arg.starts_with("--bundle-source-token=")
+    });
+    if token_in_argv {
+        weakened.push((
+            "startup.token_in_process_args",
+            "bundle source token passed in argv; readable by anything that can see /proc"
+                .to_owned(),
+        ));
+    }
+
     let document_signer = if let Some(p) = &args.document_signing_key {
         let sk = load_signing_key(p)?;
         info!(path = %p.display(), key_id = %args.document_key_id, "loaded document signing key");
@@ -320,6 +365,13 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             public_key = %format!("ed25519:{pk_b64}"),
             "generated ephemeral signing key; register the public key in the gateway trust store"
         );
+        weakened.push((
+            "startup.ephemeral_signing_key",
+            format!(
+                "bundles are signed with a generated key ({}) that no gateway trust store holds",
+                args.document_key_id
+            ),
+        ));
         DocumentSigner {
             key_id: args.document_key_id.clone(),
             signing_key: sk,
@@ -335,7 +387,66 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         "loaded counter store"
     );
 
-    let audit = PolicyServiceAudit::disabled();
+    // Unconfigured audit is the same failure as a failed audit write, at full
+    // scale: the service would enforce policy with no record of what it loaded.
+    let audit_log_dir = args.audit_log_dir.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no audit log directory configured; set --audit-log-dir or APF_AUDIT_LOG_DIR \
+             (audit_log_dir in the config file)"
+        )
+    })?;
+    let audit = PolicyServiceAudit::to_jsonl_in(audit_log_dir)
+        .map_err(|e| anyhow::anyhow!("audit log dir {}: {e}", audit_log_dir.display()))?;
+
+    // Fail-closed, and before the bundle is loaded: this aborts on failure, and
+    // every later step leaves something behind — a durably advanced counter
+    // that would make the running revision unloadable on restart, a spawned
+    // poll task, a bound socket. Nothing here has side effects to undo.
+    // Address and token travel together so they cannot diverge: the block that
+    // consumes them is ~200 lines below.
+    let http_surface: Option<(std::net::SocketAddr, Arc<str>)> = match args.http_addr {
+        Some(addr) => Some((
+            addr,
+            resolve_http_bearer_token(args)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--http-addr requires --http-bearer-token-file; \
+                     /v1/documents and /v1/refresh cannot be exposed unauthenticated"
+                )
+            })?,
+        )),
+        None => None,
+    };
+
+    // Gated on the source, unlike token_in_process_args above: that one is
+    // about exposure, which happens wherever the flag is passed; this is about
+    // use, and a local source never reads the token. Exact because
+    // resolve_bundle_source_token rejects an empty value, so absent is the only
+    // way the Authorization header is omitted.
+    if args.policy_source == POLICY_SOURCE_HTTP
+        && args.bundle_source_token_file.is_none()
+        && args.bundle_source_token.is_none()
+    {
+        weakened.push((
+            "startup.bundle_source_unauthenticated",
+            "no bundle source token; policy is fetched without an Authorization header".to_owned(),
+        ));
+    }
+
+    // to_canonical normalizes v4-mapped v6, so [::ffff:127.0.0.1] is not
+    // reported as reachable off-host.
+    if let Some((addr, _)) = &http_surface
+        && !addr.ip().to_canonical().is_loopback()
+    {
+        warn!(%addr, "HTTP surface bound to non-loopback address");
+        weakened.push((
+            "startup.http_bind_non_loopback",
+            format!("HTTP surface reachable off-host at {addr}"),
+        ));
+    }
+
+    audit
+        .emit_service_startup(&weakened)
+        .map_err(|e| anyhow::anyhow!("audit emission failed for startup posture: {e}"))?;
 
     let allowed_kinds: Arc<HashSet<String>> = if args.surfaces.is_empty() {
         Arc::new(HashSet::new())
@@ -424,6 +535,18 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             };
             Ok((loaded_bundle, projections))
         })?;
+        // After the counter persisted: recording this inside `on_verified`
+        // would log an activation success for a bundle a persist failure then
+        // keeps out of force.
+        if projections.is_empty()
+            && let Err(e) = audit.emit_no_projections(
+                &loaded_bundle.digest_hex,
+                loaded_bundle.monotonic_counter,
+                &loaded_bundle.bundle.bundle_id,
+            )
+        {
+            warn!(error = %e, "audit emission failed for no-projections");
+        }
 
         info!(
             path = %bundle_path.display(),
@@ -477,6 +600,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         Some(Arc::clone(&signer)),
         args.document_ttl_secs,
         bundle_id.clone(),
+        audit.clone(),
     ));
 
     if args.socket.exists() {
@@ -496,6 +620,49 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| nix::unistd::getuid().as_raw());
     info!(socket = %args.socket.display(), allowed_uid, "policy-service listening");
 
+    // The socket is the primary data plane, so a refusal here is the same class
+    // of event as a rejected bearer token on the HTTP surface: identity, not
+    // policy. auth_deny carries no policy or subject identity, which is right —
+    // no bundle was consulted, and the peer never authenticated.
+    //
+    // Written off the accept path. A synchronous JSONL write here would let
+    // anything that can connect but fails the UID gate — root, or the owner
+    // when --allowed-uid is mis-set — delay every legitimate accept behind its
+    // own rejections. The channel is bounded so a flood costs a dropped record
+    // rather than unbounded memory.
+    let (peer_deny_tx, mut peer_deny_rx) = tokio::sync::mpsc::channel::<(&str, String)>(64);
+    let dropped_refusals = Arc::new(AtomicU64::new(0));
+    let drain_dropped = Arc::clone(&dropped_refusals);
+    let peer_audit = audit.clone();
+    let refusal_drain = tokio::spawn(async move {
+        // The count is flushed on a timer rather than when the next refusal is
+        // drained. Draining is the wrong trigger: a flood that stops leaves the
+        // count stranded until some later refusal that may never come, and
+        // concealing the gap is precisely what a flood would be for.
+        const FLUSH: Duration = Duration::from_secs(5);
+        loop {
+            let next = tokio::time::timeout(FLUSH, peer_deny_rx.recv()).await;
+            let missed = drain_dropped.swap(0, Ordering::Relaxed);
+            if missed > 0
+                && let Err(e) = peer_audit.emit_auth_deny(
+                    "auth.uds_refusals_dropped",
+                    format!("{missed} uds peer refusals were not individually recorded"),
+                )
+            {
+                warn!(error = %e, "audit emission failed for dropped uds refusals");
+            }
+            match next {
+                Ok(Some((reason_code, message))) => {
+                    if let Err(e) = peer_audit.emit_auth_deny(reason_code, message) {
+                        warn!(error = %e, "audit emission failed for uds peer refusal");
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+    });
+
     let gated = UnixListenerStream::new(listener).filter_map(move |result| match result {
         Ok(stream) => match stream.peer_cred() {
             Ok(cred) if cred.uid() == allowed_uid => Some(Ok(stream)),
@@ -504,26 +671,50 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
                     peer_uid = cred.uid(),
                     allowed_uid, "rejecting connection: UID mismatch"
                 );
+                if let Err(e) = peer_deny_tx.try_send((
+                    "auth.uds_peer_rejected",
+                    format!(
+                        "peer uid {} does not match the allowed uid {allowed_uid}",
+                        cred.uid()
+                    ),
+                )) {
+                    dropped_refusals.fetch_add(1, Ordering::Relaxed);
+                    match e {
+                        TrySendError::Full(_) => {
+                            warn!("uds peer refusal not recorded: audit queue full");
+                        }
+                        TrySendError::Closed(_) => {
+                            warn!("uds peer refusal not recorded: audit drain stopped");
+                        }
+                    }
+                }
                 None
             }
             Err(e) => {
                 warn!(error = %e, "rejecting connection: peer_cred() failed");
+                if let Err(e) = peer_deny_tx.try_send((
+                    "auth.uds_peer_cred_failed",
+                    "peer credentials could not be read".to_owned(),
+                )) {
+                    dropped_refusals.fetch_add(1, Ordering::Relaxed);
+                    match e {
+                        TrySendError::Full(_) => {
+                            warn!("uds peer cred failure not recorded: audit queue full");
+                        }
+                        TrySendError::Closed(_) => {
+                            warn!("uds peer cred failure not recorded: audit drain stopped");
+                        }
+                    }
+                }
                 None
             }
         },
         Err(e) => Some(Err(e)),
     });
 
-    if let Some(addr) = args.http_addr {
-        let bearer_token = resolve_http_bearer_token(args)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--http-addr requires --http-bearer-token-file; \
-                 /v1/documents and /v1/refresh cannot be exposed unauthenticated"
-            )
-        })?;
-        if !addr.ip().is_loopback() {
-            warn!(%addr, "HTTP surface bound to non-loopback address");
-        }
+    // Resolved before the posture record: an unauthenticated HTTP surface
+    // aborts startup, and a boot that never serves should leave no record.
+    if let Some((addr, bearer_token)) = http_surface {
         info!(%addr, "HTTP surface enabled");
         let http_state = HttpState {
             source: Arc::clone(&source),
@@ -531,6 +722,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             allowed_kinds: Arc::clone(&allowed_kinds),
             bearer_token: Some(bearer_token),
             document_signer: Some(Arc::clone(&signer)),
+            audit: audit.clone(),
         };
         let app = http_router(http_state);
         let listener_tcp = tokio::net::TcpListener::bind(addr).await?;
@@ -541,10 +733,34 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         });
     }
 
-    Server::builder()
-        .add_service(policy_svc)
-        .serve_with_incoming(gated)
-        .await?;
+    let mut refusal_drain = refusal_drain;
+    let serve_result = tokio::select! {
+        result = Server::builder()
+            .add_service(policy_svc)
+            .serve_with_incoming(gated) => Some(result),
+        // The drain task owns the receiver, so its death closes the channel and
+        // every later refusal is dropped — including the count that would
+        // disclose the gap. Serving on would be serving unrecorded.
+        _ = &mut refusal_drain => None,
+    };
+    let Some(serve_result) = serve_result else {
+        anyhow::bail!("uds refusal audit drain stopped; refusing to serve unrecorded");
+    };
+
+    // The listener is gone, so the sender is too and the drain will flush and
+    // exit. Awaiting it matters: dropping a JoinHandle detaches rather than
+    // aborts, so a shutdown during a flood would take the queued refusals — the
+    // record of the flood — down with the runtime.
+    match tokio::time::timeout(Duration::from_secs(5), refusal_drain).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            warn!(error = %e, "uds refusal audit drain failed; queued refusals unrecorded");
+        }
+        Err(_) => {
+            warn!("uds refusal audit drain did not finish; queued refusals may be unrecorded");
+        }
+    }
+    serve_result?;
 
     Ok(())
 }

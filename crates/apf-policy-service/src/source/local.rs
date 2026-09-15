@@ -150,6 +150,34 @@ impl PolicySource for LocalBundleSource {
         })
     }
 
+    fn active_bundle_digest(&self, _variant: &str) -> Option<String> {
+        Some(self.core.load().bundle.digest_hex.clone())
+    }
+
+    fn get_with_bundle(
+        &self,
+        surface_id: &str,
+        name: &str,
+        _variant: &str,
+    ) -> Option<(PolicyProjection, String)> {
+        // One load: a refresh between two would let the record name a bundle
+        // other than the one this projection came from.
+        let core = self.core.load();
+        let bytes = core
+            .projections
+            .get(&(surface_id.to_string(), name.to_string()))?
+            .clone();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        Some((
+            PolicyProjection {
+                bytes,
+                digest,
+                version: core.bundle.monotonic_counter,
+            },
+            core.bundle.digest_hex.clone(),
+        ))
+    }
+
     fn list(&self, surface_id: &str) -> Vec<String> {
         let core = self.core.load();
         core.projections

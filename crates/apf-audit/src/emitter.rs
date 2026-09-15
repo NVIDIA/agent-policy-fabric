@@ -50,6 +50,28 @@ impl JsonlSink {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Open the sink once so a misconfigured path fails at startup rather than
+    /// taking a fail-closed producer down at its first event.
+    ///
+    /// Uses the same options as `write_event`, so a path that passes here can
+    /// actually be appended to. Writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditError`] when the parent cannot be created or the file
+    /// cannot be opened for appending.
+    pub fn preflight(&self) -> Result<(), AuditError> {
+        if let Some(parent) = self.path.parent() {
+            create_dir_all(parent)?;
+        }
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options.open(&self.path)?;
+        Ok(())
+    }
 }
 
 impl AuditSink for JsonlSink {

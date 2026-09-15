@@ -267,7 +267,8 @@ set.
 `startup.provenance_verification_disabled`, `startup.bundle_source_unauthenticated`,
 `policy.bundle_verified`, `policy.bundle_loaded`,
 `policy.bundle_hot_swapped[.counter_not_persisted]`,
-`policy.bundle_rejected.{verification_failed,counter_not_newer,counter_persist_failed}`,
+`policy.bundle_rejected.{counter_not_newer,counter_persist_failed}` (verification
+refusals carry the verifier's own codes, e.g. `bundle_expired`, `counter_regression`),
 `policy.document_vended`, `policy.document_not_found`, `policy.no_projections`,
 `policy.refresh_triggered`, `provenance.record_signed`,
 `provenance.mint_failed`.

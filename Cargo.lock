@@ -322,6 +322,7 @@ name = "apf-policy-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apf-audit",
  "apf-bundle",
  "apf-compiler",
  "apf-openshell-projector",

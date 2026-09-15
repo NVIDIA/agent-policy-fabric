@@ -16,10 +16,10 @@ pub use http::{HttpBundleSource, UpdateStrategy};
 pub use local::LocalBundleSource;
 pub use resolver::{ClaimsResolver, PassthroughResolver, PolicyResolver, ResolvedPolicy};
 
-/// Build the reject payload shared by every rejection audit event in this
-/// module — load rejects, hot-swap rejects, and (once wired in) verify
-/// rejects — so the reason-code/message/counter/digest shape stays uniform
-/// instead of each call site formatting its own.
+/// Build the reject payload shared by the activation-refusal audit events in
+/// this module — counter-persist failures and hot-swap rejects — so the
+/// reason-code/message/counter/digest shape stays uniform. Verification
+/// refusals carry their own structured codes via `emit_verify_bundle`.
 pub(crate) fn reject_audit(
     reason_code: &str,
     message: String,
@@ -59,8 +59,8 @@ impl BundleLoadContext<'_> {
     /// every bundle it had ever accepted.
     ///
     /// Also the single place that emits the load-lifecycle audit events
-    /// (`emit_policy_load` on success, `emit_policy_reject` on
-    /// verification or persist failure) for every fail-closed load path in
+    /// (`emit_verify_bundle` for the verification outcome, `emit_policy_load`
+    /// on success, `emit_policy_reject` on persist failure) for every fail-closed load path in
     /// this crate, including `main.rs`'s local-startup bootstrap — so a new
     /// load path can't silently skip audit, and there's exactly one event
     /// family for "did a bundle load" instead of one per call site.
@@ -86,24 +86,18 @@ impl BundleLoadContext<'_> {
             &outcome.digest_hex,
         );
 
-        if !outcome.ok {
-            let reject = reject_audit(
-                "policy.bundle_rejected.verification_failed",
-                format!(
-                    "bundle verification failed: {:?}",
-                    outcome.rejection_reasons
-                ),
-                false,
-                outcome.parsed.then_some(outcome.monotonic_counter),
-            );
-            if let Err(e) = self.audit.emit_policy_reject(
-                &RuntimeContext::default(),
-                &meta,
-                &outcome.digest_hex,
-                reject,
-            ) {
-                tracing::warn!(error = %e, "audit emission failed for policy load reject");
+        // Verification has its own event either way: success is not activation,
+        // and a refusal carries the verifier's structured rejection reasons.
+        if let Err(e) = self
+            .audit
+            .emit_verify_bundle(&RuntimeContext::default(), &meta, &outcome)
+        {
+            if outcome.ok {
+                anyhow::bail!("audit emission failed for bundle verification: {e}");
             }
+            tracing::warn!(error = %e, "audit emission failed for bundle verification");
+        }
+        if !outcome.ok {
             anyhow::bail!(
                 "bundle verification failed: {:?}",
                 outcome.rejection_reasons
@@ -124,7 +118,6 @@ impl BundleLoadContext<'_> {
             );
             if let Err(audit_err) = self.audit.emit_policy_reject(
                 &RuntimeContext::default(),
-                &meta,
                 &outcome.digest_hex,
                 reject,
             ) {
@@ -162,6 +155,43 @@ manifest: []
 runtime_compatibility: {{}}
 "#
         )
+    }
+
+    /// The wiring, not the emitter: a load that fails verification must leave
+    /// a `policy_verification` refused record in the file, or the taxonomy's
+    /// headline query returns nothing for the event it exists to catch.
+    #[test]
+    fn a_failed_verification_is_recorded_as_one() {
+        let signer = Ed25519Signer::generate();
+        let verifier = signer.verifier();
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let mut counter_store =
+            CounterStore::load_or_init(&tmp.path().join("counter")).expect("init counter store");
+        let audit = PolicyServiceAudit::to_jsonl_in(tmp.path()).expect("build emitter");
+
+        let mut artifact = signer
+            .sign(good_bundle_yaml(1).as_bytes())
+            .expect("sign bundle");
+        let last = artifact.len() - 1;
+        artifact[last] ^= 0xFF;
+
+        let result = BundleLoadContext {
+            verifier: &verifier,
+            counter_store: &mut counter_store,
+            audit: &audit,
+        }
+        .verify_and_advance(&artifact, &tmp.path().join("bundle.yaml"), |outcome| {
+            Ok(outcome.monotonic_counter)
+        });
+        assert!(result.is_err(), "tampered bundle should be rejected");
+
+        let written = std::fs::read_to_string(tmp.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        let parsed: apf_audit::AuditEvent =
+            serde_json::from_str(written.trim()).expect("one record, deserializes");
+        parsed.validate().expect("validates against the schema");
+        assert_eq!(parsed.event_type, apf_audit::EventType::PolicyVerification);
+        assert_eq!(parsed.outcome, Some(apf_audit::Outcome::Refused));
     }
 
     #[test]
@@ -426,6 +456,24 @@ pub trait PolicySource: Send + Sync {
 
     /// All policy names available for `surface_id`.
     fn list(&self, surface_id: &str) -> Vec<String>;
+
+    /// The digest of the bundle currently serving `variant`, for a record that
+    /// must name the policy in force even when no document is being fetched.
+    ///
+    /// For a record about a document, prefer [`Self::get_with_bundle`]: reading
+    /// the two separately lets a hot-swap land in between, and lets a caller
+    /// steer the variant so the two resolve to different caches.
+    fn active_bundle_digest(&self, variant: &str) -> Option<String>;
+
+    /// The projection and the digest of the bundle it came from, resolved
+    /// together under one lock so a vend record cannot name a bundle other
+    /// than the one the projection was served from.
+    fn get_with_bundle(
+        &self,
+        surface_id: &str,
+        name: &str,
+        variant: &str,
+    ) -> Option<(PolicyProjection, String)>;
 
     /// Whether this source has a verified bundle loaded and can serve
     /// requests. `LocalBundleSource` is always ready once constructed — the

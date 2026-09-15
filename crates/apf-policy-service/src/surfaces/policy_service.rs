@@ -128,6 +128,8 @@ pub struct PolicyServiceImpl {
     document_ttl_secs: u64,
     /// Bundle manifest `id` — included as `apf/bundle-id` in every provenance JWT.
     bundle_id: String,
+    /// Records a provenance mint failure, which vends an unsigned document.
+    audit: crate::runtime::audit::PolicyServiceAudit,
 }
 
 impl PolicyServiceImpl {
@@ -138,6 +140,7 @@ impl PolicyServiceImpl {
         signer: Option<Arc<DocumentSigner>>,
         document_ttl_secs: u64,
         bundle_id: String,
+        audit: crate::runtime::audit::PolicyServiceAudit,
     ) -> Self {
         Self {
             resolver,
@@ -146,20 +149,34 @@ impl PolicyServiceImpl {
             signer,
             document_ttl_secs,
             bundle_id,
+            audit,
         }
     }
 
     #[allow(clippy::result_large_err)]
-    fn check_kind(&self, kind: &str) -> Result<(), Status> {
-        if kind.is_empty() {
-            return Err(Status::invalid_argument("kind must be non-empty"));
+    fn check_kind(&self, kind: &str, verb: &str) -> Result<(), Status> {
+        let message = if kind.is_empty() {
+            "kind must be non-empty".to_owned()
+        } else if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(kind) {
+            format!("kind '{kind}' is not served by this instance")
+        } else {
+            return Ok(());
+        };
+        // The request never resolved a variant, so any loaded bundle is context
+        // rather than causation.
+        // Emitted whether or not a bundle is loaded: an unserved-kind probe
+        // during the startup window is exactly the one worth having.
+        if let Err(e) = self.audit.emit_document_denied(
+            &self.source.active_bundle_digest("").unwrap_or_default(),
+            "policy.document_request_invalid",
+            kind,
+            "-",
+            verb,
+            message.clone(),
+        ) {
+            warn!(error = %e, "audit emission failed for invalid document request");
         }
-        if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(kind) {
-            return Err(Status::invalid_argument(format!(
-                "kind '{kind}' is not served by this instance"
-            )));
-        }
-        Ok(())
+        Err(Status::invalid_argument(message))
     }
 }
 
@@ -180,7 +197,7 @@ impl PolicyService for PolicyServiceImpl {
         req: Request<wire::GetDocumentRequest>,
     ) -> Result<Response<wire::GetDocumentResponse>, Status> {
         let inner = req.into_inner();
-        self.check_kind(&inner.kind)?;
+        self.check_kind(&inner.kind, "policy.get_document")?;
 
         let ctx = inner.runtime_context.unwrap_or_default();
         let resolved = self.resolver.resolve(&inner.name, &ctx);
@@ -193,11 +210,15 @@ impl PolicyService for PolicyServiceImpl {
             })
             .unwrap_or("-");
 
+        // Projection and digest from one read: separately, an unmapped
+        // user_subject resolves to the empty variant, where the projection scan
+        // and the digest lookup select different caches — a caller-steerable
+        // mismatch, no race required.
         match self
             .source
-            .get(&inner.kind, &resolved.name, &resolved.variant)
+            .get_with_bundle(&inner.kind, &resolved.name, &resolved.variant)
         {
-            Some(proj) => {
+            Some((proj, bundle_digest)) => {
                 let valid_until_ms = if self.document_ttl_secs > 0 {
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -223,6 +244,9 @@ impl PolicyService for PolicyServiceImpl {
                     .unwrap_or_default();
 
                 let provenance_token = if let Some(id) = self.signer.as_ref() {
+                    // A signer is configured, so an empty token means the mint
+                    // failed and the document is vended unsigned — the consumer
+                    // cannot verify it came from here.
                     mint_provenance_jwt(
                         id,
                         &proj.digest,
@@ -231,10 +255,31 @@ impl PolicyService for PolicyServiceImpl {
                         &spec_digest,
                         &self.bundle_id,
                     )
-                    .unwrap_or_default()
+                    .unwrap_or_else(|| {
+                        if let Err(e) = self.audit.emit_provenance_mint_failed(
+                            &bundle_digest,
+                            &inner.kind,
+                            &resolved.name,
+                        ) {
+                            warn!(error = %e, "audit emission failed for provenance mint failure");
+                        }
+                        String::new()
+                    })
                 } else {
                     String::new()
                 };
+
+                // This is the surface gateways actually poll, so it carries
+                // the distribution evidence — which bundle reached which
+                // consumer.
+                if let Err(e) = self.audit.emit_document_vended(
+                    &bundle_digest,
+                    &inner.kind,
+                    &resolved.name,
+                    proj.version,
+                ) {
+                    warn!(error = %e, "audit emission failed for document vended");
+                }
 
                 Ok(Response::new(wire::GetDocumentResponse {
                     body: proj.bytes,
@@ -244,10 +289,29 @@ impl PolicyService for PolicyServiceImpl {
                     provenance_token,
                 }))
             }
-            None => Err(Status::not_found(format!(
-                "document '{}/{}' not found",
-                inner.kind, inner.name
-            ))),
+            None => {
+                // No projection, so no bundle to read it from; the active
+                // digest is the best available context for the denial.
+                // A variant that never fetched has no digest; the refusal is
+                // still recorded, without policy identity.
+                if let Err(e) = self.audit.emit_document_denied(
+                    &self
+                        .source
+                        .active_bundle_digest(&resolved.variant)
+                        .unwrap_or_default(),
+                    "policy.document_not_found",
+                    &inner.kind,
+                    &resolved.name,
+                    "policy.get_document",
+                    format!("document '{}/{}' not found", inner.kind, inner.name),
+                ) {
+                    warn!(error = %e, "audit emission failed for document not found");
+                }
+                Err(Status::not_found(format!(
+                    "document '{}/{}' not found",
+                    inner.kind, inner.name
+                )))
+            }
         }
     }
 
@@ -256,8 +320,90 @@ impl PolicyService for PolicyServiceImpl {
         req: Request<wire::ListDocumentsRequest>,
     ) -> Result<Response<wire::ListDocumentsResponse>, Status> {
         let inner = req.into_inner();
-        self.check_kind(&inner.kind)?;
+        self.check_kind(&inner.kind, "policy.list_documents")?;
         let names = self.source.list(&inner.kind);
         Ok(Response::new(wire::ListDocumentsResponse { names }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::audit::PolicyServiceAudit;
+    use crate::source::resolver::PassthroughResolver;
+    use apf_audit::AuditEvent;
+
+    /// Serves nothing, so every request reaches the refusal path.
+    struct EmptySource;
+
+    #[async_trait::async_trait]
+    impl PolicySource for EmptySource {
+        fn get(&self, _: &str, _: &str, _: &str) -> Option<crate::source::PolicyProjection> {
+            None
+        }
+        fn list(&self, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn active_bundle_digest(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn get_with_bundle(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Option<(crate::source::PolicyProjection, String)> {
+            None
+        }
+    }
+
+    fn verbs_written(dir: &std::path::Path) -> Vec<String> {
+        let written = std::fs::read_to_string(dir.join("apf-policy-service-audit.jsonl"))
+            .expect("audit log was written");
+        written
+            .lines()
+            .map(|line| {
+                let parsed: AuditEvent = serde_json::from_str(line).expect("deserializes");
+                parsed.validate().expect("validates against the schema");
+                parsed.verb.expect("a refusal names the verb")
+            })
+            .collect()
+    }
+
+    /// The socket is the surface gateways actually poll, so a verb recorded
+    /// here being wrong is the forensics that matters. Asserted at the call
+    /// site: the emitter cannot tell which RPC invoked it, so a swapped pair of
+    /// literals is invisible to any test that supplies the verb itself.
+    #[tokio::test]
+    async fn each_rpc_records_its_own_verb() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let svc = PolicyServiceImpl::new(
+            Arc::new(PassthroughResolver),
+            Arc::new(EmptySource),
+            Arc::new(HashSet::from(["openshell.sandbox.v1".to_owned()])),
+            None,
+            60,
+            "test-bundle".to_owned(),
+            PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter"),
+        );
+
+        svc.list_documents(Request::new(wire::ListDocumentsRequest {
+            kind: "aws.iam.v1".to_owned(),
+        }))
+        .await
+        .expect_err("an unserved kind is refused");
+        assert_eq!(verbs_written(dir.path()), ["policy.list_documents"]);
+
+        svc.get_document(Request::new(wire::GetDocumentRequest {
+            kind: "aws.iam.v1".to_owned(),
+            name: "admin".to_owned(),
+            runtime_context: None,
+        }))
+        .await
+        .expect_err("an unserved kind is refused");
+        assert_eq!(
+            verbs_written(dir.path()),
+            ["policy.list_documents", "policy.get_document"]
+        );
     }
 }

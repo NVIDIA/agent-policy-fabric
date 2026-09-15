@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use apf_proto::runtime_v1alpha1::{OpenShellContext, RuntimeContext, runtime_context};
 
+use crate::runtime::audit::PolicyServiceAudit;
 use crate::runtime::core::DocumentSigner;
 use crate::source::{PolicyResolver, PolicySource};
 
@@ -35,20 +36,32 @@ pub struct HttpState {
     /// bundle content — so this is populated the same way for local and
     /// HTTP policy sources.
     pub document_signer: Option<Arc<DocumentSigner>>,
+    /// Records refusals and policy distribution on this surface.
+    pub audit: PolicyServiceAudit,
 }
 
 impl HttpState {
-    fn check_kind(&self, kind: &str) -> Result<(), (StatusCode, String)> {
-        if kind.is_empty() {
-            return Err((StatusCode::BAD_REQUEST, "kind must be non-empty".into()));
+    fn check_kind(&self, kind: &str, verb: &str) -> Result<(), (StatusCode, String)> {
+        let message = if kind.is_empty() {
+            "kind must be non-empty".to_owned()
+        } else if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(kind) {
+            format!("kind '{kind}' is not served by this instance")
+        } else {
+            return Ok(());
+        };
+        // Emitted whether or not a bundle is loaded: an unserved-kind probe
+        // during the startup window is exactly the one worth having.
+        if let Err(e) = self.audit.emit_document_denied(
+            &self.source.active_bundle_digest("").unwrap_or_default(),
+            "policy.document_request_invalid",
+            kind,
+            "-",
+            verb,
+            message.clone(),
+        ) {
+            tracing::warn!(error = %e, "audit emission failed for invalid document request");
         }
-        if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(kind) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("kind '{kind}' is not served by this instance"),
-            ));
-        }
-        Ok(())
+        Err((StatusCode::BAD_REQUEST, message))
     }
 }
 
@@ -101,7 +114,18 @@ async fn require_bearer_token(State(s): State<HttpState>, req: Request, next: Ne
         Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => {
             next.run(req).await
         }
-        _ => (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response(),
+        _ => {
+            // auth_deny, not deny: no bundle decided this, and the only
+            // identity available came from the credential that just failed.
+            // The message names no header value.
+            if let Err(e) = s.audit.emit_auth_deny(
+                "auth.http_bearer_invalid",
+                "missing or invalid bearer token on the authenticated surface".to_owned(),
+            ) {
+                tracing::warn!(error = %e, "audit emission failed for http auth denial");
+            }
+            (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response()
+        }
     }
 }
 
@@ -191,7 +215,7 @@ async fn list_documents(
     Path(kind): Path<String>,
     Query(q): Query<GetDocumentQuery>,
 ) -> Result<Json<ListDocumentsBody>, (StatusCode, String)> {
-    s.check_kind(&kind)?;
+    s.check_kind(&kind, "policy.list_documents")?;
     tracing::debug!(
         kind = %kind,
         user_subject = q.user_subject.as_deref().unwrap_or("-"),
@@ -218,7 +242,7 @@ async fn get_document(
     Path((kind, name)): Path<(String, String)>,
     Query(q): Query<GetDocumentQuery>,
 ) -> Result<Json<GetDocumentBody>, (StatusCode, String)> {
-    s.check_kind(&kind)?;
+    s.check_kind(&kind, "policy.get_document")?;
 
     let ctx = RuntimeContext {
         platform: Some(runtime_context::Platform::Openshell(OpenShellContext {
@@ -230,16 +254,48 @@ async fn get_document(
     };
     let resolved = s.resolver.resolve(&name, &ctx);
 
-    match s.source.get(&kind, &resolved.name, &resolved.variant) {
-        Some(proj) => Ok(Json(GetDocumentBody {
-            body: base64::engine::general_purpose::STANDARD.encode(&proj.bytes),
-            digest: proj.digest,
-            version: proj.version,
-        })),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            format!("document '{kind}/{name}' not found"),
-        )),
+    // Projection and digest together: read separately, a hot-swap between them
+    // — or a caller-steered variant — makes the record name a bundle the
+    // document did not come from.
+    match s
+        .source
+        .get_with_bundle(&kind, &resolved.name, &resolved.variant)
+    {
+        Some((proj, bundle_digest)) => {
+            if let Err(e) =
+                s.audit
+                    .emit_document_vended(&bundle_digest, &kind, &resolved.name, proj.version)
+            {
+                tracing::warn!(error = %e, "audit emission failed for document vended");
+            }
+            Ok(Json(GetDocumentBody {
+                body: base64::engine::general_purpose::STANDARD.encode(&proj.bytes),
+                digest: proj.digest,
+                version: proj.version,
+            }))
+        }
+        None => {
+            // No projection, so no bundle to read it from; the active digest is
+            // the best available context for the denial.
+            // A variant that never fetched has no digest; the refusal is still
+            // recorded, without policy identity.
+            if let Err(e) = s.audit.emit_document_denied(
+                &s.source
+                    .active_bundle_digest(&resolved.variant)
+                    .unwrap_or_default(),
+                "policy.document_not_found",
+                &kind,
+                &resolved.name,
+                "policy.get_document",
+                format!("document '{kind}/{name}' not found"),
+            ) {
+                tracing::warn!(error = %e, "audit emission failed for document not found");
+            }
+            Err((
+                StatusCode::NOT_FOUND,
+                format!("document '{kind}/{name}' not found"),
+            ))
+        }
     }
 }
 
@@ -264,6 +320,16 @@ async fn refresh_policy(
     let req = body.map(|b| b.0).unwrap_or_default();
     let bundle_path = req.bundle_path.as_deref().map(std::path::Path::new);
     tracing::info!("HTTP /v1/refresh triggered by operator");
+
+    // The operator action itself. The outcome is not recorded separately: a
+    // successful refresh already emits policy.bundle_hot_swapped naming the
+    // new bundle, and a failure returns 500 with the reason.
+    if let Err(e) = s
+        .audit
+        .emit_refresh_triggered(&s.source.active_bundle_digest("").unwrap_or_default())
+    {
+        tracing::warn!(error = %e, "audit emission failed for refresh trigger");
+    }
 
     match s.source.refresh(bundle_path).await {
         Ok(outcome) => {
@@ -314,4 +380,99 @@ async fn jwks(State(s): State<HttpState>) -> Json<JwksResponse> {
         });
     }
     Json(JwksResponse { keys })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::resolver::PassthroughResolver;
+    use apf_audit::AuditEvent;
+
+    /// Serves nothing, so every request reaches the refusal path.
+    struct EmptySource;
+
+    #[async_trait::async_trait]
+    impl PolicySource for EmptySource {
+        fn get(&self, _: &str, _: &str, _: &str) -> Option<crate::source::PolicyProjection> {
+            None
+        }
+        fn list(&self, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn active_bundle_digest(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn get_with_bundle(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Option<(crate::source::PolicyProjection, String)> {
+            None
+        }
+    }
+
+    fn state(dir: &std::path::Path) -> HttpState {
+        HttpState {
+            source: Arc::new(EmptySource),
+            resolver: Arc::new(PassthroughResolver),
+            allowed_kinds: Arc::new(HashSet::from(["openshell.sandbox.v1".to_owned()])),
+            bearer_token: None,
+            document_signer: None,
+            audit: PolicyServiceAudit::to_jsonl_in(dir).expect("build emitter"),
+        }
+    }
+
+    fn verbs_written(dir: &std::path::Path) -> Vec<String> {
+        let written = std::fs::read_to_string(dir.join("apf-policy-service-audit.jsonl"))
+            .expect("audit log was written");
+        written
+            .lines()
+            .map(|line| {
+                let parsed: AuditEvent = serde_json::from_str(line).expect("deserializes");
+                parsed.verb.expect("a refusal names the verb")
+            })
+            .collect()
+    }
+
+    /// Each handler must record the RPC it actually is. Asserted at the call
+    /// site rather than on the emitter: the emitter cannot tell which handler
+    /// invoked it, so a swapped pair of literals is invisible to any test that
+    /// passes the verb in itself — which is exactly how they were swapped here.
+    #[tokio::test]
+    async fn each_handler_records_its_own_verb() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let s = state(dir.path());
+
+        let query = || {
+            Query(GetDocumentQuery {
+                user_subject: None,
+                sandbox_id: None,
+                agent_type: None,
+            })
+        };
+
+        assert!(
+            list_documents(State(s.clone()), Path("aws.iam.v1".to_owned()), query())
+                .await
+                .is_err(),
+            "an unserved kind is refused"
+        );
+        assert_eq!(verbs_written(dir.path()), ["policy.list_documents"]);
+
+        assert!(
+            get_document(
+                State(s),
+                Path(("aws.iam.v1".to_owned(), "admin".to_owned())),
+                query(),
+            )
+            .await
+            .is_err(),
+            "an unserved kind is refused"
+        );
+        assert_eq!(
+            verbs_written(dir.path()),
+            ["policy.list_documents", "policy.get_document"]
+        );
+    }
 }

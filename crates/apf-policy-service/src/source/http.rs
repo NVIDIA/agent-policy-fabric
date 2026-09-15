@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, trace, warn};
 
 use super::{PolicyProjection, PolicySource};
-use crate::runtime::audit::{BundleAuditMetadata, PolicyServiceAudit};
+use crate::runtime::audit::PolicyServiceAudit;
 use crate::runtime::runtime_context::RuntimeContext;
 use apf_bundle::CounterStore;
 use apf_types::BundleVerifier;
@@ -144,7 +144,7 @@ impl HttpBundleSource {
             caches: Arc::new(RwLock::new(BTreeMap::new())),
             http_client,
             counter_store: Mutex::new(counter_store),
-            audit: PolicyServiceAudit,
+            audit: PolicyServiceAudit::disabled(),
             verifier,
         })
     }
@@ -335,12 +335,17 @@ impl HttpBundleSource {
         let swapped = {
             let mut caches = self.caches.write().expect("cache lock poisoned");
             let cache = caches.entry(variant.to_string()).or_default();
-            cache.try_swap(projections, counter, digest.clone(), bundle_id)
+            cache.try_swap(projections, counter, digest.clone(), bundle_id.clone())
         };
 
         if swapped {
-            let metadata = BundleAuditMetadata::from_counter_and_digest(counter, &digest);
-            if let Err(e) = self.audit.emit_policy_hot_swap(&metadata, &digest, counter) {
+            // Reached only after `extract_and_compile` already persisted the
+            // counter (see above), so the swap is durable — not the
+            // counter-not-persisted case the flag guards against.
+            if let Err(e) =
+                self.audit
+                    .emit_policy_hot_swap(&digest, counter, Some(bundle_id.as_str()), false)
+            {
                 warn!(error = %e, "audit emission failed for policy hot-swap");
             }
 
@@ -376,12 +381,11 @@ impl HttpBundleSource {
         counter: u64,
         digest: &str,
     ) {
-        let meta = BundleAuditMetadata::from_counter_and_digest(counter, digest);
         let reject = super::reject_audit(reason_code, message, retryable, Some(counter))
             .with_metadata_source("http_bundle_source_poll");
-        if let Err(e) =
-            self.audit
-                .emit_policy_reject(&RuntimeContext::default(), &meta, digest, reject)
+        if let Err(e) = self
+            .audit
+            .emit_policy_reject(&RuntimeContext::default(), digest, reject)
         {
             warn!(error = %e, reason_code, "audit emission failed for hot-swap reject");
         }
@@ -565,6 +569,45 @@ impl PolicySource for HttpBundleSource {
         None
     }
 
+    fn active_bundle_digest(&self, variant: &str) -> Option<String> {
+        let caches = self.caches.read().expect("cache lock poisoned");
+        // Exact for a named variant: falling back would name a bundle the
+        // request was not served from. The empty variant means "unspecified"
+        // and a template source has no default cache, so any loaded bundle is
+        // context rather than causation — matching how `get` scans in that
+        // case.
+        let cache = if variant.is_empty() {
+            caches.get(variant).or_else(|| caches.values().next())
+        } else {
+            caches.get(variant)
+        };
+        cache
+            .map(|c| c.bundle_digest.clone())
+            .filter(|d| !d.is_empty())
+    }
+
+    fn get_with_bundle(
+        &self,
+        surface_id: &str,
+        name: &str,
+        variant: &str,
+    ) -> Option<(PolicyProjection, String)> {
+        let caches = self.caches.read().expect("cache lock poisoned");
+        let key = (surface_id.to_string(), name.to_string());
+        // The projection and the digest must come from the SAME cache, or the
+        // record names a bundle the document did not come from — which a
+        // caller can steer, since the variant derives from a query parameter.
+        let cache = if variant.is_empty() {
+            caches.values().find(|c| c.projections.contains_key(&key))
+        } else {
+            caches.get(variant)
+        }?;
+        // No filter on an empty digest: this sits on the serving path, and
+        // missing audit metadata must not turn a servable document into a 404.
+        let projection = cache.projections.get(&key)?.clone();
+        Some((projection, cache.bundle_digest.clone()))
+    }
+
     fn list(&self, surface_id: &str) -> Vec<String> {
         let caches = self.caches.read().expect("cache lock poisoned");
         let mut names: Vec<String> = caches
@@ -628,7 +671,7 @@ mod tests {
             caches: Arc::new(RwLock::new(caches)),
             http_client: reqwest::Client::new(),
             counter_store: Mutex::new(counter_store),
-            audit: PolicyServiceAudit,
+            audit: PolicyServiceAudit::disabled(),
             verifier,
         }
     }

@@ -30,7 +30,33 @@ impl RuntimeContext {
         if bytes.is_empty() {
             return Ok(Self::default());
         }
-        serde_json::from_slice(bytes).map_err(RuntimeContextError::Json)
+        let mut ctx: Self = serde_json::from_slice(bytes).map_err(RuntimeContextError::Json)?;
+        ctx.sanitize_correlation_id();
+        Ok(ctx)
+    }
+
+    /// Replace a caller-supplied `correlation_id` that audit could not carry.
+    ///
+    /// No emit path threads this context yet — every call site passes
+    /// `default()`. Sanitizing here rather than at the emitter is what keeps it
+    /// that way: an id failing the schema's `id` pattern fails validation, and
+    /// emission is fail-closed, so once a caller's value does reach an event it
+    /// would be a remote halt. An unusable id cannot be joined on anyway.
+    fn sanitize_correlation_id(&mut self) {
+        let Some(id) = &self.correlation_id else {
+            return;
+        };
+        if is_valid_audit_id(id) {
+            return;
+        }
+        let replacement = apf_audit::generate_correlation_id();
+        // Length only: the value is untrusted and unbounded.
+        tracing::warn!(
+            supplied_len = id.len(),
+            %replacement,
+            "caller correlation_id is not a valid audit id; substituted"
+        );
+        self.correlation_id = Some(replacement);
     }
 
     /// True iff every field is None — no caller context was attested.
@@ -48,6 +74,19 @@ impl RuntimeContext {
 pub enum RuntimeContextError {
     #[error("runtime_context JSON parse failed: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+/// Mirrors the audit schema's `id` profile.
+fn is_valid_audit_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '@' | '/' | '+' | '-' | '=')
+        })
 }
 
 #[cfg(test)]
