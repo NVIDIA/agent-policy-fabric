@@ -1,0 +1,1745 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.apf.local/audit/apf.audit.event.v1.schema.json",
+  "title": "APF Audit Event v1",
+  "description": "Canonical producer-facing schema for APF common audit events. This schema validates JSON/JSONL audit records emitted by APF enforcement points. Each event type composes shared $defs blocks, so when one property inside a block is invalid the whole subschema fails and unevaluatedProperties additionally reports every field in that block as unexpected. Read the value-level violation first; the unevaluated list that accompanies it is a consequence, not a second fault.",
+  "type": "object",
+  "allOf": [
+    {
+      "description": "Every event carries the envelope, whatever its type.",
+      "$ref": "#/$defs/envelope"
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "authorization"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/authorization_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "authentication"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/authentication_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_verification"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_verification_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_activation"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_activation_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_distribution"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_distribution_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_refresh"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_refresh_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "provenance_signing"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/provenance_signing_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_injection"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_injection_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "admission_validation"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/admission_validation_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "config_governance"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/config_governance_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "policy_service_startup"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/policy_service_startup_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "review_request"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/review_request_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "review_decision"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/review_decision_event"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "credential_issuance"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/credential_issuance_event"
+      }
+    },
+    {
+      "description": "A record carrying `verdict` must not also carry the synthetic policy_verdict finding that the OpenShell wire uses to stand in for it — the same advisory signal in two shapes double-counts downstream. Producers that predate `verdict` and emit only the synthetic finding remain valid.",
+      "if": {
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "items": {
+              "not": {
+                "properties": {
+                  "kind": {
+                    "const": "policy_verdict"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "description": "Reusable APF identifier string. IDs are opaque, non-empty, bounded strings intended for event, user, agent, workspace, session, policy, decision, credential, and component references.",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-=]{0,511}$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Reusable short symbolic name for APF enum-like values, component names, profiles, resource classes, and other controlled labels.",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "description": "Reusable version string. Version semantics are owned by the producing component or bundle format.",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "digest": {
+      "type": "string",
+      "description": "Reusable digest string, preferably sha256:<64 hex chars>. Used for signed policy or bundle digest references.",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(sha256:[a-fA-F0-9]{64}|[a-fA-F0-9]{64}|[A-Za-z0-9][A-Za-z0-9._:@/+\\-=]{0,255})$"
+    },
+    "event_type": {
+      "type": "string",
+      "description": "APF audit event types. Each names the operation or fact being recorded — never its outcome. Authorization events carry `decision`; every other operation carries `outcome`; `reason_code` explains why. `review_request`, `review_decision` and `credential_issuance` are RESERVED: no producer emits them yet — there is no human-review gate, and no component issues credentials. They are retained so the vocabulary is stable if those capabilities ship.",
+      "enum": [
+        "authorization",
+        "authentication",
+        "policy_verification",
+        "policy_activation",
+        "policy_distribution",
+        "policy_refresh",
+        "provenance_signing",
+        "policy_injection",
+        "admission_validation",
+        "config_governance",
+        "policy_service_startup",
+        "review_request",
+        "review_decision",
+        "credential_issuance"
+      ]
+    },
+    "decision": {
+      "type": "string",
+      "description": "APF decision classes. `allow` and `deny` are the only members a v1 producer emits. `require_review` is RESERVED: apf-policy-eval can produce Verdict::Escalate but no review gate consumes it yet. `require_step_up`, `quarantine`, and `stop_session` are RESERVED containment actions — they answer 'what should happen to the agent' rather than 'may this request proceed', and require a substrate signalling mechanism that does not exist. Do not build consumers against the reserved values until a producer exists.",
+      "enum": [
+        "allow",
+        "deny",
+        "require_review",
+        "require_step_up",
+        "quarantine",
+        "stop_session"
+      ]
+    },
+    "result_class": {
+      "type": "string",
+      "description": "Normalized class for an action result, denial, timeout, partial response, or scrubbed response. `success` and `denied` are set by the typed builders; `failure`, `partial`, `timeout` and `scrubbed` are supplied by the producer on a `result` event.",
+      "enum": [
+        "success",
+        "failure",
+        "denied",
+        "partial",
+        "timeout",
+        "scrubbed"
+      ]
+    },
+    "reason_code": {
+      "type": "string",
+      "description": "Stable dot-separated reason code suitable for SIEM search, tests, dashboards, and policy/debug analysis.",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "verb": {
+      "type": "string",
+      "description": "Dot-separated governed action verb, scoped by the resource contract.",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "component": {
+      "type": "object",
+      "description": "Metadata for the APF component or substrate wrapper that emitted the audit event.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "instance_id"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "Emitter component name, for example apf-policy-gateway or apf-openshell-middleware."
+        },
+        "version": {
+          "$ref": "#/$defs/version",
+          "description": "Emitter component version."
+        },
+        "instance_id": {
+          "$ref": "#/$defs/id",
+          "description": "Stable identity for this running component instance."
+        },
+        "workload_identity": {
+          "$ref": "#/$defs/id",
+          "description": "Optional workload identity used by the component to authenticate to adjacent APF components."
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "description": "Redacted resource identity and classification for a governed APF action. Do not include raw sensitive resource payloads.",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/name",
+          "description": "Resource type, for example mailbox, repository, slack_channel, or network_destination."
+        },
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Redacted or stable resource identifier appropriate for audit and SIEM search."
+        },
+        "class": {
+          "$ref": "#/$defs/name",
+          "description": "Resource class or provider family, for example outlook, gitlab, slack, or direct_egress."
+        },
+        "instance": {
+          "$ref": "#/$defs/id",
+          "description": "Optional provider-specific instance identifier, redacted if needed."
+        },
+        "data_class": {
+          "$ref": "#/$defs/name",
+          "description": "Data classification for the resource, for example business_email, source_code, or customer_data."
+        },
+        "tenant": {
+          "$ref": "#/$defs/id",
+          "description": "Optional tenant or workspace owner identifier for multi-tenant deployments."
+        },
+        "attributes": {
+          "$ref": "#/$defs/safe_string_map",
+          "description": "Small redacted string attributes for joining and search. Sensitive field names are forbidden."
+        }
+      }
+    },
+    "obligations": {
+      "type": "object",
+      "description": "Obligations the enforcement point must apply. These are audit summaries of obligations, not authority expansions.",
+      "additionalProperties": false,
+      "properties": {
+        "credential_scope": {
+          "$ref": "#/$defs/credential_scope",
+          "description": "Maximum or issued credential scope associated with the decision."
+        },
+        "redaction_profile": {
+          "$ref": "#/$defs/name",
+          "description": "Redaction profile that must be applied before emitting audit or returning results."
+        },
+        "max_result_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum result size allowed by policy obligations."
+        },
+        "allowed_destination": {
+          "$ref": "#/$defs/id",
+          "description": "Allowed destination identifier when the policy restricts outbound target or resource destination."
+        },
+        "rate_limit": {
+          "$ref": "#/$defs/rate_limit",
+          "description": "Rate limit obligation applied to the action."
+        },
+        "audit_level": {
+          "type": "string",
+          "description": "Required audit emission level for this action.",
+          "enum": [
+            "minimal",
+            "standard",
+            "enhanced",
+            "required"
+          ]
+        },
+        "review_required": {
+          "type": "boolean",
+          "description": "Whether the action required human review before proceeding."
+        }
+      }
+    },
+    "credential_scope": {
+      "type": "object",
+      "description": "Credential scope metadata proving issued credentials were bounded by policy obligations. This object must never include token material.",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "audience",
+        "scopes"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/name",
+          "description": "Credential provider or broker, for example graph, gitlab, slack, vault, or oauth."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Credential delivery mode.",
+          "enum": [
+            "token_vending",
+            "call_through",
+            "delegated_broker"
+          ]
+        },
+        "audience": {
+          "$ref": "#/$defs/id",
+          "description": "Credential audience or relying party, for example graph.microsoft.com."
+        },
+        "scopes": {
+          "type": "array",
+          "description": "Issued or requested scopes. Values are provider scope labels, never credential values.",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "description": "Credential time-to-live in seconds."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Credential expiry timestamp. Prefer UTC RFC3339 with Z."
+        },
+        "decision_id": {
+          "$ref": "#/$defs/id",
+          "description": "Decision evidence identifier used to authorize this credential request."
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "required": [
+              "access_token"
+            ]
+          },
+          {
+            "required": [
+              "refresh_token"
+            ]
+          },
+          {
+            "required": [
+              "secret"
+            ]
+          },
+          {
+            "required": [
+              "private_key"
+            ]
+          }
+        ]
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "description": "Rate-limit obligation summary for an action.",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of actions allowed in the window."
+        },
+        "window_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Rate-limit window size in seconds."
+        },
+        "key": {
+          "$ref": "#/$defs/name",
+          "description": "Rate-limit key or bucket name."
+        }
+      }
+    },
+    "review_ref": {
+      "type": "object",
+      "description": "Human-review evidence for actions that require approval before credential issuance or resource execution.",
+      "additionalProperties": false,
+      "required": [
+        "review_id",
+        "status"
+      ],
+      "properties": {
+        "review_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for the review request or decision record."
+        },
+        "status": {
+          "type": "string",
+          "description": "Human-review lifecycle status.",
+          "enum": [
+            "requested",
+            "approved",
+            "denied",
+            "expired",
+            "cancelled"
+          ]
+        },
+        "reviewer_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for the human or service principal that made the review decision."
+        },
+        "decision_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the review decision was made. Prefer UTC RFC3339 with Z."
+        },
+        "evidence_ref": {
+          "$ref": "#/$defs/id",
+          "description": "Reference to review evidence, ticket, transcript, or approval artifact."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "description": "Sanitized error information for rejected policies, denied credentials, failed emissions, and failed resource calls.",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Stable machine-readable error code."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Short sanitized error message safe for audit sinks. Do not include stack traces, tokens, raw payloads, or credentials."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether retrying the operation may succeed without policy or configuration changes."
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "description": "Audit delivery metadata for sink diagnostics, local buffering, and replay accounting. RESERVED: no producer populates this yet. Retained because it describes a delivery path that exists in the sink design, not an aspiration.",
+      "additionalProperties": false,
+      "properties": {
+        "sink_type": {
+          "type": "string",
+          "description": "Audit sink type used by this delivery attempt. Only `jsonl` has an implementation; `siem` and `gateway` are RESERVED for sinks that do not exist yet.",
+          "enum": [
+            "jsonl",
+            "siem",
+            "gateway"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Delivery attempt number for this event."
+        },
+        "buffered": {
+          "type": "boolean",
+          "description": "Whether this event was buffered locally before delivery."
+        },
+        "replay": {
+          "type": "boolean",
+          "description": "Whether this event was emitted during replay from a local buffer."
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Deployment-specific extension object. Keys must use the x_ namespace and values must follow redacted object rules.",
+      "additionalProperties": {
+        "$ref": "#/$defs/redacted_object"
+      },
+      "propertyNames": {
+        "pattern": "^x_[a-z][a-z0-9_]*$"
+      }
+    },
+    "safe_string_map": {
+      "type": "object",
+      "description": "Small string map for redacted attributes. Property names that commonly carry secrets or raw content are forbidden.",
+      "maxProperties": 100,
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee]_[Kk][Ee][Yy]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii]_[Kk][Ee][Yy]|[Aa][Pp][Ii][Kk][Ee][Yy]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Bb][Oo][Dd][Yy]|[Tt][Ee][Xx][Tt]|[Rr][Aa][Ww]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee]|[Ff][Ii][Ll][Ee]_[Cc][Oo][Nn][Tt][Ee][Nn][Tt])"
+        }
+      }
+    },
+    "redacted_object": {
+      "type": "object",
+      "description": "Object containing only redacted, bounded audit-safe summary values. It must not contain raw user content, secrets, credentials, or sensitive payloads.",
+      "maxProperties": 100,
+      "additionalProperties": {
+        "$ref": "#/$defs/redacted_value"
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee]_[Kk][Ee][Yy]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii]_[Kk][Ee][Yy]|[Aa][Pp][Ii][Kk][Ee][Yy]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Bb][Oo][Dd][Yy]|[Tt][Ee][Xx][Tt]|[Rr][Aa][Ww]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee]|[Ff][Ii][Ll][Ee]_[Cc][Oo][Nn][Tt][Ee][Nn][Tt])"
+        }
+      }
+    },
+    "redacted_value": {
+      "description": "Recursive redacted value allowed in audit summaries and extensions. Strings are bounded; object keys that commonly carry secrets or raw content are forbidden.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 2048
+        },
+        {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/redacted_value"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 100,
+          "additionalProperties": {
+            "$ref": "#/$defs/redacted_value"
+          },
+          "propertyNames": {
+            "not": {
+              "pattern": "([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee]_[Kk][Ee][Yy]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss]_[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii]_[Kk][Ee][Yy]|[Aa][Pp][Ii][Kk][Ee][Yy]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Bb][Oo][Dd][Yy]|[Tt][Ee][Xx][Tt]|[Rr][Aa][Ww]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee]|[Ff][Ii][Ll][Ee]_[Cc][Oo][Nn][Tt][Ee][Nn][Tt])"
+            }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One observation emitted alongside a decision by the policy engine's effect stage. Findings do not change the decision; they record what was detected.",
+      "required": [
+        "kind",
+        "label",
+        "severity"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Finding category, from the PolicyFinding `type` field, e.g. secret_detected. Human-authored descriptive text: bounded in length but otherwise unconstrained, because rejecting a label must never cost the audit record that carries it."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Specific label within the category. Static, or resolved at evaluation time from a `label_source` annotation, e.g. github_pat or \"AWS access key\". Deliberately unpatterned: this value is produced at runtime from annotation data with no charset guarantee, and a charset rule here would reject the whole event rather than just the label."
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "confidence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Detector confidence in percent, when the annotator supplies one."
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Advisory signal accompanying a decision, from apf_policy_eval::Verdict. Orthogonal to `decision`: `warn` is an allow with elevated signal, `escalate` asks for review. Without this field a warn is indistinguishable from a plain allow.",
+      "enum": [
+        "allow",
+        "warn",
+        "escalate"
+      ]
+    },
+    "envelope": {
+      "type": "object",
+      "description": "Fields every APF audit event carries, whatever its type.",
+      "required": [
+        "schema_version",
+        "event_id",
+        "timestamp",
+        "event_type",
+        "correlation_id",
+        "enforcement_point_id",
+        "runtime_substrate",
+        "component"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "apf.audit.event.v1",
+          "description": "APF audit schema version. The emitter sets this to identify the canonical event contract used by this record."
+        },
+        "event_id": {
+          "$ref": "#/$defs/id",
+          "description": "Unique identifier for this single audit event. Generated by the emitter and never reused."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
+          "description": "UTC RFC3339 timestamp generated by the emitting component."
+        },
+        "event_type": {
+          "$ref": "#/$defs/event_type",
+          "description": "Machine-readable event category that determines which event-specific fields are required."
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier shared across all audit events for one governed action or workflow step."
+        },
+        "enforcement_point_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for the emitting enforcement point or APF component."
+        },
+        "runtime_substrate": {
+          "$ref": "#/$defs/name",
+          "description": "Runtime substrate identifier, for example openshell."
+        },
+        "component": {
+          "$ref": "#/$defs/component",
+          "description": "Emitter component metadata: component name, version, instance identity, and optional workload identity."
+        },
+        "causation_id": {
+          "$ref": "#/$defs/id",
+          "description": "Event or operation ID that caused this event."
+        },
+        "trace_id": {
+          "$ref": "#/$defs/id",
+          "description": "Optional trace identifier for OpenTelemetry or APF trace context."
+        },
+        "span_id": {
+          "$ref": "#/$defs/id",
+          "description": "Optional span identifier for OpenTelemetry or APF trace context."
+        },
+        "device_id": {
+          "$ref": "#/$defs/id",
+          "description": "Optional device or host identity from trusted runtime context. Use when the deployment can distinguish device from workspace."
+        },
+        "deployment_profile": {
+          "$ref": "#/$defs/name",
+          "description": "Deployment profile bound to the active policy and runtime context, for example dev, enterprise, or safety profile."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Short sanitized human-readable explanation for the decision, result, rejection, or denial. Do not include raw payloads, stack traces, secrets, or credential material."
+        },
+        "delivery": {
+          "$ref": "#/$defs/delivery",
+          "description": "Optional audit delivery metadata for local buffering, replay, or sink diagnostics."
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions",
+          "description": "Allowlisted extension namespace for deployment-specific redacted metadata. Extension keys must start with x_."
+        }
+      }
+    },
+    "subject_identity": {
+      "type": "object",
+      "description": "Who the action was taken for. Absent on events that precede any session.",
+      "properties": {
+        "user_id": {
+          "$ref": "#/$defs/id",
+          "description": "Human or delegating principal from trusted runtime context."
+        },
+        "agent_id": {
+          "$ref": "#/$defs/id",
+          "description": "Agent, persona, or workload identity from trusted runtime context."
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/id",
+          "description": "Stable identifier for the runtime environment or workspace where the agent action occurred, as named by the substrate. Source of truth is trusted runtime context, not agent-supplied input."
+        },
+        "session_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for the specific agent/runtime session within the workspace. Used to join APF events with substrate events and bypass-denial evidence."
+        }
+      }
+    },
+    "policy_identity": {
+      "type": "object",
+      "description": "Which signed policy was in force. bundle_digest is the identity; policy_revision is the ordering signal.",
+      "properties": {
+        "bundle_digest": {
+          "$ref": "#/$defs/digest",
+          "description": "Digest of the active signed policy bundle."
+        },
+        "bundle_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier of the APF signed bundle that supplied the active policy, from verified bundle state."
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Monotonic policy revision (PolicyBundle policy_revision) of the bundle in force. Ordering and anti-rollback signal; identity is carried by bundle_digest. Absent when the bundle could not be parsed, since an unparsed bundle has no readable revision."
+        },
+        "signer_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier of the signer that produced the active bundle signature, from verified bundle state."
+        },
+        "trust_root_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier of the trust root used to verify the active bundle."
+        }
+      }
+    },
+    "decision_fields": {
+      "type": "object",
+      "description": "The shape of a governed authorization decision.",
+      "properties": {
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "Redacted resource identifier and classification for the governed action."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "Governed APF action verb, for example mail.search, repo.write, or slack.post."
+        },
+        "decision": {
+          "$ref": "#/$defs/decision",
+          "description": "Decision class that governed this action or downstream event."
+        },
+        "decision_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for decision evidence, used downstream to prove an enforcement point acted on a valid decision."
+        },
+        "reason_code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Stable machine-readable reason for the decision, result, rejection, or denial."
+        },
+        "argument_summary": {
+          "$ref": "#/$defs/redacted_object",
+          "description": "Redacted request argument summary. Do not place raw user content or secrets here."
+        },
+        "obligations": {
+          "$ref": "#/$defs/obligations",
+          "description": "Structured obligations returned by policy evaluation and applied by the enforcement point."
+        },
+        "result_class": {
+          "$ref": "#/$defs/result_class",
+          "description": "Normalized result class for the action outcome."
+        },
+        "result_summary": {
+          "$ref": "#/$defs/redacted_object",
+          "description": "Redacted result summary. Do not place raw response content or secrets here."
+        }
+      }
+    },
+    "review_decision_event": {
+      "type": "object",
+      "description": "RESERVED — no producer. The outcome of a human review requested by review_request. Carries `decision` because it records a decision.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "review_ref",
+        "decision",
+        "reason_code"
+      ],
+      "unevaluatedProperties": false,
+      "properties": {
+        "review_ref": {
+          "$ref": "#/$defs/review_ref",
+          "description": "Human-review evidence reference and status for review-required actions."
+        },
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "Redacted resource identifier and classification for the governed action."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "Governed APF action verb, for example mail.search, repo.write, or slack.post."
+        },
+        "decision": {
+          "$ref": "#/$defs/decision",
+          "description": "Decision class that governed this action or downstream event."
+        },
+        "decision_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for decision evidence, used downstream to prove an enforcement point acted on a valid decision."
+        },
+        "reason_code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Stable machine-readable reason for the decision, result, rejection, or denial."
+        }
+      }
+    },
+    "advisory_signals": {
+      "type": "object",
+      "description": "Observations and the advisory verdict the policy engine emitted alongside a decision. Only the event types produced by an evaluation carry these — credential and review events are downstream of a decision and do not re-report its signals.",
+      "properties": {
+        "findings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "description": "Observations emitted alongside the decision, on allows and denies alike. Order is significant and mirrors bundle manifest order, then policy order within each rule. Not deduplicated: the effect engine pushes one entry per firing rule, so two rules reporting the same detection legitimately produce identical entries. maxItems matches the middleware's MAX_FINDINGS_PER_STAGE.",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "verdict": {
+          "$ref": "#/$defs/verdict",
+          "description": "Advisory verdict accompanying the decision. Producers set this from the evaluator's Verdict and must NOT additionally emit a synthetic warn/escalate finding — that duplication exists only on the OpenShell wire, which has findings but no verdict field."
+        }
+      }
+    },
+    "header_mutation_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One applied header mutation. Records the header NAME and the action, never the value — an injected credential is exactly what would be in the value.",
+      "required": [
+        "name",
+        "action"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Header name, e.g. authorization. Bounded but unpatterned: RFC 7230 token syntax permits !#$%&'*+-.^_`|~, which the middleware's own validator accepts, so a charset rule would reject the record over a legal header name."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "set",
+            "add",
+            "remove"
+          ]
+        }
+      }
+    },
+    "patch_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One applied body patch. Records the target PATH and the operation, never the value — a patch value is the sensitive content the redaction exists to remove.",
+      "required": [
+        "path",
+        "op"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "RFC 6901 JSON Pointer, e.g. /messages/0/content. Bounded but otherwise unconstrained: pointer segments can contain arbitrary object keys, and a charset rule here would reject the whole audit event over a path."
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "replace",
+            "add",
+            "remove"
+          ],
+          "description": "Mirrors `apf_policy_eval::PatchOp`. A path that was `replace`d was redacted in altered form; a path that was `remove`d is gone entirely — materially different answers to what the request looked like when it left."
+        }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "patches"
+          ]
+        },
+        {
+          "required": [
+            "header_mutations"
+          ]
+        },
+        {
+          "required": [
+            "payload_replaced"
+          ],
+          "properties": {
+            "payload_replaced": {
+              "const": true
+            }
+          }
+        },
+        {
+          "required": [
+            "patch_count"
+          ],
+          "properties": {
+            "patch_count": {
+              "minimum": 1
+            }
+          }
+        }
+      ],
+      "description": "What the enforcement point applied to the request in flight. Distinct from `obligations`, which records what policy REQUIRED: merged, an unapplied obligation would be indistinguishable from an applied one. Records paths and names only — a patch value is the sensitive content the redaction exists to remove. Absent means unmodified, so the object must assert at least one real mutation: `{}`, `{\"patch_count\": 0}` and `{\"payload_replaced\": false}` are all rejected.",
+      "properties": {
+        "patch_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RFC 6902 operations applied to the request body. Authoritative: the engine applies patches with no cap, so `patches` is truncated to 64 while this count stays exact. `patch_count` greater than `patches` length means the list was truncated, not that the schema disagreed."
+        },
+        "patches": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/patch_record"
+          },
+          "description": "The patches applied, truncated to 64 — `patch_count` is authoritative for the total. This is what answers 'was the secret field redacted, or a different one?' — a count alone cannot."
+        },
+        "payload_replaced": {
+          "type": "boolean",
+          "description": "The body was replaced wholesale rather than patched. Takes precedence over patches in the engine, so both counts may be zero when this is true."
+        },
+        "header_mutations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "description": "Bounded at 64 to match the middleware's own MAX_HEADER_MUTATIONS, which hard-denies above that — so no producer-legal request can overflow this.",
+          "items": {
+            "$ref": "#/$defs/header_mutation_record"
+          }
+        }
+      }
+    },
+    "applied_effects": {
+      "type": "object",
+      "description": "Effects applied by an enforcement point that rewrites requests in flight.",
+      "properties": {
+        "effects": {
+          "$ref": "#/$defs/effects",
+          "description": "What was applied to the request. Absent when nothing was changed."
+        }
+      }
+    },
+    "caller_kind": {
+      "$ref": "#/$defs/name",
+      "description": "Class of caller that presented the credential, as named by the runtime substrate — for example gateway or supervisor under OpenShell. Open rather than enumerated: caller classes are defined by the substrate's own authentication protocol, and a closed list would reject an auth denial from any other runtime outright."
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Result of an operation event. `success` — the operation completed. `refused` — a deliberate rejection by policy, integrity, or governance checks. `failure` — an operational error (I/O, signing, persistence), not a judgement. Authorization events do not use this field; they carry `decision` instead.",
+      "enum": [
+        "success",
+        "failure",
+        "refused"
+      ]
+    },
+    "operation_fields": {
+      "type": "object",
+      "description": "The shape of an operation event: what was operated on, and how it came out. `outcome` is required on every operation event; `decision` is not permitted — that field belongs to authorization.",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Machine-readable explanation of the outcome."
+        },
+        "error": {
+          "$ref": "#/$defs/error",
+          "description": "Detail for a refused or failed outcome."
+        },
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "Redacted resource identifier and classification for the governed action."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "Governed APF action verb, for example mail.search, repo.write, or slack.post."
+        }
+      }
+    },
+    "validation_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which integrity checks a validation actually ran. A check that could not run (e.g. no spec digest was present to compare) is listed as skipped rather than silently counted as passed — a validation that skipped a check proves less than one that performed it.",
+      "properties": {
+        "performed": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "description": "Checks that ran, in execution order."
+        },
+        "skipped": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "description": "Checks that could not run, with the reason in reason_code."
+        }
+      }
+    },
+    "authorization_event": {
+      "type": "object",
+      "description": "An authorization decision on a governed action — the only event type that carries `decision`. Covers allows and denials alike, from the PDP and from the egress middleware; a denial's policy explanation rides in `error` or `reason`. Records the middleware *instructing* a refusal or mutation, not independent confirmation that the substrate applied it.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/decision_fields"
+        },
+        {
+          "$ref": "#/$defs/advisory_signals"
+        },
+        {
+          "$ref": "#/$defs/applied_effects"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "resource",
+        "verb",
+        "decision",
+        "decision_id",
+        "reason_code"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/error",
+          "description": "The policy's own explanation of a denial."
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "authentication_event": {
+      "type": "object",
+      "description": "A rejection at the authentication / caller-access boundary. Not only 'identity could not be verified': also a correctly-authenticated caller that lacks permission for the RPC or the sandbox. No policy was consulted, so no policy identity is carried.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        },
+        {
+          "description": "Sandbox binding is an OpenShell concept: a binding exists only for the supervisor caller class, since every other class authenticates without one. Substrates that scope credentials differently should record their equivalent in `extensions` rather than reusing these fields.",
+          "if": {
+            "required": [
+              "caller_sandbox_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "caller_kind": {
+                "const": "supervisor"
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "reason_code",
+        "outcome",
+        "error"
+      ],
+      "properties": {
+        "result_class": {
+          "const": "denied",
+          "description": "An authentication event records that the caller was REFUSED; any other result class contradicts the event type."
+        },
+        "caller_kind": {
+          "$ref": "#/$defs/caller_kind",
+          "description": "The caller class established by authentication, when one was established. Present for a caller that authenticated but was refused; absent when authentication itself failed."
+        },
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "The resource the refused call targeted, when known. Optional: a credential failure is rejected before the request body is parsed."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "The action the refused call attempted, when known. Optional for the same reason as `resource`."
+        },
+        "caller_sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The sandbox the presented credential is bound to, from the verified token. OpenShell-specific. Unpatterned: the sandbox id is opaque to APF."
+        },
+        "claimed_sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The sandbox the refused request claimed to act on, from the request context. With `caller_sandbox_id` this answers which sandbox impersonated which. Unpatterned: this value is attacker-controlled, and a charset rule would drop the record of the impersonation attempt it exists to capture."
+        },
+        "outcome": {
+          "const": "refused",
+          "description": "Authentication events record refusals only: a successful auth is not audited as a standalone event."
+        }
+      },
+      "unevaluatedProperties": false,
+      "dependentRequired": {
+        "caller_sandbox_id": [
+          "claimed_sandbox_id",
+          "caller_kind"
+        ],
+        "claimed_sandbox_id": [
+          "caller_sandbox_id",
+          "caller_kind"
+        ]
+      }
+    },
+    "policy_verification_event": {
+      "type": "object",
+      "description": "A signed bundle was checked — signature, manifest hashes, expiry, runtime compatibility, counter regression. Verification success does not establish activation; that is a separate policy_activation event.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "outcome",
+        "reason_code"
+      ],
+      "properties": {
+        "rejection_reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reason_code"
+          },
+          "description": "Every check that failed, as normalized codes. verify_bundle accumulates rather than short-circuits — a bundle can fail expiry and runtime-compat and the counter at once — so `reason_code` names the primary cause and this lists the full set. Human-readable detail belongs in error.message."
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "policy_activation_event": {
+      "type": "object",
+      "description": "A verified bundle was put into (or removed from) force: initial load, hot-swap, or a refused activation (counter regression, persist failure, compile failure). The digest names exactly which policy is now enforcing.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "outcome",
+        "reason_code"
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "policy_distribution_event": {
+      "type": "object",
+      "description": "A policy document was requested from a serving surface: vended, refused (unknown document, invalid request), or served degraded. Carries no consumer identity — it records that a document was served, not to whom; suppression of unchanged re-serves means absence of a record is not absence of a fetch.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "resource",
+        "verb",
+        "outcome",
+        "reason_code"
+      ],
+      "unevaluatedProperties": false
+    },
+    "policy_refresh_event": {
+      "type": "object",
+      "description": "An operator asked the service to reload policy. Records the request; the resulting load is its own policy_verification/policy_activation pair.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "outcome",
+        "reason_code"
+      ],
+      "unevaluatedProperties": false
+    },
+    "provenance_signing_event": {
+      "type": "object",
+      "description": "Minting the provenance token that accompanies a vended document. A failure here does NOT stop the document being served — it is served unsigned, and this record is the only evidence of that degradation.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "success"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "served_unsigned": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "outcome",
+        "reason_code"
+      ],
+      "properties": {
+        "served_unsigned": {
+          "type": "boolean",
+          "description": "True when the document was served despite the signing failure."
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "policy_injection_event": {
+      "type": "object",
+      "description": "Policy material was injected into a resource specification at admission (MODIFY_OPERATION): patches prepared and provenance stamped. Records what the injection changed — it does not prove the runtime applied it; that is what admission_validation later checks.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        },
+        {
+          "$ref": "#/$defs/applied_effects"
+        }
+      ],
+      "required": [
+        "resource",
+        "verb",
+        "outcome",
+        "reason_code"
+      ],
+      "unevaluatedProperties": false
+    },
+    "admission_validation_event": {
+      "type": "object",
+      "description": "The admission-time integrity check (VALIDATE): is the specification still the one policy injection produced? `checks` records which comparisons actually ran — a validation that skipped a check proves less than one that performed it.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "resource",
+        "verb",
+        "outcome",
+        "reason_code"
+      ],
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/validation_checks"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "config_governance_event": {
+      "type": "object",
+      "description": "A governance decision over configuration-changing operations: approval-mode changes, direct policy mutation, deletion attempts. Refusals here are governance, not authentication — the caller is who it claims to be.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "verb",
+        "outcome",
+        "reason_code"
+      ],
+      "unevaluatedProperties": false
+    },
+    "review_request_event": {
+      "type": "object",
+      "description": "RESERVED — no producer. A decision was deferred to human review; records the request for review, not its outcome.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        }
+      ],
+      "required": [
+        "bundle_digest",
+        "trust_root_id",
+        "resource",
+        "verb",
+        "decision_id",
+        "reason_code",
+        "outcome"
+      ],
+      "properties": {
+        "review_ref": {
+          "$ref": "#/$defs/review_ref",
+          "description": "Human-review evidence reference and status for review-required actions."
+        },
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "Redacted resource identifier and classification for the governed action."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "Governed APF action verb, for example mail.search, repo.write, or slack.post."
+        },
+        "decision_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for decision evidence, used downstream to prove an enforcement point acted on a valid decision."
+        },
+        "reason_code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Stable machine-readable reason for the decision, result, rejection, or denial."
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "credential_issuance_event": {
+      "type": "object",
+      "description": "RESERVED — no producer. A credential was requested for a governed action: issued (`outcome: success`, with scope and result class) or refused (`outcome: refused`, with error detail).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "$ref": "#/$defs/subject_identity"
+        },
+        {
+          "$ref": "#/$defs/policy_identity"
+        },
+        {
+          "$ref": "#/$defs/operation_fields"
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "outcome": {
+                  "const": "success"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result_class": false
+            }
+          }
+        }
+      ],
+      "required": [
+        "resource",
+        "verb",
+        "outcome",
+        "reason_code",
+        "credential_request_id",
+        "credential_scope"
+      ],
+      "properties": {
+        "credential_request_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for the request associated with credential issuance or denial."
+        },
+        "credential_scope": {
+          "$ref": "#/$defs/credential_scope",
+          "description": "Credential provider, audience, scopes, and TTL issued or requested. Must never include credential material."
+        },
+        "result_class": {
+          "const": "success",
+          "description": "Only a successful issuance has a credential to classify; pinned to success and forbidden unless outcome is success. Read outcome for success vs refused."
+        },
+        "error": {
+          "$ref": "#/$defs/error",
+          "description": "Sanitized error metadata. Must not contain stack traces, secrets, raw payloads, or credential material."
+        },
+        "resource": {
+          "$ref": "#/$defs/resource",
+          "description": "Redacted resource identifier and classification for the governed action."
+        },
+        "verb": {
+          "$ref": "#/$defs/verb",
+          "description": "Governed APF action verb, for example mail.search, repo.write, or slack.post."
+        },
+        "decision_id": {
+          "$ref": "#/$defs/id",
+          "description": "Identifier for decision evidence, used downstream to prove an enforcement point acted on a valid decision."
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "security_state": {
+      "type": "string",
+      "description": "Resolved security state of the service's startup configuration. `secure` means every configured control is active; `degraded` means at least one control is deliberately or accidentally weakened while the process continues to serve; `rejected` means preflight refused to start.",
+      "enum": [
+        "secure",
+        "degraded",
+        "rejected"
+      ]
+    },
+    "policy_service_startup_event": {
+      "type": "object",
+      "description": "The security state of the configuration the policy service started with. Emitted once per boot, healthy or not. Carries no policy identity and no subject: it precedes both.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "if": {
+            "properties": {
+              "security_state": {
+                "enum": [
+                  "degraded",
+                  "rejected"
+                ]
+              }
+            },
+            "required": [
+              "security_state"
+            ]
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          },
+          "else": {
+            "properties": {
+              "error": false,
+              "rejection_reasons": false
+            }
+          }
+        }
+      ],
+      "required": [
+        "reason_code",
+        "security_state"
+      ],
+      "properties": {
+        "reason_code": {
+          "$ref": "#/$defs/reason_code",
+          "description": "Stable machine-readable reason for the decision, result, rejection, or denial."
+        },
+        "error": {
+          "$ref": "#/$defs/error",
+          "description": "Sanitized error metadata. Must not contain stack traces, secrets, raw payloads, or credential material."
+        },
+        "rejection_reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reason_code"
+          },
+          "description": "Every check that failed, as normalized codes. verify_bundle accumulates rather than short-circuits — a bundle can fail expiry and runtime-compat and the counter at once — so `reason_code` names the primary cause and this lists the full set. Human-readable detail belongs in error.message."
+        },
+        "security_state": {
+          "$ref": "#/$defs/security_state",
+          "description": "Resolved security state of the startup configuration. Present on policy_service_startup events, which are emitted once per startup."
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

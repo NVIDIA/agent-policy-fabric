@@ -1,0 +1,28 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_policy_service_startup",
+  "timestamp": "2026-09-02T08:15:04.220Z",
+  "event_type": "policy_service_startup",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q9",
+  "enforcement_point_id": "apf-policy-gateway:local",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-policy-gateway",
+    "version": "0.1.0",
+    "instance_id": "apf-policy-gateway:local"
+  },
+  "reason_code": "startup.insecure_transport_enabled",
+  "error": {
+    "code": "startup.insecure_transport_enabled",
+    "message": "middleware listener: TLS and caller authentication disabled",
+    "retryable": false
+  },
+  "extensions": {
+    "x_apf": {
+      "middleware_listener": "insecure",
+      "interceptor_listener": "authenticated",
+      "provenance_verification": "enabled"
+    }
+  },
+  "security_state": "degraded"
+}

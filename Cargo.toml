@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["xtask", "crates/apf-types", "crates/apf-bundle", "crates/apf-policy-eval", "crates/apf-proto", "crates/apf-compiler", "crates/apf-policy-service", "crates/apf-compile", "crates/apf-policy-client", "crates/apf-policy-gateway", "crates/apf-openshell-projector", "crates/apf-openshell-middleware", "crates/apf-openshell-interceptor", "crates/apf-openshell-auth"]
+members = ["xtask", "crates/apf-types", "crates/apf-audit", "crates/apf-bundle", "crates/apf-policy-eval", "crates/apf-proto", "crates/apf-compiler", "crates/apf-policy-service", "crates/apf-compile", "crates/apf-policy-client", "crates/apf-policy-gateway", "crates/apf-openshell-projector", "crates/apf-openshell-middleware", "crates/apf-openshell-interceptor", "crates/apf-openshell-auth"]
 
 [workspace.package]
 edition = "2024"

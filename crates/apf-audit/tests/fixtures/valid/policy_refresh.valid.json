@@ -1,0 +1,25 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_policy_refresh",
+  "timestamp": "2026-05-15T19:20:31.010Z",
+  "event_type": "policy_refresh",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q2",
+  "enforcement_point_id": "apf-policy-gateway:local",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-policy-gateway",
+    "version": "0.1.0",
+    "instance_id": "apf-policy-gateway:local"
+  },
+  "user_id": "user:example",
+  "agent_id": "agent:demo:research-assistant",
+  "workspace_id": "workspace:example",
+  "session_id": "session:apf-v0-demo",
+  "bundle_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "bundle_id": "bundle:apf-v0-demo",
+  "policy_revision": 1,
+  "signer_id": "signer:dev",
+  "trust_root_id": "trustroot:dev",
+  "outcome": "success",
+  "reason_code": "policy.refresh_completed"
+}

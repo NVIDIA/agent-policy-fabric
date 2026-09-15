@@ -1,0 +1,32 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_authz_deny",
+  "timestamp": "2026-05-15T19:20:31.010Z",
+  "event_type": "authorization",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q2",
+  "enforcement_point_id": "apf-openshell-middleware:local",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-openshell-middleware",
+    "version": "0.1.0",
+    "instance_id": "apf-openshell-middleware:local"
+  },
+  "bundle_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "bundle_id": "bundle:apf-v0-demo",
+  "policy_revision": 1,
+  "signer_id": "signer:dev",
+  "trust_root_id": "trustroot:dev",
+  "resource": {
+    "type": "network_destination",
+    "id": "net:api.example.com:443"
+  },
+  "verb": "egress.request",
+  "decision": "deny",
+  "decision_id": "dec_01HY7AM70ST8TKR7X6JGEDW5Q8",
+  "reason_code": "substrate.egress_denied",
+  "error": {
+    "code": "substrate.egress_denied",
+    "message": "destination not on the allowed egress list",
+    "retryable": false
+  }
+}

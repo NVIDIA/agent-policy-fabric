@@ -12,6 +12,7 @@ out of scope for this repository and belong to the network egress gateway.
 | Crate | Kind | Role |
 |---|---|---|
 | `apf-types` | lib | `BundleSigner`/`BundleVerifier` traits, `Decision`, `Obligation`, shared vocabulary |
+| `apf-audit` | lib | `apf.audit.event.v1` schema, typed event builders, redaction, sanitization, JSONL emitter |
 | `apf-bundle` | lib | `Bundle`, `verify_bundle`, `TrustStore`, `CounterStore`, Ed25519 default signing impl |
 | `apf-policy-eval` | lib | `Evaluator` trait, `EvalInput`/`EvalResult`, Cedar engine |
 | `apf-compiler` | lib | Bundle compilation: frontend, passes, merge, `Projector` trait |

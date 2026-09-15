@@ -33,7 +33,7 @@ pub struct TrustEntry {
 /// Production extension points:
 /// - JWKS URI: fetch signing public keys from a JSON Web Key Set endpoint
 ///   (e.g. a signing service's `.well-known/jwks.json`). Enables key rotation
-///   without redeploying RPV. When implemented, add `--trust-root-jwks-uri`
+///   without redeploying the verifying component. When implemented, add `--trust-root-jwks-uri`
 ///   and resolve keys by `kid` (key ID) matching the signature carrier's `keyid`.
 /// - Centrally delivered trust root bundle, signed and rotated.
 #[derive(Clone)]

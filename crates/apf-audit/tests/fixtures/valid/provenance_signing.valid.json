@@ -1,0 +1,31 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_provenance_signing",
+  "timestamp": "2026-05-15T19:20:31.010Z",
+  "event_type": "provenance_signing",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q2",
+  "enforcement_point_id": "apf-policy-service:local",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-policy-service",
+    "version": "0.1.0",
+    "instance_id": "apf-policy-service:local"
+  },
+  "user_id": "user:example",
+  "agent_id": "agent:demo:research-assistant",
+  "workspace_id": "workspace:example",
+  "session_id": "session:apf-v0-demo",
+  "bundle_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "bundle_id": "bundle:apf-v0-demo",
+  "policy_revision": 1,
+  "signer_id": "signer:dev",
+  "trust_root_id": "trustroot:dev",
+  "outcome": "refused",
+  "reason_code": "provenance.mint_failed",
+  "served_unsigned": true,
+  "error": {
+    "code": "provenance.mint_failed",
+    "message": "provenance signer unavailable; document served unsigned",
+    "retryable": true
+  }
+}

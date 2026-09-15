@@ -1,0 +1,16 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_missing_auth_error",
+  "timestamp": "2026-05-15T19:20:31.010Z",
+  "event_type": "authentication",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q2",
+  "enforcement_point_id": "apf-policy-gateway:openshell-middleware",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-openshell-middleware",
+    "version": "0.1.0",
+    "instance_id": "gw-0"
+  },
+  "reason_code": "auth.unauthenticated",
+  "outcome": "refused"
+}

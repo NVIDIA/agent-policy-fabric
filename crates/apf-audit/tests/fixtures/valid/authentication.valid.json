@@ -1,0 +1,25 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_auth_refused",
+  "timestamp": "2026-05-15T19:20:34.000Z",
+  "event_type": "authentication",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q2",
+  "enforcement_point_id": "apf-policy-gateway:openshell-middleware",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-openshell-middleware",
+    "version": "0.1.0",
+    "instance_id": "gw-0"
+  },
+  "caller_kind": "supervisor",
+  "caller_sandbox_id": "sandbox:supervisor-bound-a",
+  "claimed_sandbox_id": "sandbox:claimed-by-request-b",
+  "reason_code": "auth.sandbox_binding_mismatch",
+  "outcome": "refused",
+  "result_class": "denied",
+  "error": {
+    "code": "auth.sandbox_binding_mismatch",
+    "message": "OpenShell supervisor sandbox does not match the request context",
+    "retryable": false
+  }
+}
