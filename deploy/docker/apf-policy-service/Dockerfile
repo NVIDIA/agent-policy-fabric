@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY . .
 
+# apf-proto/build.rs vendors APF's own IR protos from contracts/proto/; buf is
+# only needed here to export OpenShell's protos from GitHub at build time.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release -p apf-policy-service -p apf-compile && \

@@ -52,7 +52,6 @@ manifest:
   - path: effects/redact-pii-body.yaml
     sha256: REPLACE_WITH_DIGEST
 
-  # Federated grants — PolicyDefinition + team PolicyData slices
   # Tool access grants — one PolicyRule per tool (baseline-rest in slack-grants)
   - path: rules/github-grants.yaml
     sha256: REPLACE_WITH_DIGEST

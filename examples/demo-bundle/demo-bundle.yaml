@@ -52,7 +52,6 @@ manifest:
   - path: effects/redact-pii-body.yaml
     sha256: 7ede0c2c8eb1a0c516da4877d8dc6990105bc940d6b73acf5ca7095c3c7d6e99
 
-  # Federated grants — PolicyDefinition + team PolicyData slices
   # Tool access grants — one PolicyRule per tool (baseline-rest in slack-grants)
   - path: rules/github-grants.yaml
     sha256: c6abdb3a3b4225b505973759eb7765c18268ef8581c08be2e086f050b65bc320
@@ -67,4 +66,4 @@ manifest:
 schema: YamlSigilSignature.v1alpha1
 alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
 keyid: apf-dev
-signature: dwkgXlXVBuCTx95jKs-Wm-OkVLnHvnS7lHGPN7Zl33UrPqY4sOZ0ThmMObPZYMj1mJ20BiAUkbm96e60-RJ2Dw
+signature: WKcrHb_rkSIy_lXV_oiNhZ71Lj1r-XM0sBq0Qa9-Osmd3eAW-2A60rH7JjR2w0Y977nMnXxF0oor5edQXbhkBg

@@ -10,8 +10,8 @@
 //! Manifest-of-files: the envelope is a pure manifest. Policy content lives in
 //! external member files referenced by `path` + `sha256`. After the signature
 //! and per-member hashes verify, [`Bundle::load_members`] reads each member and
-//! routes it by its self-describing `kind`: `SandboxPolicy` documents are
-//! collected by `name`, `HostToolPolicy` documents contribute grants. See
+//! routes it by its self-describing `kind`; for example, `SandboxPolicy`
+//! documents are collected by `name`. See
 //! `docs/bundle-manifest-of-files-and-generic-surfaces-plan.md`.
 //!
 //! Members may themselves be yaml-sigil signed artifacts. Each member is
@@ -86,15 +86,11 @@ pub struct BundleMembers {
     /// lowers each to `SandboxPolicy` proto bytes for the `openshell.sandbox.v1`
     /// surface.
     pub sandbox_policies: BTreeMap<String, Vec<u8>>,
-    /// Flattened grants from every `kind: HostToolPolicy` member.
-    pub grants: Vec<serde_json::Value>,
     /// `ProviderProfile` documents keyed by `id` (`OpenShell` native) or
     /// `metadata.name` (APF envelope). Stored as raw YAML bytes; the compiler
     /// passes them through to the `openshell.provider.v1` surface unchanged.
     pub provider_profiles: BTreeMap<String, Vec<u8>>,
-    /// `kind: HostTool` documents keyed by `metadata.name`. Raw YAML; the
-    /// compiler intersects capabilities with grants to produce a filtered
-    /// `HostToolSet` projection.
+    /// `kind: HostTool` documents keyed by `metadata.name`, stored as raw YAML.
     pub host_tools: BTreeMap<String, Vec<u8>>,
     /// `kind: Provider` documents keyed by `metadata.name`. Raw YAML; the
     /// compiler parses each into the canonical Provider IR and validates it.
@@ -113,14 +109,6 @@ pub struct BundleMembers {
     /// `kind: PolicyFinding` documents as `(metadata.name, raw YAML)` pairs
     /// in manifest order.
     pub policy_findings: Vec<(String, Vec<u8>)>,
-    /// `kind: PolicyDefinition` documents as `(metadata.name, raw YAML)`
-    /// pairs in manifest order — merged rules join the compiled rule set in
-    /// definition order, so ordering is part of the policy semantics.
-    pub policy_definitions: Vec<(String, Vec<u8>)>,
-    /// `kind: PolicyData` documents as `(metadata.name, raw YAML)` pairs in
-    /// manifest order. Slice order determines merged grant order within a
-    /// definition.
-    pub policy_data: Vec<(String, Vec<u8>)>,
 }
 
 impl Bundle {
@@ -163,7 +151,6 @@ impl Bundle {
                     source,
                 })?;
             match doc.get("kind").and_then(serde_yaml::Value::as_str) {
-                Some("HostToolPolicy") => members.grants.extend(grants_from_policy_doc(&doc)),
                 Some("SandboxPolicy") => {
                     let name = doc
                         .get("metadata")
@@ -213,19 +200,6 @@ impl Bundle {
                 Some("PolicyFinding") => {
                     let name = metadata_name(&doc, &entry.path, "PolicyFinding")?;
                     push_unique(&mut members.policy_findings, "PolicyFinding", name, content)?;
-                }
-                Some("PolicyDefinition") => {
-                    let name = metadata_name(&doc, &entry.path, "PolicyDefinition")?;
-                    push_unique(
-                        &mut members.policy_definitions,
-                        "PolicyDefinition",
-                        name,
-                        content,
-                    )?;
-                }
-                Some("PolicyData") => {
-                    let name = metadata_name(&doc, &entry.path, "PolicyData")?;
-                    push_unique(&mut members.policy_data, "PolicyData", name, content)?;
                 }
                 Some("ProviderProfile") => {
                     let name = metadata_name(&doc, &entry.path, "ProviderProfile")?;
@@ -319,18 +293,6 @@ fn member_content(path: &str, raw: &[u8]) -> Result<Vec<u8>, MemberLoadError> {
     })
 }
 
-/// Flatten `policy.grants[]` of one `HostToolPolicy` document into JSON values
-/// for the Rego data document.
-fn grants_from_policy_doc(doc: &serde_yaml::Value) -> Vec<serde_json::Value> {
-    let Some(grants) = doc.get("policy").and_then(|p| p.get("grants")) else {
-        return Vec::new();
-    };
-    match serde_json::to_value(grants) {
-        Ok(serde_json::Value::Array(arr)) => arr,
-        _ => Vec::new(),
-    }
-}
-
 /// Convenience: parse a bundle from verified payload bytes.
 pub fn parse_bundle(payload: &[u8]) -> Result<Bundle, BundleParseError> {
     Bundle::from_payload_bytes(payload)
@@ -412,52 +374,27 @@ mod tests {
         .expect("sign member with yaml-sigil")
     }
 
-    static HOST_TOOL_POLICY_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: HostToolPolicy
-metadata: {}
-policy:
-  id: test-grants
-  grants:
-    - tool: outlook
-      capability: message_search
-      constraints:
-        args.folder:
-          const: inbox
-"#;
-
     static SANDBOX_MEMBER: &str = "kind: SandboxPolicy\nmetadata:\n  name: default\nspec:\n  filesystem:\n    include_workdir: true\n";
 
     #[test]
     fn parses_canonical_field_names() {
         let mut artifact = bundle_yaml(
             "test-bundle",
-            &[
-                (
-                    "host-tool-policies/outlook.yaml",
-                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
-                ),
-                ("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes()),
-            ],
+            &[("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes())],
         );
         artifact.push_str("description: parser test bundle\n");
         let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         assert_eq!(parsed.bundle_id, "test-bundle");
         assert_eq!(parsed.monotonic_counter, 1);
         assert_eq!(parsed.description.as_deref(), Some("parser test bundle"));
-        assert_eq!(parsed.manifest.len(), 2);
-        assert_eq!(parsed.manifest[1].path, "sandbox/default-policy.yaml");
+        assert_eq!(parsed.manifest.len(), 1);
+        assert_eq!(parsed.manifest[0].path, "sandbox/default-policy.yaml");
     }
 
     #[test]
-    fn load_members_routes_by_kind() {
+    fn load_members_routes_sandbox_policy_by_kind() {
         let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("host-tool-policies")).unwrap();
         std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
-        std::fs::write(
-            tmp.path().join("host-tool-policies/outlook.yaml"),
-            HOST_TOOL_POLICY_MEMBER,
-        )
-        .unwrap();
         std::fs::write(
             tmp.path().join("sandbox/default-policy.yaml"),
             SANDBOX_MEMBER,
@@ -466,13 +403,7 @@ policy:
 
         let artifact = bundle_yaml(
             "test-bundle",
-            &[
-                (
-                    "host-tool-policies/outlook.yaml",
-                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
-                ),
-                ("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes()),
-            ],
+            &[("sandbox/default-policy.yaml", SANDBOX_MEMBER.as_bytes())],
         );
         let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
@@ -483,10 +414,6 @@ policy:
             .get("default")
             .expect("sandbox policy present");
         assert_eq!(body, SANDBOX_MEMBER.as_bytes());
-
-        // HostToolPolicy member → grants flattened.
-        assert_eq!(members.grants.len(), 1);
-        assert_eq!(members.grants[0]["tool"], "outlook");
     }
 
     static POLICY_RULE_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
@@ -665,104 +592,6 @@ spec:
         ));
     }
 
-    static POLICY_DEFINITION_MEMBER: &str = r"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyDefinition
-metadata:
-  name: host-tool-grants
-spec:
-  language: cedar
-  data_schema:
-    type: object
-";
-
-    static POLICY_DATA_MEMBER: &str = r"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
-kind: PolicyData
-metadata:
-  name: outlook-team-grants
-spec:
-  definition: host-tool-grants
-  data:
-    grants:
-      - tool: outlook
-        capability: message_search
-";
-
-    #[test]
-    fn load_members_routes_policy_definition_and_data_kinds() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("policy-definitions")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("policy-data")).unwrap();
-        std::fs::write(
-            tmp.path().join("policy-definitions/grants.yaml"),
-            POLICY_DEFINITION_MEMBER,
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("policy-data/outlook.yaml"),
-            POLICY_DATA_MEMBER,
-        )
-        .unwrap();
-
-        let artifact = bundle_yaml(
-            "federated-bundle",
-            &[
-                (
-                    "policy-definitions/grants.yaml",
-                    POLICY_DEFINITION_MEMBER.as_bytes(),
-                ),
-                ("policy-data/outlook.yaml", POLICY_DATA_MEMBER.as_bytes()),
-            ],
-        );
-        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
-        let members = parsed.load_members(tmp.path()).expect("load members");
-
-        assert_eq!(members.policy_definitions.len(), 1);
-        let (name, body) = &members.policy_definitions[0];
-        assert_eq!(name, "host-tool-grants");
-        assert_eq!(body, POLICY_DEFINITION_MEMBER.as_bytes());
-
-        assert_eq!(members.policy_data.len(), 1);
-        let (name, body) = &members.policy_data[0];
-        assert_eq!(name, "outlook-team-grants");
-        assert_eq!(body, POLICY_DATA_MEMBER.as_bytes());
-    }
-
-    #[test]
-    fn load_members_rejects_duplicate_policy_data_name() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("policy-definitions")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("policy-data")).unwrap();
-        // Both manifest members carry metadata.name: outlook-team-grants.
-        std::fs::write(
-            tmp.path().join("policy-definitions/grants.yaml"),
-            POLICY_DATA_MEMBER,
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("policy-data/outlook.yaml"),
-            POLICY_DATA_MEMBER,
-        )
-        .unwrap();
-
-        let artifact = bundle_yaml(
-            "federated-bundle",
-            &[
-                (
-                    "policy-definitions/grants.yaml",
-                    POLICY_DATA_MEMBER.as_bytes(),
-                ),
-                ("policy-data/outlook.yaml", POLICY_DATA_MEMBER.as_bytes()),
-            ],
-        );
-        let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
-        let result = parsed.load_members(tmp.path());
-        assert!(matches!(
-            result,
-            Err(MemberLoadError::DuplicateName { kind, name })
-                if kind == "PolicyData" && name == "outlook-team-grants"
-        ));
-    }
-
     static GITLAB_PROVIDER_MEMBER: &str = r#"apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: Provider
 metadata: { name: gitlab }
@@ -848,13 +677,7 @@ spec:
         // A member that is itself a real yaml-sigil signed artifact
         // contributes its payload, not the signature carrier.
         let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join("host-tool-policies")).unwrap();
         std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
-        std::fs::write(
-            tmp.path().join("host-tool-policies/outlook.yaml"),
-            HOST_TOOL_POLICY_MEMBER,
-        )
-        .unwrap();
 
         let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         let signed_member = sign_yaml_sigil(SANDBOX_MEMBER, &key, "test-key");
@@ -873,13 +696,7 @@ spec:
         // signature carrier included.
         let artifact = bundle_yaml(
             "test-bundle",
-            &[
-                (
-                    "host-tool-policies/outlook.yaml",
-                    HOST_TOOL_POLICY_MEMBER.as_bytes(),
-                ),
-                ("sandbox/default-policy.yaml", &signed_member),
-            ],
+            &[("sandbox/default-policy.yaml", &signed_member)],
         );
         let parsed = parse_bundle(artifact.as_bytes()).expect("parse");
         let members = parsed.load_members(tmp.path()).expect("load members");
