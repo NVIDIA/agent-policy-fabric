@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs::{OpenOptions, create_dir_all};
-use std::io::Write;
+use std::fs::{File, OpenOptions, create_dir_all};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -54,8 +54,8 @@ impl JsonlSink {
     /// Open the sink once so a misconfigured path fails at startup rather than
     /// taking a fail-closed producer down at its first event.
     ///
-    /// Uses the same options as `write_event`, so a path that passes here can
-    /// actually be appended to. Writes nothing.
+    /// Opens for append exactly as `write_event` does. `write_event` also asks for
+    /// read access, but degrades without it, so this stays the real gate. Writes nothing.
     ///
     /// # Errors
     ///
@@ -72,6 +72,24 @@ impl JsonlSink {
         options.open(&self.path)?;
         Ok(())
     }
+}
+
+/// Whether the file has content that does not end in a newline.
+///
+/// Never fails the write: rotation can truncate the file between the size and
+/// the read, and this guard must not be the reason a record is lost.
+fn ends_mid_line(file: &mut File) -> bool {
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return false;
+    };
+    if len == 0 {
+        return false;
+    }
+    if file.seek(SeekFrom::Start(len - 1)).is_err() {
+        return false;
+    }
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last).is_ok() && last[0] != b'\n'
 }
 
 impl AuditSink for JsonlSink {
@@ -93,7 +111,23 @@ impl AuditSink for JsonlSink {
         #[cfg(unix)]
         options.mode(0o600);
 
-        let mut file = options.open(&self.path)?;
+        // Read access is only for the guard below, so a write-only log file —
+        // a normal hardening choice — must still work.
+        let mut file = match options.read(true).open(&self.path) {
+            Ok(mut file) => {
+                // A partial write leaves an unterminated line; appending after
+                // it splices this record onto the broken one, losing both.
+                // Same sink instance only: the lock is per-`JsonlSink`, so it
+                // sees neither another instance on this path nor another
+                // process. Cross-process this can splice a newline into an
+                // in-flight write rather than repair one.
+                if ends_mid_line(&mut file) {
+                    file.write_all(b"\n")?;
+                }
+                file
+            }
+            Err(_) => options.read(false).open(&self.path)?,
+        };
         file.write_all(&line)?;
         file.flush()?;
         Ok(())

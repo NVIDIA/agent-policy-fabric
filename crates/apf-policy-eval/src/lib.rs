@@ -194,6 +194,20 @@ pub enum EvalError {
     Poisoned,
 }
 
+/// An evaluator together with the identity of the policy it was built from.
+///
+/// Lives here rather than in a consumer because every enforcement point that
+/// holds an evaluator needs to name the policy behind its decisions, and the
+/// two must travel as one value: read separately, a hot-swap between the two
+/// reads lets a record name a policy other than the one that decided.
+pub struct ActivePolicy {
+    pub evaluator: std::sync::Arc<dyn Evaluator>,
+    /// Digest of the document this evaluator was built from.
+    pub bundle_digest: String,
+    /// Ordering signal; identity is the digest.
+    pub policy_revision: u64,
+}
+
 /// Evaluation backend. Implement this to substitute Rego with CEL, Cedar, or
 /// any other policy engine without changing `RequestGuard` or other consumers.
 pub trait Evaluator: Send + Sync {

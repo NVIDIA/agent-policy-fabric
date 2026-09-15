@@ -10,7 +10,8 @@ use apf_audit::{
     AuditEmitter, AuditErrorInfo, AuditEvent, AuthenticationEvent, CommonFields, Component,
     JsonlSink, Outcome, PolicyActivationEvent, PolicyDistributionEvent, PolicyRefreshEvent,
     PolicyServiceStartupEvent, PolicyVerificationEvent, ProvenanceSigningEvent, Resource,
-    SanitizationGuard, StartupContext, TypedAuditEvent, generate_correlation_id,
+    SanitizationGuard, StartupContext, TypedAuditEvent, coerce_id as safe_id,
+    coerce_lower_dotted as safe_lower_dotted, coerce_name as safe_name, generate_correlation_id,
     join_rejection_detail, normalize_rejection_reasons,
 };
 
@@ -31,68 +32,6 @@ const RUNTIME_SUBSTRATE: &str = "none";
 
 /// The PAP signs bundles rather than verifying them against a trust root.
 const TRUST_ROOT_ID: &str = "apf-policy-service:signing";
-
-/// Coerce a request-derived value into one of the schema's string profiles.
-///
-/// URL path segments reach `resource.type` and `resource.id`, and a value the
-/// schema rejects fails the whole record — so an attacker could suppress the
-/// very denial that documents their request by asking for a malformed name.
-/// `resource.type` is the narrower `name` profile, `resource.id` the wider
-/// `id` profile; using one for the other is the mistake this guards.
-///
-/// Lossy by design: characters are stripped rather than the value rejected, so
-/// distinct inputs can collapse onto one — including onto a legitimately served
-/// name. `error.message` keeps the raw value and is authoritative when the two
-/// disagree.
-fn coerce(value: &str, extra: &[char], max: usize) -> String {
-    let cleaned: String = value
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || extra.contains(c))
-        .collect();
-    match cleaned.find(|c: char| c.is_ascii_alphanumeric()) {
-        Some(start) => cleaned[start..].chars().take(max).collect(),
-        None => "unspecified".to_owned(),
-    }
-}
-
-/// `$defs/name`: alphanumerics plus `._:-`, 128 characters.
-fn safe_name(value: &str) -> String {
-    coerce(value, &['.', '_', ':', '-'], 128)
-}
-
-/// `$defs/id`: alphanumerics plus `._:@/+-=`, 512 characters.
-fn safe_id(value: &str) -> String {
-    coerce(value, &['.', '_', ':', '@', '/', '+', '-', '='], 512)
-}
-
-/// `$defs/reason_code` and `$defs/verb`, which share one pattern: dot-separated
-/// lowercase segments.
-///
-/// Coerced for the same reason the resource fields are: the fallback record
-/// reuses these values, so an invalid one would fail both attempts and erase
-/// the refusal. Every caller passes a literal today; this keeps that from being
-/// load-bearing, since both are parameters a new caller could reach.
-fn safe_lower_dotted(value: &str) -> String {
-    let joined = value
-        .split('.')
-        .map(|segment| {
-            segment
-                .chars()
-                .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|segment| segment.starts_with(|c: char| c.is_ascii_lowercase()))
-        .collect::<Vec<_>>()
-        .join(".");
-    // Truncation can strand a trailing separator, which the pattern rejects.
-    let capped = joined.chars().take(160).collect::<String>();
-    let trimmed = capped.trim_end_matches('.');
-    if trimmed.is_empty() {
-        "unspecified".to_owned()
-    } else {
-        trimmed.to_owned()
-    }
-}
 
 /// Stands in for `bundle_digest` when no bundle governed the refusal — an
 /// unserved-kind probe before the first load, or a variant that never fetched.

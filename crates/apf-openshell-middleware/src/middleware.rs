@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use apf_policy_eval::{
-    EvalInput, EvalResult, Evaluator, Finding as EvalFinding, HeaderAction,
+    ActivePolicy, EvalInput, EvalResult, Finding as EvalFinding, HeaderAction,
     HeaderMutation as EvalHeaderMutation, RequestTarget, Severity, Verdict, apply_effects,
 };
 use prost::Message;
@@ -61,7 +61,7 @@ const CODE_REPLACEMENT_BODY_TOO_LARGE: &str = "replacement_body_too_large";
 /// `network_middlewares` registration belong to the policy gateway.
 #[derive(Clone)]
 pub struct SupervisorMiddlewareService {
-    evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+    evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
     authentication: AuthenticationMode,
 }
 
@@ -73,7 +73,7 @@ impl SupervisorMiddlewareService {
     /// Builds a size-limited server that authenticates every OpenShell call before dispatch.
     #[must_use]
     pub fn authenticated_server(
-        evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+        evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
         verifier: ExtensionAuthVerifier,
     ) -> AuthenticatedSupervisorMiddlewareServer {
         let service = Self {
@@ -91,7 +91,7 @@ impl SupervisorMiddlewareService {
     /// `allow_insecure_transport` setting explicitly opts out of extension authentication.
     #[must_use]
     pub fn insecure_server(
-        evaluator: tokio::sync::watch::Receiver<Arc<dyn Evaluator>>,
+        evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
     ) -> SupervisorMiddlewareServer<Self> {
         Self {
             evaluator,
@@ -272,8 +272,11 @@ impl SupervisorMiddlewareService {
             Err(error) => return deny(error.reason_code(), error.reason()),
         };
 
-        let evaluator = Arc::clone(&*self.evaluator.borrow());
-        let Ok(result) = evaluator.evaluate(input) else {
+        // One read: the evaluator and the digest of the policy it came from
+        // travel together, so a hot-swap cannot pair a decision with another
+        // policy's identity.
+        let active = Arc::clone(&*self.evaluator.borrow());
+        let Ok(result) = active.evaluator.evaluate(input) else {
             // Evaluator errors are intentionally not reflected: backend error
             // text is not a stable or audit-safe wire contract.
             return deny(CODE_EVALUATION_FAILED, "policy evaluation failed");
@@ -701,7 +704,7 @@ fn verdict_finding(verdict: Verdict) -> Option<wire::Finding> {
 mod tests {
     use std::sync::Mutex;
 
-    use apf_policy_eval::{EvalError, Finding, HeaderMutation, JsonPatch, PatchOp};
+    use apf_policy_eval::{EvalError, Evaluator, Finding, HeaderMutation, JsonPatch, PatchOp};
     use apf_proto::prost_types::{Struct, Value as ProtoValue, value};
 
     use super::*;
@@ -762,15 +765,15 @@ mod tests {
     }
 
     fn make_service(evaluator: impl Evaluator + 'static) -> SupervisorMiddlewareService {
-        let (_, rx) = tokio::sync::watch::channel(Arc::new(evaluator) as Arc<dyn Evaluator>);
-        SupervisorMiddlewareService {
-            evaluator: rx,
-            authentication: AuthenticationMode::Insecure,
-        }
+        make_service_arc(Arc::new(evaluator) as Arc<dyn Evaluator>)
     }
 
     fn make_service_arc(evaluator: Arc<dyn Evaluator>) -> SupervisorMiddlewareService {
-        let (_, rx) = tokio::sync::watch::channel(evaluator);
+        let (_, rx) = tokio::sync::watch::channel(Arc::new(ActivePolicy {
+            evaluator,
+            bundle_digest: "a".repeat(64),
+            policy_revision: 1,
+        }));
         SupervisorMiddlewareService {
             evaluator: rx,
             authentication: AuthenticationMode::Insecure,
@@ -780,7 +783,11 @@ mod tests {
     fn make_authenticated_service_arc(
         evaluator: Arc<dyn Evaluator>,
     ) -> SupervisorMiddlewareService {
-        let (_, rx) = tokio::sync::watch::channel(evaluator);
+        let (_, rx) = tokio::sync::watch::channel(Arc::new(ActivePolicy {
+            evaluator,
+            bundle_digest: "a".repeat(64),
+            policy_revision: 1,
+        }));
         SupervisorMiddlewareService {
             evaluator: rx,
             authentication: AuthenticationMode::Required {

@@ -11,6 +11,7 @@ name = "apf-policy-gateway"
 path = "src/main.rs"
 
 [dependencies]
+apf-audit                   = { path = "../apf-audit" }
 apf-bundle                  = { path = "../apf-bundle" }
 apf-compiler                = { path = "../apf-compiler" }
 apf-policy-eval             = { path = "../apf-policy-eval" }

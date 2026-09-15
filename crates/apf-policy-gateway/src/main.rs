@@ -34,6 +34,8 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use apf_policy_client::PolicyClientHandle;
+use apf_policy_eval::ActivePolicy;
+use apf_policy_gateway::audit::{PolicyGatewayAudit, Seam};
 use apf_policy_gateway::digest_watcher::{DigestWatcherConfig, spawn_digest_watcher};
 use apf_policy_gateway::engine::{build_evaluator, new_evaluator_channel};
 use apf_policy_gateway::surfaces::evaluation::EvaluationServiceImpl;
@@ -290,6 +292,13 @@ struct Cli {
     /// Seconds between PolicySet digest polls. Set to 0 to disable refresh.
     #[arg(long, default_value_t = 10)]
     bundle_refresh_interval_secs: u64,
+
+    /// Directory for this component's JSONL audit log. Required: a gateway
+    /// that enforces policy without recording what it decided has no evidence
+    /// trail, so there is no safe default to fall back to. One file per
+    /// component, so a later process split is not a log-path migration.
+    #[arg(long, env = "APF_AUDIT_LOG_DIR")]
+    audit_log_dir: PathBuf,
 
     // ── OpenShell adapter flags ────────────────────────────────────────────────
     /// URL of the OpenShell gateway gRPC server to connect to
@@ -653,7 +662,21 @@ async fn main() -> anyhow::Result<()> {
         build_evaluator_from_policy_set(&policy_set).context("build initial Cedar evaluator")?;
     info!(digest = %doc.digest, "initial PolicySet loaded");
 
-    let (eval_tx, eval_rx) = new_evaluator_channel(initial);
+    let audit = PolicyGatewayAudit::to_jsonl_in(&args.audit_log_dir, Seam::Pdp)
+        .map_err(|e| anyhow::anyhow!("open audit log in {:?}: {e}", args.audit_log_dir))?;
+
+    // Fail-closed, and before the channel exists: a gateway that cannot record
+    // which policy it enforces would make every later decision unattributable,
+    // and refusing to start is the only outcome that leaves no false trail.
+    audit
+        .emit_policy_activated("policy.bundle_activated", &doc.digest, doc.version)
+        .map_err(|e| anyhow::anyhow!("record initial policy activation: {e}"))?;
+
+    let (eval_tx, eval_rx) = new_evaluator_channel(ActivePolicy {
+        evaluator: initial,
+        bundle_digest: doc.digest.clone(),
+        policy_revision: doc.version,
+    });
 
     // broadcast::Sender — all subscribers share one digest change signal.
     let (event_tx, event_rx_pdp) = bundle_event_channel();
@@ -674,6 +697,7 @@ async fn main() -> anyhow::Result<()> {
         let mut hot_swap_client = policy_client.clone();
         let hot_swap_tx = eval_tx.clone();
         let mut hot_swap_rx = event_rx_pdp;
+        let swap_audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(BundleEvent::BundleChanged { digest, .. }) = hot_swap_rx.recv().await {
                 info!(%digest, "PolicySet changed — rebuilding Cedar evaluator");
@@ -684,7 +708,33 @@ async fn main() -> anyhow::Result<()> {
                     Ok(doc) => match PolicySet::decode(doc.body.as_slice()) {
                         Ok(ps) => match build_evaluator_from_policy_set(&ps) {
                             Ok(new_eval) => {
-                                let _ = hot_swap_tx.send(new_eval);
+                                // The digest of the document this evaluator was
+                                // built from, not the one that triggered the
+                                // refresh: another change may have landed
+                                // between the signal and this fetch.
+                                let _ = hot_swap_tx.send(Arc::new(ActivePolicy {
+                                    evaluator: new_eval,
+                                    bundle_digest: doc.digest.clone(),
+                                    policy_revision: doc.version,
+                                }));
+                                // Halts rather than reverting: the new policy
+                                // may be an emergency revocation, so falling
+                                // back would re-enable what was just withdrawn.
+                                // Requests already decided under it name a
+                                // policy no record covers, so there is nothing
+                                // left to undo — only somewhere to stop.
+                                if let Err(e) = swap_audit.emit_policy_activated(
+                                    "policy.bundle_hot_swapped",
+                                    &doc.digest,
+                                    doc.version,
+                                ) {
+                                    tracing::error!(
+                                        error = %e,
+                                        digest = %doc.digest,
+                                        "policy hot-swap could not be recorded; halting rather than enforcing unrecorded policy"
+                                    );
+                                    std::process::exit(1);
+                                }
                                 info!("Cedar evaluator hot-swapped");
                             }
                             Err(e) => warn!(error = %e, "evaluator rebuild failed"),
@@ -721,6 +771,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let eval_svc = EvaluationServiceServer::new(EvaluationServiceImpl {
+        audit: audit.clone(),
         evaluator: eval_rx.clone(),
     });
 

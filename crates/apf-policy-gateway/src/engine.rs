@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use apf_policy_eval::{
-    CedarEvaluator, EvalError, Evaluator, PolicyAnnotatorDoc, PolicyEffectDoc, PolicyFindingDoc,
-    PolicyRuleDoc,
+    ActivePolicy, CedarEvaluator, EvalError, Evaluator, PolicyAnnotatorDoc, PolicyEffectDoc,
+    PolicyFindingDoc, PolicyRuleDoc,
 };
 
 pub fn build_evaluator(
@@ -21,20 +21,17 @@ pub fn build_evaluator(
     )?))
 }
 
-/// Shared read handle for the current evaluator.
+/// Shared read handle for the current policy.
 ///
-/// Receivers clone the inner `Arc<dyn Evaluator>` on each call; the sender
+/// Receivers clone the inner `Arc<ActivePolicy>` on each call; the sender
 /// atomically swaps the value when a bundle refresh completes.
 ///
-/// Note: `arc-swap 1.x` requires `T: Sized` so `ArcSwap<Arc<dyn Evaluator>>` is
-/// unavailable. `tokio::sync::watch` provides equivalent semantics (cheap
-/// broadcast, no per-read lock on the hot path).
-pub type EvaluatorReceiver = tokio::sync::watch::Receiver<Arc<dyn Evaluator>>;
-pub type EvaluatorSender = tokio::sync::watch::Sender<Arc<dyn Evaluator>>;
+/// `watch` rather than `ArcSwap`: receivers can also await a change, which the
+/// refresh path needs.
+pub type EvaluatorReceiver = tokio::sync::watch::Receiver<Arc<ActivePolicy>>;
+pub type EvaluatorSender = tokio::sync::watch::Sender<Arc<ActivePolicy>>;
 
-/// Create a sender/receiver pair initialised with `evaluator`.
-pub fn new_evaluator_channel(
-    evaluator: Arc<dyn Evaluator>,
-) -> (EvaluatorSender, EvaluatorReceiver) {
-    tokio::sync::watch::channel(evaluator)
+/// Create a sender/receiver pair initialised with `policy`.
+pub fn new_evaluator_channel(policy: ActivePolicy) -> (EvaluatorSender, EvaluatorReceiver) {
+    tokio::sync::watch::channel(Arc::new(policy))
 }
