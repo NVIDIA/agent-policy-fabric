@@ -6,8 +6,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::reconciler;
 use apf_openshell_auth::{
-    Authenticated, AuthenticationMode, AuthorizationFailure, ExtensionAuthVerifier,
-    ExtensionCallerKind,
+    Authenticated, AuthenticatedCaller, AuthenticationMode, AuthorizationFailure,
+    ExtensionAuthVerifier, ExtensionCallerKind,
 };
 use apf_policy_client::PolicyClientHandle;
 use ed25519_dalek::VerifyingKey;
@@ -76,6 +76,11 @@ impl GatewayInterceptorService {
         config: InterceptorConfig,
         verifier: ExtensionAuthVerifier,
     ) -> AuthenticatedGatewayInterceptorServer {
+        // Attached here rather than by the caller: the verifier refuses
+        // credentials before any RPC runs, so a listener whose verifier has no
+        // sink records nothing and fails silently. Both halves are in scope,
+        // so there is no reason to let them be wired separately.
+        let verifier = verifier.with_audit(config.audit.component());
         let service = Self {
             policy_service,
             config,
@@ -112,9 +117,26 @@ impl GatewayInterceptorService {
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), AuthorizationFailure> {
         // Every GatewayInterceptor RPC is called exclusively by the OpenShell
         // gateway at admission time — there is no supervisor caller on this surface.
-        self.authentication
+        let outcome = self
+            .authentication
             .authorize(request, &[ExtensionCallerKind::Gateway])
-            .map(|_| ())
+            .map(|_| ());
+        if let Err(failure) = outcome {
+            // The caller kind only exists on the not-allowed branch; on the
+            // unauthenticated one nothing was established to name.
+            let caller_kind = request
+                .extensions()
+                .get::<AuthenticatedCaller>()
+                .map(AuthenticatedCaller::kind);
+            if let Err(e) = apf_openshell_auth::audit::emit_authorization_failure(
+                &self.config.audit.component(),
+                failure,
+                caller_kind,
+            ) {
+                warn!(error = %e, "audit emission failed for extension authorization");
+            }
+        }
+        outcome
     }
 
     fn expected_audience(&self) -> &str {

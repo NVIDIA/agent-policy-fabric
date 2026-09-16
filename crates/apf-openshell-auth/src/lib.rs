@@ -8,6 +8,10 @@
 //! extension credentials. This verifier therefore requires the extension JWT
 //! type, exact audience, and exact caller shape in addition to a valid signature.
 
+pub mod audit;
+
+use apf_audit::ComponentAudit;
+
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
@@ -138,7 +142,7 @@ pub enum AuthenticationMode {
 }
 
 /// Why an authorization check on an already-authenticated request failed.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationFailure {
     /// No [`AuthenticatedCaller`] extension was found on the request, even
     /// though the server is in [`AuthenticationMode::Required`]. This fails
@@ -265,6 +269,10 @@ enum AuthFailure {
 #[derive(Clone)]
 pub struct ExtensionAuthVerifier {
     state: Arc<VerifierState>,
+    /// The surface's emitter. Supplied rather than built here: a refused
+    /// credential is recorded under the listener that refused it, and this
+    /// type has no listener of its own.
+    audit: ComponentAudit,
 }
 
 impl fmt::Debug for ExtensionAuthVerifier {
@@ -276,6 +284,16 @@ impl fmt::Debug for ExtensionAuthVerifier {
 }
 
 impl ExtensionAuthVerifier {
+    /// Attach the emitting surface's audit sink.
+    ///
+    /// Without it a rejected credential is refused but unrecorded, so this is
+    /// the difference between seeing credential probing and not.
+    #[must_use]
+    pub fn with_audit(mut self, audit: ComponentAudit) -> Self {
+        self.audit = audit;
+        self
+    }
+
     /// Loads and validates one bounded TOML trust profile.
     ///
     /// # Errors
@@ -348,6 +366,8 @@ impl ExtensionAuthVerifier {
                 max_lifetime_secs: profile.max_lifetime_secs as i64,
                 leeway_secs: profile.leeway_secs as i64,
             }),
+            // Disabled until a surface attaches its own; see `with_audit`.
+            audit: ComponentAudit::disabled(),
         })
     }
 
@@ -501,6 +521,11 @@ fn valid_gateway_issuer(issuer: &str) -> bool {
 impl Interceptor for ExtensionAuthVerifier {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         let caller = self.authenticate(request.metadata()).map_err(|_| {
+            // Recorded here because the request never reaches a service
+            // method: without this, credential probing leaves no trace.
+            if let Err(e) = audit::emit_credential_invalid(&self.audit) {
+                tracing::warn!(error = %e, "audit emission failed for rejected credential");
+            }
             // All credential failures share one response and no token-derived
             // data reaches logs or status text.
             Status::unauthenticated("invalid OpenShell extension bearer credential")
@@ -529,7 +554,7 @@ fn singular_bearer_token(metadata: &MetadataMap) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use jsonwebtoken::{EncodingKey, Header, encode};
     use serde_json::{Value, json};
     use tonic::Code;
@@ -555,19 +580,19 @@ leeway_secs = {leeway_secs}
         .into_bytes()
     }
 
-    fn verifier(max_lifetime_secs: u64, leeway_secs: u64) -> ExtensionAuthVerifier {
+    pub(crate) fn verifier(max_lifetime_secs: u64, leeway_secs: u64) -> ExtensionAuthVerifier {
         ExtensionAuthVerifier::from_toml(&profile(max_lifetime_secs, leeway_secs))
             .expect("test trust profile must be valid")
     }
 
-    fn now_secs() -> i64 {
+    pub(crate) fn now_secs() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("test clock must follow the Unix epoch")
             .as_secs() as i64
     }
 
-    fn gateway_claims(now: i64) -> Value {
+    pub(crate) fn gateway_claims(now: i64) -> Value {
         json!({
             "iss": ISSUER,
             "aud": AUDIENCE,
@@ -605,11 +630,11 @@ leeway_secs = {leeway_secs}
         encode(header, claims, &key).expect("test token must encode")
     }
 
-    fn sign(claims: &Value) -> String {
+    pub(crate) fn sign(claims: &Value) -> String {
         sign_with_header(claims, &extension_header())
     }
 
-    fn request_with_authorization(value: &str) -> Request<()> {
+    pub(crate) fn request_with_authorization(value: &str) -> Request<()> {
         let mut request = Request::new(());
         request.metadata_mut().insert(
             AUTHORIZATION_METADATA,
@@ -1043,5 +1068,172 @@ leeway_secs = {leeway_secs}
             .expect("allowed caller kind must authorize")
             .expect("Required mode returns the authenticated caller");
         assert_eq!(caller.kind(), ExtensionCallerKind::Gateway);
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::tests::{gateway_claims, now_secs, request_with_authorization, sign, verifier};
+    use super::*;
+    use apf_audit::{AuditEvent, AuditIdentity, ComponentAudit};
+    use std::path::Path;
+
+    const IDENTITY: AuditIdentity = AuditIdentity {
+        component_name: "apf-policy-gateway-middleware",
+        enforcement_point_id: "apf-policy-gateway:middleware",
+        runtime_substrate: "openshell",
+        trust_root_id: "apf-policy-service:signing",
+        version: "0.0.0-test",
+    };
+
+    fn records(dir: &Path) -> Vec<AuditEvent> {
+        std::fs::read_to_string(dir.join("apf-policy-gateway-middleware-audit.jsonl"))
+            .expect("audit log was written")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each line is one event"))
+            .collect()
+    }
+
+    /// Credential probing against either listener left no trace at all: the
+    /// request is refused before any RPC runs, so nothing downstream sees it.
+    #[test]
+    fn a_rejected_credential_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = ComponentAudit::to_jsonl_in(dir.path(), IDENTITY).expect("emitter");
+        let mut verifier = verifier(300, 0).with_audit(audit);
+
+        let request = request_with_authorization("Bearer not-a-jwt");
+        assert!(
+            verifier.call(request).is_err(),
+            "a malformed credential must be refused"
+        );
+
+        let r = &records(dir.path())[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authentication);
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("extension_auth.credential_invalid")
+        );
+        assert_eq!(
+            r.caller_kind, None,
+            "nothing authenticated, so no kind is named"
+        );
+        assert_eq!(
+            r.bundle_digest.as_deref(),
+            None,
+            "no policy was consulted, so the record names none"
+        );
+    }
+
+    /// The token is attacker-supplied and unverified. Nothing derived from it
+    /// may reach the record — the raw credential least of all.
+    #[test]
+    fn no_part_of_a_rejected_credential_reaches_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = ComponentAudit::to_jsonl_in(dir.path(), IDENTITY).expect("emitter");
+        let mut verifier = verifier(300, 0).with_audit(audit);
+
+        // Signed correctly but long expired: it reaches the claim checks, so
+        // the verifier has decoded content it could leak.
+        let token = sign(&gateway_claims(now_secs() - 86_400));
+        let request = request_with_authorization(&format!("Bearer {token}"));
+        assert!(verifier.call(request).is_err(), "expired must be refused");
+
+        let line =
+            std::fs::read_to_string(dir.path().join("apf-policy-gateway-middleware-audit.jsonl"))
+                .expect("audit log");
+        assert!(
+            !line.contains(&token),
+            "the credential must never be recorded: {line}"
+        );
+        for fragment in token.split('.') {
+            assert!(
+                !line.contains(fragment),
+                "no token segment may be recorded: {fragment}"
+            );
+        }
+        // Decoded claims, not just the encoded segments: logging `iss`, `sub`
+        // or `jti` after verification would pass the checks above.
+        for claim in ["openshell-gateway:test-gateway", "gateway-token"] {
+            assert!(
+                !line.contains(claim),
+                "no decoded claim may be recorded: {claim}"
+            );
+        }
+    }
+
+    /// A caller kind the RPC does not permit is a different event from one that
+    /// never authenticated — conflating them hides which check refused.
+    #[test]
+    fn authorization_failures_record_distinctly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = ComponentAudit::to_jsonl_in(dir.path(), IDENTITY).expect("emitter");
+
+        audit::emit_authorization_failure(&audit, AuthorizationFailure::MissingCaller, None)
+            .expect("recorded");
+        audit::emit_authorization_failure(
+            &audit,
+            AuthorizationFailure::CallerNotAllowed,
+            Some(ExtensionCallerKind::Supervisor),
+        )
+        .expect("recorded");
+
+        let records = records(dir.path());
+        assert_eq!(
+            records[0].reason_code.as_deref(),
+            Some("extension_auth.caller_unauthenticated")
+        );
+        assert_eq!(records[0].caller_kind, None);
+        assert_eq!(
+            records[1].reason_code.as_deref(),
+            Some("extension_auth.caller_not_allowed")
+        );
+        assert_eq!(
+            records[1].caller_kind.as_deref(),
+            Some("supervisor"),
+            "the refused caller is named so a consumer can filter on it"
+        );
+    }
+
+    /// Both kinds are live: a gateway can be refused on the supervisor-only
+    /// egress RPC. A wrong mapping attributes a probe to the other component.
+    #[test]
+    fn every_caller_kind_records_under_its_own_name() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = ComponentAudit::to_jsonl_in(dir.path(), IDENTITY).expect("emitter");
+
+        for kind in [
+            ExtensionCallerKind::Gateway,
+            ExtensionCallerKind::Supervisor,
+        ] {
+            audit::emit_authorization_failure(
+                &audit,
+                AuthorizationFailure::CallerNotAllowed,
+                Some(kind),
+            )
+            .expect("recorded");
+        }
+
+        let records = records(dir.path());
+        assert_eq!(records[0].caller_kind.as_deref(), Some("gateway"));
+        assert_eq!(records[1].caller_kind.as_deref(), Some("supervisor"));
+    }
+
+    /// `CallerNotAllowed` without a caller would name a kind nothing proved.
+    /// It degrades to the unauthenticated event rather than inventing one.
+    #[test]
+    fn a_refusal_with_no_caller_names_no_kind() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = ComponentAudit::to_jsonl_in(dir.path(), IDENTITY).expect("emitter");
+
+        audit::emit_authorization_failure(&audit, AuthorizationFailure::CallerNotAllowed, None)
+            .expect("recorded");
+
+        let r = &records(dir.path())[0];
+        assert_eq!(r.caller_kind, None);
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("extension_auth.caller_unauthenticated")
+        );
     }
 }

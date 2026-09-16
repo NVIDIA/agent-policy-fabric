@@ -47,6 +47,14 @@ impl MiddlewareAudit {
         Self::default()
     }
 
+    /// This seam's emitter, for the extension verifier to record refusals it
+    /// makes on this listener's behalf. Shared so both write one file under
+    /// one identity.
+    #[must_use]
+    pub fn component(&self) -> apf_audit::ComponentAudit {
+        self.inner.clone()
+    }
+
     /// Open `<dir>/apf-policy-gateway-middleware-audit.jsonl` now, so an
     /// unusable directory fails at startup rather than at the first request.
     ///

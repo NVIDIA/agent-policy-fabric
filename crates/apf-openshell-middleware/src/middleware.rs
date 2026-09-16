@@ -95,6 +95,9 @@ impl SupervisorMiddlewareService {
         verifier: ExtensionAuthVerifier,
         audit: MiddlewareAudit,
     ) -> AuthenticatedSupervisorMiddlewareServer {
+        // See the interceptor's constructor: wiring the verifier's sink here
+        // makes an authenticated listener that records nothing unrepresentable.
+        let verifier = verifier.with_audit(audit.component());
         let service = Self {
             evaluator,
             authentication: AuthenticationMode::Required {
@@ -122,6 +125,23 @@ impl SupervisorMiddlewareService {
         .into_size_limited_server()
     }
 
+    /// Record a caller this listener refused after the credential stage.
+    fn record_authorization_failure<T>(&self, request: &Request<T>, failure: AuthorizationFailure) {
+        // Only the not-allowed branch has a caller to name; the other means
+        // none was ever established.
+        let caller_kind = request
+            .extensions()
+            .get::<AuthenticatedCaller>()
+            .map(AuthenticatedCaller::kind);
+        if let Err(e) = apf_openshell_auth::audit::emit_authorization_failure(
+            &self.audit.component(),
+            failure,
+            caller_kind,
+        ) {
+            warn!(error = %e, "audit emission failed for extension authorization");
+        }
+    }
+
     /// Record a supervisor credential used on a request claiming another
     /// sandbox — one sandbox acting as another.
     ///
@@ -137,8 +157,8 @@ impl SupervisorMiddlewareService {
     ///
     /// Covers every path out of `evaluate`, including the panic fallback, so a
     /// refusal added there cannot skip the record. Refusals raised earlier do
-    /// not reach here: binding mismatch has its own event, authentication
-    /// failure currently has none.
+    /// not reach here: binding mismatch and authentication failure each have
+    /// their own event.
     fn record_egress(
         &self,
         response: &wire::HttpRequestResult,
@@ -260,7 +280,10 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                     ExtensionCallerKind::Supervisor,
                 ],
             )
-            .map_err(AuthorizationFailure::into_status)?;
+            .map_err(|failure| {
+                self.record_authorization_failure(&request, failure);
+                failure.into_status()
+            })?;
         Ok(Response::new(wire::MiddlewareManifest {
             name: SERVICE_NAME.to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -282,7 +305,10 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
     ) -> Result<Response<wire::ValidateConfigResponse>, Status> {
         self.authentication
             .authorize(&request, &[ExtensionCallerKind::Gateway])
-            .map_err(AuthorizationFailure::into_status)?;
+            .map_err(|failure| {
+                self.record_authorization_failure(&request, failure);
+                failure.into_status()
+            })?;
         let field_count = request
             .into_inner()
             .config
@@ -308,7 +334,10 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         let authenticated_sandbox = self
             .authentication
             .authorize(&request, &[ExtensionCallerKind::Supervisor])
-            .map_err(AuthorizationFailure::into_status)?
+            .map_err(|failure| {
+                self.record_authorization_failure(&request, failure);
+                failure.into_status()
+            })?
             .and_then(AuthenticatedCaller::sandbox_id)
             .map(str::to_owned);
         let evaluation = request.into_inner();
@@ -1176,7 +1205,25 @@ mod tests {
         }
     }
 
-    fn authenticated_request<T>(
+    pub(super) fn make_authenticated_audited_service(
+        evaluator: impl Evaluator + 'static,
+        dir: &std::path::Path,
+    ) -> SupervisorMiddlewareService {
+        let (_, rx) = tokio::sync::watch::channel(Arc::new(ActivePolicy {
+            evaluator: Arc::new(evaluator) as Arc<dyn Evaluator>,
+            bundle_digest: "a".repeat(64),
+            policy_revision: 1,
+        }));
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication: AuthenticationMode::Required {
+                expected_audience: "urn:openshell:extension:middleware:test".to_string(),
+            },
+            audit: MiddlewareAudit::to_jsonl_in(dir).expect("build emitter"),
+        }
+    }
+
+    pub(super) fn authenticated_request<T>(
         message: T,
         kind: ExtensionCallerKind,
         sandbox_id: Option<&str>,
@@ -1988,7 +2035,10 @@ mod tests {
 /// back, which is the only way a wrong decision or a lost record is visible.
 #[cfg(test)]
 mod egress_audit_tests {
-    use super::tests::{StubEvaluator, audit_records, evaluation, make_audited_service};
+    use super::tests::{
+        StubEvaluator, audit_records, authenticated_request, evaluation, make_audited_service,
+        make_authenticated_audited_service,
+    };
     use super::*;
     use apf_policy_eval::{Finding as EvalFinding, Severity as EvalSeverity};
 
@@ -2564,6 +2614,64 @@ mod egress_audit_tests {
         );
         let effects = r.effects.as_ref().expect("the mutation is recorded");
         assert_eq!(effects.header_mutations[0].name.chars().count(), 256);
+    }
+
+    /// The refusal happens in `authorize`, so nothing downstream sees it. Left
+    /// unwired, a caller probing an RPC it may not call leaves no trace.
+    #[tokio::test]
+    async fn a_caller_refused_for_this_rpc_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = make_authenticated_audited_service(
+            StubEvaluator::returning(EvalResult::default()),
+            dir.path(),
+        );
+        // ValidateConfig is a gateway RPC; a supervisor is authenticated but
+        // not permitted.
+        let request = authenticated_request(
+            wire::ValidateConfigRequest::default(),
+            ExtensionCallerKind::Supervisor,
+            Some("sandbox-1"),
+        );
+        assert!(
+            service.validate_config(request).await.is_err(),
+            "a supervisor must not reach ValidateConfig"
+        );
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authentication);
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("extension_auth.caller_not_allowed")
+        );
+        assert_eq!(r.caller_kind.as_deref(), Some("supervisor"));
+    }
+
+    /// A request with no verified caller at all — a runtime wrapping the
+    /// service without the verifier. It must fail closed and say so.
+    #[tokio::test]
+    async fn an_unauthenticated_caller_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = make_authenticated_audited_service(
+            StubEvaluator::returning(EvalResult::default()),
+            dir.path(),
+        );
+        assert!(
+            service
+                .evaluate_http_request(Request::new(evaluation(b"{}")))
+                .await
+                .is_err(),
+            "no caller means no dispatch"
+        );
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("extension_auth.caller_unauthenticated")
+        );
+        assert_eq!(
+            r.caller_kind, None,
+            "nothing authenticated, so no kind is named"
+        );
     }
 
     /// A caller-chosen sandbox id must not be able to erase the record of its
