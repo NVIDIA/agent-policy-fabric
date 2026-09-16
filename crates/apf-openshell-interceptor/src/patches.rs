@@ -13,8 +13,10 @@ use apf_proto::policy_service_v1alpha1::GetDocumentResponse;
 
 /// Decoded claims from the policy-service-minted provenance JWT.
 ///
-/// Extracted without signature verification at inject time to populate annotations.
-/// Full signature verification runs at VALIDATE time using the cached JWKS-derived key.
+/// Decoding does not verify, and most callers do not. Only `handle_sandbox_inject`
+/// verifies the signature before reading these; `handle_config_refresh` and
+/// `sandbox_policy_patches` decode an unverified token. Treat these as proven
+/// only where the caller verified first.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // fields are part of the JWT contract; some read only in tests or by callers
 pub struct ProvenanceClaims {
@@ -56,8 +58,9 @@ struct RawClaims {
 
 /// Decode the payload segment of a compact JWT without verifying the signature.
 ///
-/// Used at inject time to read `jti`, `sub`, `exp`, `apf/document-digest`, `apf/version`
-/// for annotation population. Signature verification is deferred to VALIDATE
+/// Used to read `jti`, `sub`, `exp`, `apf/document-digest`, `apf/version` for
+/// annotations and audit. Decoding proves nothing on its own, and only some
+/// callers verify first — see the type docs; VALIDATE verifies
 /// using the cached JWKS-derived verifying key.
 ///
 /// Returns `None` when the JWT is not a valid three-part compact serialization or

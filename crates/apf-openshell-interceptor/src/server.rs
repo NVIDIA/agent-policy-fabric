@@ -14,6 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
+use crate::audit::{AdmissionPhase, AdmissionRecord, InterceptorAudit, Outcome};
 use crate::bindings;
 use crate::context;
 use crate::patches::{self, PatchError};
@@ -43,6 +44,8 @@ pub struct InterceptorConfig {
     /// Ed25519 public key used to verify provenance JWTs at inject and validate time.
     /// Shared with the JWKS watcher, which replaces the inner value on key rotation.
     pub verifying_key: Arc<RwLock<VerifyingKey>>,
+    /// Where admission decisions are recorded.
+    pub audit: InterceptorAudit,
 }
 
 /// The tonic service that implements `GatewayInterceptor`.
@@ -118,6 +121,9 @@ struct ProvJwtClaims {
     #[allow(dead_code)]
     pub sub: String,
     pub apf_document_digest: String,
+    /// 0 when the token carries no readable version — absent, non-numeric, or
+    /// an explicit zero. The anti-rollback floor, not a revision.
+    pub apf_version: u64,
     pub apf_spec_digest: String,
     #[allow(dead_code)]
     pub apf_bundle_id: String,
@@ -198,6 +204,7 @@ fn verify_jwt_internal(key: &VerifyingKey, jwt: &str) -> Result<ProvJwtClaims, (
     Ok(ProvJwtClaims {
         jti: payload["jti"].as_str().unwrap_or("").to_string(),
         sub: payload["sub"].as_str().unwrap_or("").to_string(),
+        apf_version: payload["apf/version"].as_u64().unwrap_or(0),
         apf_document_digest: payload["apf/document-digest"]
             .as_str()
             .unwrap_or("")
@@ -219,6 +226,21 @@ fn operation_has_annotations(eval: &InterceptorEvaluation) -> bool {
         .is_some_and(serde_json::Value::is_object)
 }
 
+/// Report whether an `UpdateConfig` operation carries merge operations.
+///
+/// Both spellings: proto3 JSON emits `mergeOperations`, but a producer using
+/// `preserve_proto_field_names` emits `merge_operations`, and the sibling
+/// `settingKey` checks already accept both. Recognising only one let a caller
+/// present merge operations that neither the settings-only classifier nor the
+/// direct-mutation denial saw.
+fn merge_operations_present(op_json: &serde_json::Value) -> bool {
+    ["mergeOperations", "merge_operations"].iter().any(|k| {
+        op_json[*k]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty())
+    })
+}
+
 /// Report whether an `UpdateConfig` operation is settings-only (a `settingKey`
 /// with no `policy` or `mergeOperations`). Settings-only updates skip policy
 /// patch injection at `MODIFY_OPERATION` and must be recognized the same way
@@ -226,25 +248,23 @@ fn operation_has_annotations(eval: &InterceptorEvaluation) -> bool {
 /// injected in the first place.
 fn is_settings_only_update_config(op_json: &serde_json::Value) -> bool {
     let has_policy = !op_json["policy"].is_null();
-    let has_merge_ops = op_json["mergeOperations"]
-        .as_array()
-        .is_some_and(|a| !a.is_empty());
+    let has_merge_ops = merge_operations_present(op_json);
     let setting_key = op_json["settingKey"]
         .as_str()
         .or_else(|| op_json["setting_key"].as_str());
     setting_key.is_some() && !has_policy && !has_merge_ops
 }
 
-/// Report whether an `UpdateConfig` operation sets `proposal_approval_mode` to `auto`.
+/// Report whether an `UpdateConfig` operation touches `proposal_approval_mode`.
 fn sets_auto_approval(op_json: &serde_json::Value) -> bool {
     let setting_key = op_json["settingKey"]
         .as_str()
         .or_else(|| op_json["setting_key"].as_str());
+    // Keyed on the setting, not its value. `settingValue` is a four-variant
+    // oneof, so matching `stringValue == "auto"` inspects one arm and a
+    // `bytesValue` or `boolValue` walks past. APF owns approval mode, so any
+    // caller attempt to set it is refused regardless of the value.
     setting_key == Some("proposal_approval_mode")
-        && op_json["settingValue"]["stringValue"]
-            .as_str()
-            .or_else(|| op_json["setting_value"]["string_value"].as_str())
-            == Some("auto")
 }
 
 /// Canonical spec-digest over a bare sandbox `policy` JSON value.
@@ -303,7 +323,52 @@ fn deny_with_context(
     }
 }
 
+/// Stands in for the policy identity when no digest has been proven — either no
+/// token was verified, or one verified and its claims would not parse. Naming
+/// the response's digest instead would assert an identity nothing proved.
+const UNVERIFIED_POLICY: &str = "unverified";
+
 impl GatewayInterceptorService {
+    /// Record an admission outcome for the CreateSandbox path.
+    ///
+    /// Records the admission decisions this handler reaches. Not recorded: a
+    /// malformed request, an unreachable policy service, and a projection that
+    /// passes its digest check but will not decode or re-serialise — the last
+    /// is a policy integrity failure rather than infrastructure, and is a
+    /// catalogue gap rather than a deliberate omission. Caller authentication
+    /// is refused earlier still.
+    ///
+    /// `correlation_id` and the policy identity are passed rather than read
+    /// from `ctx` or the response: once a token verifies, the sandbox
+    /// annotation and VALIDATE both key on its `jti`, and the digest and
+    /// version it signs are the only ones anything has proven.
+    fn record_admission(
+        &self,
+        ctx: &context::SandboxReviewContext,
+        correlation_id: &str,
+        policy_digest: &str,
+        policy_revision: Option<u64>,
+        reason_code: &str,
+        outcome: Outcome<'_>,
+    ) {
+        if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
+            outcome,
+            phase: AdmissionPhase::Injection,
+            verb: "interceptor.create_sandbox",
+            reason_code,
+            resource_kind: &self.config.document_kind,
+            resource_id: &ctx.sandbox_id,
+            sandbox_id: &ctx.sandbox_id,
+            user_subject: &ctx.user_subject,
+            agent_type: &ctx.agent_type,
+            correlation_id,
+            policy_digest,
+            policy_revision,
+        }) {
+            warn!(error = %e, "audit emission failed for sandbox admission");
+        }
+    }
+
     /// Handle `MODIFY_OPERATION` for `CreateSandbox`.
     ///
     /// Fetches the policy-service-vended policy projection, verifies it is signed, and
@@ -343,6 +408,18 @@ impl GatewayInterceptorService {
                 correlation_id = %ctx.correlation_id,
                 "CreateSandbox MODIFY_OPERATION denied: policy service vended no provenance token"
             );
+            self.record_admission(
+                &ctx,
+                &ctx.correlation_id,
+                // Nothing is proven yet, so the record names no policy rather
+                // than one the response merely asserted.
+                UNVERIFIED_POLICY,
+                None,
+                "interceptor.inject_denied.no_provenance_token",
+                Outcome::Refused {
+                    detail: "policy service vended no provenance token",
+                },
+            );
             return Ok(Response::new(deny_with_context(
                 "policy service vended no provenance token",
                 &ctx.correlation_id,
@@ -361,6 +438,18 @@ impl GatewayInterceptorService {
                 correlation_id = %ctx.correlation_id,
                 "CreateSandbox MODIFY_OPERATION denied: provenance JWT invalid at inject time"
             );
+            self.record_admission(
+                &ctx,
+                &ctx.correlation_id,
+                // Nothing is proven yet, so the record names no policy rather
+                // than one the response merely asserted.
+                UNVERIFIED_POLICY,
+                None,
+                "interceptor.inject_denied.invalid_jwt",
+                Outcome::Refused {
+                    detail: "provenance JWT invalid",
+                },
+            );
             return Ok(Response::new(deny_with_context(
                 "provenance JWT invalid",
                 &ctx.correlation_id,
@@ -369,11 +458,103 @@ impl GatewayInterceptorService {
             )));
         }
 
+        // From the signed token, not the response: a response can name a
+        // different digest and version than the token it carries.
+        //
+        // The signature verified above, so unreadable claims mean the policy
+        // service minted a token whose contract is broken. Admitting on that
+        // would inject a policy nothing can name, and would record it as
+        // unverified — indistinguishable from a refusal that never had a token.
+        let Some(verified) = patches::extract_provenance_claims(&provenance_token).filter(|c| {
+            // `jti` becomes the sandbox annotation and the audit correlation
+            // id; empty, the record joins to nothing and VALIDATE compares
+            // empty to empty. `sub` is the signer identity the annotation
+            // carries.
+            !c.jti.is_empty() && !c.sub.is_empty() && !c.apf_document_digest.is_empty()
+        }) else {
+            // Names the missing claim: an empty `sub` means the policy service
+            // was started with an empty --document-key-id, which otherwise
+            // reads as every token being malformed.
+            let detail = match patches::extract_provenance_claims(&provenance_token) {
+                None => "provenance JWT claims unreadable",
+                Some(c) if c.jti.is_empty() => "provenance JWT carries no jti",
+                Some(c) if c.sub.is_empty() => "provenance JWT carries no signer identity",
+                Some(_) => "provenance JWT carries no document digest",
+            };
+            warn!(
+                correlation_id = %ctx.correlation_id,
+                %detail,
+                "CreateSandbox MODIFY_OPERATION denied: provenance JWT claims unusable"
+            );
+            self.record_admission(
+                &ctx,
+                &ctx.correlation_id,
+                UNVERIFIED_POLICY,
+                None,
+                "interceptor.inject_denied.invalid_jwt",
+                Outcome::Refused { detail },
+            );
+            return Ok(Response::new(deny_with_context(
+                detail,
+                &ctx.correlation_id,
+                &policy_digest,
+                &eval.binding_id,
+            )));
+        };
+        // The response is unsigned. Letting it disagree with the token would put
+        // one policy in the record and another in the sandbox annotation.
+        // VALIDATE re-checks the digest but never the version, so a
+        // version-only disagreement would otherwise reach a running sandbox.
+        if policy_digest != verified.apf_document_digest || policy_version != verified.apf_version {
+            warn!(
+                correlation_id = %ctx.correlation_id,
+                "CreateSandbox MODIFY_OPERATION denied: response policy identity disagrees with the signed token"
+            );
+            // `ctx`, matching what `deny_with_context` writes below and the
+            // sibling refusals. On this path the two digests disagree by
+            // construction, so the correlation id is the only field that can
+            // join the record to the denial it accompanies.
+            self.record_admission(
+                &ctx,
+                &ctx.correlation_id,
+                &verified.apf_document_digest,
+                Some(verified.apf_version).filter(|v| *v != 0),
+                "interceptor.inject_denied.policy_identity_mismatch",
+                Outcome::Refused {
+                    detail: "response policy identity disagrees with the signed token",
+                },
+            );
+            return Ok(Response::new(deny_with_context(
+                "response policy identity disagrees with the signed token",
+                &ctx.correlation_id,
+                &policy_digest,
+                &eval.binding_id,
+            )));
+        }
+
+        let verified_digest = verified.apf_document_digest.clone();
+        // 0 is the anti-rollback floor, not a revision: recorded as absent
+        // rather than as a fact the token never carried.
+        let verified_version = Some(verified.apf_version).filter(|v| *v != 0);
+
         let mut patch_list = match patches::sandbox_policy_patches(&doc) {
+            // Unreachable while the empty-token check above precedes this;
+            // kept so a future `PatchError` change cannot turn a refusal into
+            // an internal error.
             Err(PatchError::UnsignedProjection) => {
                 warn!(
                     correlation_id = %ctx.correlation_id,
                     "CreateSandbox MODIFY_OPERATION denied: policy projection has no provenance token"
+                );
+                self.record_admission(
+                    &ctx,
+                    &ctx.correlation_id,
+                    &verified_digest,
+                    verified_version,
+                    "interceptor.inject_denied.unsigned_projection",
+                    Outcome::Refused {
+                        detail: "policy projection has no provenance token",
+                    },
                 );
                 return Ok(Response::new(deny_with_context(
                     "policy projection has no provenance token",
@@ -386,6 +567,16 @@ impl GatewayInterceptorService {
                 warn!(
                     correlation_id = %ctx.correlation_id,
                     "CreateSandbox MODIFY_OPERATION denied: policy body digest mismatch"
+                );
+                self.record_admission(
+                    &ctx,
+                    &ctx.correlation_id,
+                    &verified_digest,
+                    verified_version,
+                    "interceptor.inject_denied.body_digest_mismatch",
+                    Outcome::Refused {
+                        detail: "policy body digest mismatch",
+                    },
                 );
                 return Ok(Response::new(deny_with_context(
                     "policy body digest mismatch",
@@ -400,17 +591,11 @@ impl GatewayInterceptorService {
             Ok(result) => result,
         };
 
-        // Source correlation_id, signer_identity, and bundle_id from JWT claims when available.
+        // From the verified claims; the handler refused above if they were absent.
+        // The same claims the audit record used, so the annotation and the
+        // record cannot name different policies.
         let (correlation_id, signer_identity, bundle_id) =
-            if let Some(claims) = patches::extract_provenance_claims(&provenance_token) {
-                (claims.jti, claims.sub, claims.apf_bundle_id)
-            } else {
-                (
-                    ctx.correlation_id.clone(),
-                    self.config.signing_key_id.clone(),
-                    String::new(),
-                )
-            };
+            (verified.jti, verified.sub, verified.apf_bundle_id);
 
         // proto3 JSON omits an empty annotations map, so a fresh
         // CreateSandboxRequest has no /annotations parent. Initialize it before
@@ -483,12 +668,58 @@ impl GatewayInterceptorService {
             "CreateSandbox policy injected"
         );
 
+        // The JWT-derived id, not `ctx`: it is what lands in the sandbox
+        // annotation and what VALIDATE reads back, so a record keyed on
+        // anything else cannot be joined to the sandbox it admitted.
+        self.record_admission(
+            &ctx,
+            &correlation_id,
+            &verified_digest,
+            verified_version,
+            "interceptor.policy_injected",
+            Outcome::Allowed,
+        );
+
         Ok(Response::new(InterceptorResult {
             allowed: true,
             patches: patch_list,
             log_annotations,
             ..Default::default()
         }))
+    }
+
+    /// Record a VALIDATE outcome for the CreateSandbox path.
+    ///
+    /// The revision comes from the verified token when there is one; the
+    /// annotation carrying it is caller-presented at this phase.
+    #[allow(clippy::too_many_arguments)]
+    fn record_validation(
+        &self,
+        eval: &InterceptorEvaluation,
+        sandbox_id: &str,
+        agent_type: &str,
+        correlation_id: &str,
+        policy_digest: &str,
+        policy_revision: Option<u64>,
+        reason_code: &str,
+        outcome: Outcome<'_>,
+    ) {
+        if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
+            outcome,
+            phase: AdmissionPhase::Validation,
+            verb: "interceptor.validate_sandbox",
+            reason_code,
+            resource_kind: &self.config.document_kind,
+            resource_id: sandbox_id,
+            sandbox_id,
+            user_subject: eval.principal.get("subject").map_or("", String::as_str),
+            agent_type,
+            correlation_id,
+            policy_digest,
+            policy_revision,
+        }) {
+            warn!(error = %e, "audit emission failed for sandbox validation");
+        }
     }
 
     /// Handle `VALIDATE` for `CreateSandbox`.
@@ -512,6 +743,7 @@ impl GatewayInterceptorService {
             .as_str()
             .unwrap_or("");
         let sandbox_id = op_json["name"].as_str().unwrap_or("");
+        let agent_type = op_json["labels"]["agent-type"].as_str().unwrap_or("");
 
         let jwt_claims = verify_provenance_jwt_from_eval(
             &self.config.verifying_key.read().unwrap().clone(),
@@ -530,6 +762,22 @@ impl GatewayInterceptorService {
             warn!(
                 correlation_id,
                 sandbox_id, token_present, "CreateSandbox VALIDATE denied: {deny_message}"
+            );
+            self.record_validation(
+                &eval,
+                sandbox_id,
+                agent_type,
+                correlation_id,
+                UNVERIFIED_POLICY,
+                None,
+                if token_present {
+                    "interceptor.validate_denied.provenance_invalid"
+                } else {
+                    "interceptor.validate_denied.provenance_missing"
+                },
+                Outcome::Refused {
+                    detail: deny_message,
+                },
             );
             return Ok(Response::new(deny_with_context(
                 REASON,
@@ -553,6 +801,18 @@ impl GatewayInterceptorService {
                     sandbox_id,
                     "CreateSandbox VALIDATE denied: spec-digest mismatch (potential TOCTOU)"
                 );
+                self.record_validation(
+                    &eval,
+                    sandbox_id,
+                    agent_type,
+                    correlation_id,
+                    &claims.apf_document_digest,
+                    Some(claims.apf_version).filter(|v| *v != 0),
+                    "interceptor.validate_denied.spec_digest_mismatch",
+                    Outcome::Refused {
+                        detail: "sandbox spec changed between inject and validate",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     REASON,
                     correlation_id,
@@ -563,7 +823,56 @@ impl GatewayInterceptorService {
         }
 
         info!(correlation_id, sandbox_id, "CreateSandbox VALIDATE allowed");
+        // Distinct codes: the spec-digest comparison above is skipped when the
+        // token carries no spec digest, and a record claiming the TOCTOU check
+        // passed when it never ran would assert more than the phase proved.
+        self.record_validation(
+            &eval,
+            sandbox_id,
+            agent_type,
+            correlation_id,
+            &claims.apf_document_digest,
+            Some(claims.apf_version).filter(|v| *v != 0),
+            if claims.apf_spec_digest.is_empty() {
+                "interceptor.validate_allowed.no_spec_digest"
+            } else {
+                "interceptor.validate_allowed"
+            },
+            Outcome::Allowed,
+        );
         Ok(Response::new(allow()))
+    }
+
+    /// Record a governance outcome for the UpdateConfig path.
+    ///
+    /// The resource is the policy document, not a sandbox — these operations
+    /// govern configuration, so there is no session to attribute them to.
+    #[allow(clippy::too_many_arguments)]
+    fn record_governance(
+        &self,
+        ctx: &context::ProviderReviewContext,
+        correlation_id: &str,
+        policy_digest: &str,
+        policy_revision: Option<u64>,
+        reason_code: &str,
+        outcome: Outcome<'_>,
+    ) {
+        if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
+            outcome,
+            phase: AdmissionPhase::Governance,
+            verb: "interceptor.update_config",
+            reason_code,
+            resource_kind: &self.config.document_kind,
+            resource_id: &self.config.document_name,
+            sandbox_id: "",
+            user_subject: &ctx.user_subject,
+            agent_type: "",
+            correlation_id,
+            policy_digest,
+            policy_revision,
+        }) {
+            warn!(error = %e, "audit emission failed for config governance");
+        }
     }
 
     /// Handle `MODIFY_OPERATION` for `UpdateConfig`.
@@ -580,9 +889,7 @@ impl GatewayInterceptorService {
         let op_json =
             context::operation_struct(&eval).map_or(serde_json::Value::Null, util::struct_to_json);
         let has_policy = !op_json["policy"].is_null();
-        let has_merge_ops = op_json["mergeOperations"]
-            .as_array()
-            .is_some_and(|a| !a.is_empty());
+        let has_merge_ops = merge_operations_present(&op_json);
         let sets_auto_approval = sets_auto_approval(&op_json);
         // Settings-only updates (setting_key present, no policy/mergeOps) pass
         // through without modification. Injecting policy patches into a settings
@@ -592,10 +899,20 @@ impl GatewayInterceptorService {
                 let ctx = context::extract_provider(&eval);
                 warn!(
                     correlation_id = %ctx.correlation_id,
-                    "UpdateConfig MODIFY_OPERATION denied: auto-approval attempt via settings"
+                    "UpdateConfig MODIFY_OPERATION denied: approval-mode change via settings"
+                );
+                self.record_governance(
+                    &ctx,
+                    &ctx.correlation_id,
+                    UNVERIFIED_POLICY,
+                    None,
+                    "interceptor.govern_denied.approval_mode_change",
+                    Outcome::Refused {
+                        detail: "approval mode is managed by APF",
+                    },
                 );
                 return Ok(Response::new(deny_with_context(
-                    "automatic policy proposal approval is blocked; policy is managed by APF",
+                    "approval mode is managed by APF",
                     &ctx.correlation_id,
                     "",
                     &eval.binding_id,
@@ -606,7 +923,7 @@ impl GatewayInterceptorService {
         if has_policy || has_merge_ops || sets_auto_approval {
             let ctx = context::extract_provider(&eval);
             let reason = if sets_auto_approval {
-                "automatic policy proposal approval is blocked; policy is managed by APF"
+                "approval mode is managed by APF"
             } else {
                 "direct policy mutation not permitted; policy is managed by APF"
             };
@@ -616,6 +933,25 @@ impl GatewayInterceptorService {
                 has_merge_ops,
                 sets_auto_approval,
                 "UpdateConfig MODIFY_OPERATION denied: {reason}"
+            );
+            // The detail names every attempt, not just the one the reason code
+            // is chosen for: a request carrying both a policy body and an
+            // auto-approval setting would otherwise record only the latter, and
+            // the caller picks which by adding a field.
+            let attempted = format!(
+                "{reason} (policy: {has_policy}, merge_operations: {has_merge_ops}, auto_approval: {sets_auto_approval})"
+            );
+            self.record_governance(
+                &ctx,
+                &ctx.correlation_id,
+                UNVERIFIED_POLICY,
+                None,
+                if sets_auto_approval {
+                    "interceptor.govern_denied.approval_mode_change"
+                } else {
+                    "interceptor.govern_denied.direct_policy_mutation"
+                },
+                Outcome::Refused { detail: &attempted },
             );
             return Ok(Response::new(deny_with_context(
                 reason,
@@ -665,6 +1001,16 @@ impl GatewayInterceptorService {
                     correlation_id = %ctx.correlation_id,
                     "UpdateConfig MODIFY_OPERATION denied: policy body digest mismatch"
                 );
+                self.record_governance(
+                    &ctx,
+                    &ctx.correlation_id,
+                    UNVERIFIED_POLICY,
+                    None,
+                    "interceptor.govern_denied.body_digest_mismatch",
+                    Outcome::Refused {
+                        detail: "policy body does not hash to the digest in its own token",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     "policy body digest mismatch",
                     &ctx.correlation_id,
@@ -678,6 +1024,9 @@ impl GatewayInterceptorService {
             Ok(result) => result,
         };
 
+        // Unreachable: `sandbox_policy_patches` above returns
+        // `UnsignedProjection` on an empty token, so that branch fires first.
+        // Kept so a reordering there cannot silently drop the check.
         if provenance_token.is_empty() {
             warn!(
                 correlation_id = %ctx.correlation_id,
@@ -685,6 +1034,36 @@ impl GatewayInterceptorService {
             );
             return Ok(Response::new(deny_with_context(
                 "policy service vended no provenance token",
+                &ctx.correlation_id,
+                &policy_digest,
+                &eval.binding_id,
+            )));
+        }
+
+        // The body is checked against the token's claim, never against the
+        // response's digest, so the two can disagree — and then the record and
+        // the annotation name a policy that was not the one injected. Refusing
+        // mirrors the sandbox path; VALIDATE denies this case later anyway, so
+        // this only moves an existing refusal early enough to be recorded.
+        if let Some(claims) = patches::extract_provenance_claims(&provenance_token)
+            && (policy_digest != claims.apf_document_digest || policy_version != claims.apf_version)
+        {
+            warn!(
+                correlation_id = %ctx.correlation_id,
+                "UpdateConfig MODIFY_OPERATION denied: response policy identity disagrees with the token"
+            );
+            self.record_governance(
+                &ctx,
+                &ctx.correlation_id,
+                &claims.apf_document_digest,
+                Some(claims.apf_version).filter(|v| *v != 0),
+                "interceptor.govern_denied.policy_identity_mismatch",
+                Outcome::Refused {
+                    detail: "response policy identity disagrees with the token",
+                },
+            );
+            return Ok(Response::new(deny_with_context(
+                "response policy identity disagrees with the token",
                 &ctx.correlation_id,
                 &policy_digest,
                 &eval.binding_id,
@@ -777,6 +1156,28 @@ impl GatewayInterceptorService {
             "UpdateConfig policy injected"
         );
 
+        // The higher-blast-radius injection of the two: this rewrites the
+        // governing policy for the whole deployment, not one sandbox.
+        //
+        // The digest is the response's. Unlike the sandbox path, this handler
+        // never verifies the provenance token, so the record states what was
+        // injected without claiming anything proved it; the `.unverified`
+        // reason-code suffix is the marker for that.
+        self.record_governance(
+            &ctx,
+            // The same value that lands in the config annotations and that
+            // VALIDATE reads back — the jti when claims parse, ctx otherwise.
+            &correlation_id,
+            &policy_digest,
+            Some(policy_version).filter(|v| *v != 0),
+            // A distinct code, not the sandbox path's: this handler never
+            // verifies the token, so the digest names what was injected without
+            // anything having proved it. Reusing `policy_injected` would make
+            // the two indistinguishable to a consumer.
+            "interceptor.policy_injected.unverified",
+            Outcome::Allowed,
+        );
+
         Ok(Response::new(InterceptorResult {
             allowed: true,
             patches: patch_list,
@@ -800,16 +1201,76 @@ impl GatewayInterceptorService {
         // MODIFY_OPERATION (see handle_config_refresh), so they must be
         // recognized and passed through here too, rather than denied for a
         // token that was never injected in the first place.
+        // Read before the settings-only branch: these refusals are about an
+        // injection, and the annotation carries the id that identifies it.
+        let injected_correlation_id = op_json["annotations"]["apf.nvidia.com/correlation-id"]
+            .as_str()
+            .unwrap_or("");
+        let provider_ctx = context::extract_provider(&eval);
+        // One id for the record and the denial both. Resolving it in two places
+        // let them diverge: the record joined to the injection, the denial to a
+        // fresh UUID.
+        let refusal_correlation_id = if injected_correlation_id.is_empty() {
+            provider_ctx.correlation_id.as_str()
+        } else {
+            injected_correlation_id
+        };
+
+        // A request that was injected at MODIFY carries a provenance token. If
+        // it now looks settings-only, `/policy` was removed after injection —
+        // the classification is recomputed from caller-controlled state at each
+        // phase, so deletion reclassifies the request and skips every check
+        // below. The actor is whatever holds the operation between phases — a
+        // peer interceptor or the gateway — not an ordinary API caller.
+        let injected = !op_json["annotations"]["apf.nvidia.com/provenance-token"].is_null();
         if is_settings_only_update_config(&op_json) {
-            if sets_auto_approval(&op_json) {
+            if injected {
                 let ctx = context::extract_provider(&eval);
                 warn!(
                     correlation_id = %ctx.correlation_id,
-                    "UpdateConfig VALIDATE denied: auto-approval attempt via settings"
+                    "UpdateConfig VALIDATE denied: injected policy removed after injection"
+                );
+                self.record_governance(
+                    &ctx,
+                    refusal_correlation_id,
+                    UNVERIFIED_POLICY,
+                    None,
+                    "interceptor.validate_denied.post_injection_mutation",
+                    // Hedged: the annotation is caller-presented and unverified
+                    // here, so a fabricated one reaches this branch. What is
+                    // certain is the shape, not that an injection occurred.
+                    Outcome::Refused {
+                        detail: "settings-only request carrying a provenance annotation",
+                    },
                 );
                 return Ok(Response::new(deny_with_context(
-                    "automatic policy proposal approval is blocked; policy is managed by APF",
-                    &ctx.correlation_id,
+                    "config policy integrity check failed",
+                    refusal_correlation_id,
+                    "",
+                    &eval.binding_id,
+                )));
+            }
+            if sets_auto_approval(&op_json) {
+                let ctx = context::extract_provider(&eval);
+                // The record, the denial and the log all carry the same id, or
+                // the refusal cannot be joined to the response that carried it.
+                warn!(
+                    correlation_id = %refusal_correlation_id,
+                    "UpdateConfig VALIDATE denied: approval-mode change via settings"
+                );
+                self.record_governance(
+                    &ctx,
+                    refusal_correlation_id,
+                    UNVERIFIED_POLICY,
+                    None,
+                    "interceptor.validate_denied.approval_mode_change",
+                    Outcome::Refused {
+                        detail: "approval mode is managed by APF",
+                    },
+                );
+                return Ok(Response::new(deny_with_context(
+                    "approval mode is managed by APF",
+                    refusal_correlation_id,
                     "",
                     &eval.binding_id,
                 )));
@@ -844,9 +1305,28 @@ impl GatewayInterceptorService {
                 correlation_id,
                 token_present, "UpdateConfig VALIDATE denied: {deny_message}"
             );
+            let recorded_correlation_id = if correlation_id.is_empty() {
+                provider_ctx.correlation_id.as_str()
+            } else {
+                correlation_id
+            };
+            self.record_governance(
+                &provider_ctx,
+                recorded_correlation_id,
+                UNVERIFIED_POLICY,
+                None,
+                if token_present {
+                    "interceptor.validate_denied.provenance_invalid"
+                } else {
+                    "interceptor.validate_denied.provenance_missing"
+                },
+                Outcome::Refused {
+                    detail: deny_message,
+                },
+            );
             return Ok(Response::new(deny_with_context(
                 "config policy integrity check failed",
-                correlation_id,
+                recorded_correlation_id,
                 policy_digest,
                 &eval.binding_id,
             )));
@@ -866,6 +1346,16 @@ impl GatewayInterceptorService {
                     correlation_id,
                     "UpdateConfig VALIDATE denied: spec-digest mismatch (potential TOCTOU)"
                 );
+                self.record_governance(
+                    &context::extract_provider(&eval),
+                    correlation_id,
+                    &claims.apf_document_digest,
+                    Some(claims.apf_version).filter(|v| *v != 0),
+                    "interceptor.validate_denied.spec_digest_mismatch",
+                    Outcome::Refused {
+                        detail: "config policy changed between injection and validation",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     "config policy integrity check failed",
                     correlation_id,
@@ -873,6 +1363,41 @@ impl GatewayInterceptorService {
                     &eval.binding_id,
                 )));
             }
+        }
+
+        // The spec digest covers `/policy` only, so a field added beside it
+        // between MODIFY and VALIDATE passes both the JWT and the digest check.
+        // This is the last phase that can refuse, and the sibling checks that
+        // run at MODIFY must run again here.
+        let sets_auto_approval = sets_auto_approval(&op_json);
+        let has_merge_ops = merge_operations_present(&op_json);
+        if sets_auto_approval || has_merge_ops {
+            let ctx = context::extract_provider(&eval);
+            warn!(
+                correlation_id,
+                sets_auto_approval,
+                "UpdateConfig VALIDATE denied: forbidden field added after injection"
+            );
+            let attempted = format!(
+                "forbidden field added after injection (auto_approval: {sets_auto_approval}, merge_operations: {has_merge_ops})"
+            );
+            self.record_governance(
+                &ctx,
+                correlation_id,
+                &claims.apf_document_digest,
+                Some(claims.apf_version).filter(|v| *v != 0),
+                // One code for "the operation changed after injection", shared
+                // with the deletion refusal above; the detail names which
+                // field. The approval-mode refusal keeps its own code.
+                "interceptor.validate_denied.post_injection_mutation",
+                Outcome::Refused { detail: &attempted },
+            );
+            return Ok(Response::new(deny_with_context(
+                "config policy integrity check failed",
+                correlation_id,
+                policy_digest,
+                &eval.binding_id,
+            )));
         }
 
         info!(correlation_id, "UpdateConfig VALIDATE allowed");
@@ -1371,7 +1896,7 @@ mod tests {
     use tonic::transport::Endpoint;
 
     /// PKCS#8 v1 DER encoding for an Ed25519 seed (RFC 8410, 48 bytes).
-    fn ed25519_seed_to_pkcs8_der(seed: &[u8; 32]) -> [u8; 48] {
+    pub(super) fn ed25519_seed_to_pkcs8_der(seed: &[u8; 32]) -> [u8; 48] {
         let mut der = [0u8; 48];
         der[..16].copy_from_slice(&[
             0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
@@ -1396,7 +1921,7 @@ mod tests {
         apf_spec_digest: String,
     }
 
-    fn mint_test_jwt(
+    pub(super) fn mint_test_jwt(
         signing_key: &SigningKey,
         key_id: &str,
         jti: &str,
@@ -1406,13 +1931,26 @@ mod tests {
         mint_test_jwt_with_spec_digest(signing_key, key_id, jti, policy_digest, exp, "")
     }
 
-    fn mint_test_jwt_with_spec_digest(
+    pub(super) fn mint_test_jwt_with_spec_digest(
         signing_key: &SigningKey,
         key_id: &str,
         jti: &str,
         policy_digest: &str,
         exp: Option<u64>,
         spec_digest: &str,
+    ) -> String {
+        mint_test_jwt_full(signing_key, key_id, jti, policy_digest, exp, spec_digest, 1)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn mint_test_jwt_full(
+        signing_key: &SigningKey,
+        key_id: &str,
+        jti: &str,
+        policy_digest: &str,
+        exp: Option<u64>,
+        spec_digest: &str,
+        version: u64,
     ) -> String {
         use jsonwebtoken::{Algorithm, EncodingKey, Header};
         let seed = signing_key.to_bytes();
@@ -1426,13 +1964,13 @@ mod tests {
             iat: 1_000_000,
             exp,
             apf_document_digest: policy_digest.to_string(),
-            apf_version: 1,
+            apf_version: version,
             apf_spec_digest: spec_digest.to_string(),
         };
         jsonwebtoken::encode(&header, &claims, &encoding_key).expect("encode")
     }
 
-    fn eval_with_annotations(annotations: Vec<(&str, &str)>) -> InterceptorEvaluation {
+    pub(super) fn eval_with_annotations(annotations: Vec<(&str, &str)>) -> InterceptorEvaluation {
         use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
         let ann_fields: BTreeMap<String, ProstValue> = annotations
             .into_iter()
@@ -1482,6 +2020,7 @@ mod tests {
                 verifying_key: Arc::new(std::sync::RwLock::new(
                     SigningKey::generate(&mut OsRng).verifying_key(),
                 )),
+                audit: InterceptorAudit::disabled(),
             },
             authentication: AuthenticationMode::Insecure,
         }
@@ -1641,7 +2180,7 @@ mod tests {
 
     /// Build an `UpdateConfig` evaluation for a settings-only update (`setting_key`
     /// present, no `policy`/`mergeOperations`) at the given phase.
-    fn settings_only_update_config_evaluation(
+    pub(super) fn settings_only_update_config_evaluation(
         phase: crate::proto::interceptor_evaluation::Phase,
     ) -> InterceptorEvaluation {
         InterceptorEvaluation {
@@ -1655,7 +2194,10 @@ mod tests {
         }
     }
 
-    fn settings_only_operation_fields(setting_key: &str, string_value: &str) -> ProstStruct {
+    pub(super) fn settings_only_operation_fields(
+        setting_key: &str,
+        string_value: &str,
+    ) -> ProstStruct {
         let setting_value_fields = [(
             "stringValue".to_string(),
             ProstValue {
@@ -2096,5 +2638,1273 @@ mod tests {
         let obj = serde_json::json!({ "spec": {} });
         let digest = compute_spec_digest_from_op(&obj);
         assert_eq!(digest.len(), 64);
+    }
+}
+
+/// Admission tests that reach past the policy-service fetch.
+///
+/// The other test module points the client at a dead address, so every test
+/// there returns at `get_document` and nothing after it has ever run. These
+/// serve a real stub over a Unix socket instead, with a real audit sink, so the
+/// handler's recording can be observed.
+#[cfg(test)]
+mod admission_audit_tests {
+    use super::tests::{
+        eval_with_annotations, mint_test_jwt, mint_test_jwt_full, mint_test_jwt_with_spec_digest,
+        settings_only_operation_fields, settings_only_update_config_evaluation,
+    };
+    use super::*;
+    use crate::audit::InterceptorAudit;
+    use apf_audit::AuditEvent;
+    use apf_proto::openshell_sandbox::SandboxPolicy;
+    use apf_proto::policy_service_v1alpha1::{
+        GetDocumentRequest, GetDocumentResponse, HealthRequest, HealthResponse,
+        ListDocumentsRequest, ListDocumentsResponse,
+        policy_service_server::{PolicyService, PolicyServiceServer},
+    };
+    use ed25519_dalek::SigningKey;
+    use prost::Message as _;
+    use prost_types::{Struct as ProstStruct, Value as ProstValue};
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::net::UnixListener;
+    use tokio_stream::wrappers::UnixListenerStream;
+    use tonic::transport::Server;
+
+    const KEY_ID: &str = "test-key";
+
+    struct StubPolicyService {
+        doc: GetDocumentResponse,
+    }
+
+    #[tonic::async_trait]
+    impl PolicyService for StubPolicyService {
+        async fn get_document(
+            &self,
+            _: Request<GetDocumentRequest>,
+        ) -> Result<Response<GetDocumentResponse>, Status> {
+            Ok(Response::new(self.doc.clone()))
+        }
+        async fn health(
+            &self,
+            _: Request<HealthRequest>,
+        ) -> Result<Response<HealthResponse>, Status> {
+            Err(Status::unimplemented("stub"))
+        }
+        async fn list_documents(
+            &self,
+            _: Request<ListDocumentsRequest>,
+        ) -> Result<Response<ListDocumentsResponse>, Status> {
+            Err(Status::unimplemented("stub"))
+        }
+    }
+
+    /// Short path under `/tmp`: macOS caps socket paths near 104 bytes, and the
+    /// per-user temp dir is long enough to matter.
+    fn socket_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(format!(
+            "/tmp/apf-ix-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    /// Bind before serving so the client cannot connect to a socket that does
+    /// not exist yet — a spawn-then-connect race is the usual source of
+    /// flakiness here.
+    /// Removes the socket even if the harness is never constructed — a connect
+    /// failure between bind and construction would otherwise strand it.
+    struct SocketGuard(std::path::PathBuf);
+
+    impl Drop for SocketGuard {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.0).ok();
+        }
+    }
+
+    async fn serve_stub(doc: GetDocumentResponse) -> (PolicyClientHandle, SocketGuard) {
+        let path = socket_path();
+        let listener = UnixListener::bind(&path).expect("bind stub socket");
+        let guard = SocketGuard(path.clone());
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(PolicyServiceServer::new(StubPolicyService { doc }))
+                .serve_with_incoming(UnixListenerStream::new(listener))
+                .await
+        });
+        let client = PolicyClientHandle::connect(&path)
+            .await
+            .expect("connect to stub");
+        (client, guard)
+    }
+
+    fn signed_document(
+        signing_key: &SigningKey,
+        jti: &str,
+        key_id: &str,
+        claim_digest: Option<&str>,
+        response_version: u64,
+    ) -> GetDocumentResponse {
+        let mut body = Vec::new();
+        SandboxPolicy::default().encode(&mut body).expect("encode");
+        let digest = hex::encode(Sha256::digest(&body));
+        let token = mint_test_jwt(
+            signing_key,
+            key_id,
+            jti,
+            claim_digest.unwrap_or(&digest),
+            None,
+        );
+        GetDocumentResponse {
+            body,
+            digest,
+            version: response_version,
+            valid_until_ms: 0,
+            provenance_token: token,
+        }
+    }
+
+    fn create_sandbox_modify(sandbox_id: &str, subject: &str) -> InterceptorEvaluation {
+        use crate::proto::{ModifyOperationEvaluation, interceptor_evaluation::Phase};
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "agent-type".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue(
+                    "claude-code".to_string(),
+                )),
+            },
+        );
+        let mut op = BTreeMap::new();
+        op.insert(
+            "name".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue(
+                    sandbox_id.to_string(),
+                )),
+            },
+        );
+        op.insert(
+            "labels".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StructValue(ProstStruct {
+                    fields: labels,
+                })),
+            },
+        );
+        let mut principal = std::collections::HashMap::new();
+        principal.insert("subject".to_string(), subject.to_string());
+        InterceptorEvaluation {
+            method: "CreateSandbox".to_string(),
+            principal,
+            phase: Some(Phase::ModifyOperation(ModifyOperationEvaluation {
+                proposed_operation: Some(ProstStruct { fields: op }),
+            })),
+            ..Default::default()
+        }
+    }
+
+    struct Harness {
+        service: GatewayInterceptorService,
+        dir: tempfile::TempDir,
+        _socket: SocketGuard,
+    }
+
+    impl Harness {
+        fn records(&self) -> Vec<AuditEvent> {
+            let written = std::fs::read_to_string(
+                self.dir
+                    .path()
+                    .join("apf-policy-gateway-interceptor-audit.jsonl"),
+            )
+            .expect("audit log was written");
+            written
+                .lines()
+                .map(|line| {
+                    let parsed: AuditEvent = serde_json::from_str(line).expect("deserializes");
+                    parsed.validate().expect("validates against the schema");
+                    parsed
+                })
+                .collect()
+        }
+    }
+
+    async fn harness(signing_key: &SigningKey, doc: GetDocumentResponse) -> Harness {
+        let (client, _socket) = serve_stub(doc).await;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = GatewayInterceptorService {
+            policy_service: client,
+            config: InterceptorConfig {
+                document_kind: "openshell.sandbox.v1".to_string(),
+                document_name: "default".to_string(),
+                signing_key_id: KEY_ID.to_string(),
+                verifying_key: Arc::new(std::sync::RwLock::new(signing_key.verifying_key())),
+                audit: InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter"),
+            },
+            authentication: AuthenticationMode::Insecure,
+        };
+        Harness {
+            service,
+            dir,
+            _socket,
+        }
+    }
+
+    fn key() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    /// These paths never fetch a document, so they need no stub — only a real
+    /// audit sink, which the other test module does not wire.
+    fn offline_harness(signing_key: &SigningKey) -> (GatewayInterceptorService, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = GatewayInterceptorService {
+            policy_service: PolicyClientHandle::disconnected(),
+            config: InterceptorConfig {
+                document_kind: "openshell.sandbox.v1".to_string(),
+                document_name: "default".to_string(),
+                signing_key_id: KEY_ID.to_string(),
+                verifying_key: Arc::new(std::sync::RwLock::new(signing_key.verifying_key())),
+                audit: InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter"),
+            },
+            authentication: AuthenticationMode::Insecure,
+        };
+        (service, dir)
+    }
+
+    fn offline_records(dir: &tempfile::TempDir) -> Vec<AuditEvent> {
+        let written = std::fs::read_to_string(
+            dir.path()
+                .join("apf-policy-gateway-interceptor-audit.jsonl"),
+        )
+        .expect("audit log was written");
+        written
+            .lines()
+            .map(|line| {
+                let parsed: AuditEvent = serde_json::from_str(line).expect("deserializes");
+                parsed.validate().expect("validates against the schema");
+                parsed
+            })
+            .collect()
+    }
+
+    /// A sandbox whose spec changed between inject and validate is the TOCTOU
+    /// case the phase exists to catch; an unrecorded one is invisible.
+    #[tokio::test]
+    async fn a_spec_digest_mismatch_at_validate_is_recorded() {
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let token = mint_test_jwt_with_spec_digest(&k, KEY_ID, "jti-v1", "digest-1", None, "aa");
+        let eval = eval_with_annotations(vec![
+            ("apf.nvidia.com/provenance-token", token.as_str()),
+            ("apf.nvidia.com/correlation-id", "jti-v1"),
+            ("apf.nvidia.com/document-digest", "digest-1"),
+        ]);
+
+        let result = svc.evaluate(Request::new(eval)).await.expect("answers");
+        assert!(!result.into_inner().allowed);
+
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_denied.spec_digest_mismatch")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+        assert_eq!(r.verb.as_deref(), Some("interceptor.validate_sandbox"));
+        assert!(
+            r.error_info
+                .as_ref()
+                .is_some_and(|e| e.message.contains("changed between inject and validate")),
+            "the refusal detail must reach the record: {:?}",
+            r.error_info
+        );
+        // Verification requires the claim and the annotation to agree, so this
+        // pins the value, not which of the two it came from.
+        assert_eq!(r.bundle_digest.as_deref(), Some("digest-1"));
+    }
+
+    /// Absent and unverifiable are different failures and must not share a code.
+    #[tokio::test]
+    async fn validate_without_a_token_is_recorded_as_missing_not_invalid() {
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let eval = eval_with_annotations(vec![("apf.nvidia.com/correlation-id", "jti-v2")]);
+
+        let result = svc.evaluate(Request::new(eval)).await.expect("answers");
+        assert!(!result.into_inner().allowed);
+
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_denied.provenance_missing")
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some("unverified"));
+    }
+
+    /// Folding a present-but-bad token into "missing" erases the signal that
+    /// someone presented a forged or expired one.
+    #[tokio::test]
+    async fn validate_with_an_unverifiable_token_is_recorded_as_invalid() {
+        let k = key();
+        let foreign = SigningKey::from_bytes(&[9u8; 32]);
+        let (svc, dir) = offline_harness(&k);
+        let token = mint_test_jwt(&foreign, KEY_ID, "jti-v3", "digest-1", None);
+        let eval = eval_with_annotations(vec![
+            ("apf.nvidia.com/provenance-token", token.as_str()),
+            ("apf.nvidia.com/correlation-id", "jti-v3"),
+            ("apf.nvidia.com/document-digest", "digest-1"),
+        ]);
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_denied.provenance_invalid")
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some("unverified"));
+    }
+
+    /// The allow must name the verified policy and revision, and must say when
+    /// the TOCTOU check did not run.
+    #[tokio::test]
+    async fn validate_allowed_names_the_verified_policy() {
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let token = mint_test_jwt_full(&k, KEY_ID, "jti-v4", "digest-2", None, "", 42);
+        let eval = eval_with_annotations(vec![
+            ("apf.nvidia.com/provenance-token", token.as_str()),
+            ("apf.nvidia.com/correlation-id", "jti-v4"),
+            ("apf.nvidia.com/document-digest", "digest-2"),
+        ]);
+
+        assert!(
+            svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_allowed.no_spec_digest"),
+            "the token carried no spec digest, so the check never ran"
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some("digest-2"));
+        assert_eq!(
+            r.policy_revision,
+            Some(42),
+            "the signed revision, not the caller's annotation"
+        );
+    }
+
+    /// A caller supplying a policy body directly is a distinct attempt from an
+    /// auto-approval setting, and both must be traceable.
+    #[tokio::test]
+    async fn a_direct_policy_mutation_is_recorded_with_what_was_attempted() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut op = BTreeMap::new();
+        op.insert(
+            "policy".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue("mine".to_string())),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(ProstStruct { fields: op }),
+                },
+            )),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.direct_policy_mutation")
+        );
+        let message = r
+            .error_info
+            .as_ref()
+            .map(|e| e.message.as_str())
+            .unwrap_or_default();
+        assert!(
+            message.contains("policy: true"),
+            "the record must name what was attempted: {message}"
+        );
+    }
+
+    /// The base code, taken when the token carries a spec digest and it
+    /// matches — the shorter half of a prefix pair, and the only one a
+    /// prefix-matching consumer could silently conflate.
+    #[tokio::test]
+    async fn validate_allowed_with_a_matching_spec_digest_uses_the_base_code() {
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        // The spec digest over an operation carrying only annotations.
+        let eval_for_digest = eval_with_annotations(vec![]);
+        let op_json = context::operation_struct(&eval_for_digest)
+            .map_or(serde_json::Value::Null, util::struct_to_json);
+        let spec_digest = compute_spec_digest_from_op(&op_json);
+
+        let token =
+            mint_test_jwt_with_spec_digest(&k, KEY_ID, "jti-v5", "digest-3", None, &spec_digest);
+        let eval = eval_with_annotations(vec![
+            ("apf.nvidia.com/provenance-token", token.as_str()),
+            ("apf.nvidia.com/correlation-id", "jti-v5"),
+            ("apf.nvidia.com/document-digest", "digest-3"),
+        ]);
+
+        assert!(
+            svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        assert_eq!(
+            offline_records(&dir)[0].reason_code.as_deref(),
+            Some("interceptor.validate_allowed"),
+            "a matching spec digest must not report as skipped"
+        );
+    }
+
+    /// The config path had no equivalent of the sandbox path's identity check,
+    /// so the record could name a policy that was never injected.
+    #[tokio::test]
+    async fn a_config_response_disagreeing_with_its_token_is_refused() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        // Body matches the token's claim, so the body-digest check passes; only
+        // the response's own digest field disagrees.
+        let mut doc = signed_document(&k, "jti-c2", KEY_ID, None, 1);
+        let claim_digest = doc.digest.clone();
+        doc.digest = "c".repeat(64);
+        let h = harness(&k, doc).await;
+
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(ProstStruct {
+                        fields: BTreeMap::new(),
+                    }),
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(
+            !h.service
+                .evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.policy_identity_mismatch")
+        );
+        assert_eq!(
+            r.bundle_digest.as_deref(),
+            Some(claim_digest.as_str()),
+            "the token's claim, not the response's digest"
+        );
+    }
+
+    /// Inject clean, then add a forbidden field before VALIDATE: the JWT and
+    /// the spec digest both still pass, because the digest covers `/policy`
+    /// only. VALIDATE is the last phase that can refuse.
+    #[tokio::test]
+    async fn a_field_added_after_injection_is_refused_at_validate() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+
+        // A policy the digest is computed over, plus a forbidden sibling.
+        let policy = ProstValue {
+            kind: Some(prost_types::value::Kind::StringValue("p".to_string())),
+        };
+        let spec_digest =
+            compute_spec_digest_from_policy(&serde_json::Value::String("p".to_string()));
+        let token =
+            mint_test_jwt_with_spec_digest(&k, KEY_ID, "jti-v6", "digest-4", None, &spec_digest);
+
+        let mut ann = BTreeMap::new();
+        for (key, value) in [
+            ("apf.nvidia.com/provenance-token", token.as_str()),
+            ("apf.nvidia.com/correlation-id", "jti-v6"),
+            ("apf.nvidia.com/document-digest", "digest-4"),
+        ] {
+            ann.insert(
+                key.to_string(),
+                ProstValue {
+                    kind: Some(prost_types::value::Kind::StringValue(value.to_string())),
+                },
+            );
+        }
+        let mut fields = BTreeMap::new();
+        fields.insert("policy".to_string(), policy);
+        fields.insert(
+            "annotations".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StructValue(ProstStruct {
+                    fields: ann,
+                })),
+            },
+        );
+        fields.insert(
+            "merge_operations".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::ListValue(
+                    prost_types::ListValue {
+                        values: vec![ProstValue {
+                            kind: Some(prost_types::value::Kind::StringValue("op".to_string())),
+                        }],
+                    },
+                )),
+            },
+        );
+
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::Validate(crate::proto::ValidateEvaluation {
+                proposed_operation: Some(ProstStruct { fields }),
+                current_state: None,
+            })),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed,
+            "a field added after injection must not pass the last enforcement phase"
+        );
+        assert_eq!(
+            offline_records(&dir)[0].reason_code.as_deref(),
+            Some("interceptor.validate_denied.post_injection_mutation")
+        );
+        assert_eq!(
+            offline_records(&dir)[0].outcome,
+            Some(apf_audit::Outcome::Refused),
+            "the response denies, so the record must too"
+        );
+    }
+
+    /// A body that does not hash to the digest in its own signed token is a
+    /// tamper signal on the trust path, fleet-wide — P0, and previously
+    /// enforced without a record.
+    #[tokio::test]
+    async fn a_config_body_not_matching_its_token_is_recorded() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        // Claim names a digest the body does not hash to.
+        let doc = signed_document(&k, "jti-c3", KEY_ID, Some(&"d".repeat(64)), 1);
+        let h = harness(&k, doc).await;
+
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(ProstStruct {
+                        fields: BTreeMap::new(),
+                    }),
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(
+            !h.service
+                .evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.body_digest_mismatch")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+    }
+
+    /// The config VALIDATE provenance failure was the one refusal in this
+    /// handler with no record while its four siblings gained one.
+    #[tokio::test]
+    async fn config_validate_without_provenance_is_recorded() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut fields = BTreeMap::new();
+        // Not settings-only, so it reaches the provenance check.
+        fields.insert(
+            "policy".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue("p".to_string())),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::Validate(crate::proto::ValidateEvaluation {
+                proposed_operation: Some(ProstStruct { fields }),
+                current_state: None,
+            })),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_denied.provenance_missing")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+        assert_eq!(r.bundle_digest.as_deref(), Some("unverified"));
+    }
+
+    /// The refusal and the denial it accompanies must carry the same id, or
+    /// the record joins to the injection while the gateway's log joins to
+    /// nothing.
+    #[tokio::test]
+    async fn a_settings_only_refusal_keys_on_the_injected_correlation_id() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut ann = BTreeMap::new();
+        for (key, value) in [
+            ("apf.nvidia.com/provenance-token", "t"),
+            ("apf.nvidia.com/correlation-id", "jti-inj"),
+        ] {
+            ann.insert(
+                key.to_string(),
+                ProstValue {
+                    kind: Some(prost_types::value::Kind::StringValue(value.to_string())),
+                },
+            );
+        }
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "annotations".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StructValue(ProstStruct {
+                    fields: ann,
+                })),
+            },
+        );
+        fields.insert(
+            "settingKey".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue(
+                    "log_level".to_string(),
+                )),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::Validate(crate::proto::ValidateEvaluation {
+                proposed_operation: Some(ProstStruct { fields }),
+                current_state: None,
+            })),
+            ..Default::default()
+        };
+
+        let result = svc
+            .evaluate(Request::new(eval))
+            .await
+            .expect("answers")
+            .into_inner();
+        assert!(!result.allowed);
+        assert_eq!(
+            offline_records(&dir)[0].correlation_id,
+            "jti-inj",
+            "the record must key on the injection it describes"
+        );
+        assert_eq!(
+            result
+                .log_annotations
+                .get("apf.nvidia.com/correlation-id")
+                .map(String::as_str),
+            Some("jti-inj"),
+            "the denial must carry the same id as the record"
+        );
+    }
+
+    /// Deletion, not addition: removing `/policy` after injection reclassifies
+    /// the request as settings-only, which previously skipped the JWT check,
+    /// the digest check and every sibling check.
+    #[tokio::test]
+    async fn removing_the_injected_policy_before_validate_is_refused() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+
+        let mut ann = BTreeMap::new();
+        ann.insert(
+            "apf.nvidia.com/provenance-token".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue("t".to_string())),
+            },
+        );
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "annotations".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StructValue(ProstStruct {
+                    fields: ann,
+                })),
+            },
+        );
+        // No `policy`: it was injected at MODIFY and removed since.
+        fields.insert(
+            "settingKey".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue(
+                    "log_level".to_string(),
+                )),
+            },
+        );
+
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::Validate(crate::proto::ValidateEvaluation {
+                proposed_operation: Some(ProstStruct { fields }),
+                current_state: None,
+            })),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed,
+            "an injected policy removed before validation must not pass"
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.validate_denied.post_injection_mutation")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+    }
+
+    /// The auto-approval check reads two nested keys; accepting only matched
+    /// spelling pairs let a cross-spelled producer through as settings-only.
+    #[tokio::test]
+    async fn a_cross_spelled_auto_approval_setting_is_still_denied() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "settingKey".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue(
+                    "proposal_approval_mode".to_string(),
+                )),
+            },
+        );
+        let mut inner = BTreeMap::new();
+        inner.insert(
+            "string_value".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue("auto".to_string())),
+            },
+        );
+        fields.insert(
+            "settingValue".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StructValue(ProstStruct {
+                    fields: inner,
+                })),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(ProstStruct { fields }),
+                },
+            )),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed,
+            "a mixed-convention setting must not pass as settings-only"
+        );
+        assert_eq!(
+            offline_records(&dir)[0].reason_code.as_deref(),
+            Some("interceptor.govern_denied.approval_mode_change")
+        );
+    }
+
+    /// The protobuf field name must be recognised too. Recognising only the
+    /// camelCase spelling let a caller present merge operations that neither
+    /// the settings-only classifier nor the direct-mutation denial saw.
+    #[tokio::test]
+    async fn snake_case_merge_operations_are_still_denied_and_recorded() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut op = settings_only_operation_fields("some_setting", "value");
+        op.fields.insert(
+            "merge_operations".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::ListValue(
+                    prost_types::ListValue {
+                        values: vec![ProstValue {
+                            kind: Some(prost_types::value::Kind::StringValue("op".to_string())),
+                        }],
+                    },
+                )),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(op),
+                },
+            )),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed,
+            "merge operations must be denied whichever spelling they arrive in"
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.direct_policy_mutation")
+        );
+        let message = r
+            .error_info
+            .as_ref()
+            .map(|e| e.message.as_str())
+            .unwrap_or_default();
+        assert!(
+            message.contains("merge_operations: true"),
+            "the record must name the attempt: {message}"
+        );
+    }
+
+    /// The case the detail exists for: with both a policy body and an
+    /// auto-approval setting, the code names one and the detail must name both,
+    /// or a caller picks which attempt is visible by adding a field.
+    #[tokio::test]
+    async fn both_attempts_are_named_when_a_request_carries_both() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let mut op = settings_only_operation_fields("proposal_approval_mode", "auto");
+        op.fields.insert(
+            "policy".to_string(),
+            ProstValue {
+                kind: Some(prost_types::value::Kind::StringValue("mine".to_string())),
+            },
+        );
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(op),
+                },
+            )),
+            ..Default::default()
+        };
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.approval_mode_change")
+        );
+        let message = r
+            .error_info
+            .as_ref()
+            .map(|e| e.message.as_str())
+            .unwrap_or_default();
+        assert!(
+            message.contains("policy: true") && message.contains("auto_approval: true"),
+            "the record must name both attempts, not just the one it is coded for: {message}"
+        );
+    }
+
+    /// The deployment-wide injection. Distinct from the sandbox path's code
+    /// because this handler never verifies the token — a consumer filtering on
+    /// `policy_injected` must not pick this up as verified.
+    #[tokio::test]
+    async fn a_config_policy_injection_is_recorded_as_unverified() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let doc = signed_document(&k, "jti-c1", KEY_ID, None, 1);
+        let expected_digest = doc.digest.clone();
+        let h = harness(&k, doc).await;
+
+        let eval = InterceptorEvaluation {
+            method: "UpdateConfig".to_string(),
+            phase: Some(Phase::ModifyOperation(
+                crate::proto::ModifyOperationEvaluation {
+                    proposed_operation: Some(ProstStruct {
+                        fields: BTreeMap::new(),
+                    }),
+                },
+            )),
+            ..Default::default()
+        };
+        let result = h
+            .service
+            .evaluate(Request::new(eval))
+            .await
+            .expect("answers")
+            .into_inner();
+        assert!(result.allowed, "a clean config refresh is permitted");
+
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.policy_injected.unverified"),
+            "must not read as the verified sandbox injection"
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some(expected_digest.as_str()));
+        assert_eq!(
+            r.correlation_id, "jti-c1",
+            "must join to the id injected into the config annotations"
+        );
+        assert_eq!(r.session_id, None, "a config change belongs to no sandbox");
+    }
+
+    /// The auto-approval attempt at VALIDATE is a separate site from the one at
+    /// MODIFY and was previously unexercised.
+    #[tokio::test]
+    async fn an_approval_mode_change_at_validate_is_recorded() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let eval = settings_only_update_config_evaluation(Phase::Validate(
+            crate::proto::ValidateEvaluation {
+                proposed_operation: Some(settings_only_operation_fields(
+                    "proposal_approval_mode",
+                    "auto",
+                )),
+                current_state: None,
+            },
+        ));
+
+        assert!(
+            !svc.evaluate(Request::new(eval))
+                .await
+                .expect("answers")
+                .into_inner()
+                .allowed
+        );
+        assert_eq!(
+            offline_records(&dir)[0].reason_code.as_deref(),
+            Some("interceptor.validate_denied.approval_mode_change")
+        );
+    }
+
+    /// APF owns approval mode, so any caller change to it is a governance
+    /// bypass attempt and the record is its only trace.
+    #[tokio::test]
+    async fn an_approval_mode_change_is_recorded() {
+        use crate::proto::interceptor_evaluation::Phase;
+        let k = key();
+        let (svc, dir) = offline_harness(&k);
+        let eval = settings_only_update_config_evaluation(Phase::ModifyOperation(
+            crate::proto::ModifyOperationEvaluation {
+                proposed_operation: Some(settings_only_operation_fields(
+                    "proposal_approval_mode",
+                    "auto",
+                )),
+            },
+        ));
+
+        let result = svc.evaluate(Request::new(eval)).await.expect("answers");
+        assert!(!result.into_inner().allowed);
+
+        let r = &offline_records(&dir)[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.approval_mode_change")
+        );
+        assert_eq!(r.verb.as_deref(), Some("interceptor.update_config"));
+        assert_eq!(
+            r.session_id, None,
+            "a config operation belongs to no sandbox"
+        );
+    }
+
+    async fn evaluate(h: &Harness) -> InterceptorResult {
+        h.service
+            .evaluate(Request::new(create_sandbox_modify("sbx-9", "alice@corp")))
+            .await
+            .expect("evaluate answers")
+            .into_inner()
+    }
+
+    /// The record must name the policy the token proves and the caller who
+    /// asked, and must be joinable to the sandbox by correlation id.
+    #[tokio::test]
+    async fn an_injected_policy_is_recorded_against_the_verified_token() {
+        let k = key();
+        let doc = signed_document(&k, "jti-1", KEY_ID, None, 1);
+        let expected_digest = doc.digest.clone();
+        let h = harness(&k, doc).await;
+
+        let result = evaluate(&h).await;
+        assert!(result.allowed, "a valid document must be admitted");
+
+        let records = h.records();
+        assert_eq!(records.len(), 1, "exactly one record per admission");
+        let r = &records[0];
+        assert_eq!(r.event_type, apf_audit::EventType::PolicyInjection);
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Success));
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.policy_injected")
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some(expected_digest.as_str()));
+        assert_eq!(
+            r.policy_revision,
+            Some(1),
+            "from the token, not the response"
+        );
+        assert_eq!(r.correlation_id, "jti-1", "joins to the sandbox annotation");
+        assert_eq!(r.session_id.as_deref(), Some("sbx-9"));
+        assert_eq!(r.user_id.as_deref(), Some("alice@corp"));
+
+        // The other half of the join: a record naming an id the sandbox does
+        // not carry is unusable, and VALIDATE reads this same annotation.
+        let annotation = result
+            .patches
+            .iter()
+            .find(|p| p.path.ends_with("correlation-id"))
+            .expect("correlation-id annotation is injected");
+        let injected = annotation
+            .value
+            .as_ref()
+            .and_then(|v| match v.kind.as_ref() {
+                Some(prost_types::value::Kind::StringValue(s)) => Some(s.as_str()),
+                _ => None,
+            })
+            .expect("annotation carries a string");
+        assert_eq!(
+            injected, "jti-1",
+            "the sandbox must carry the id the record names"
+        );
+    }
+
+    /// The digest must come from the signed token, never the response — the
+    /// response is unsigned and can name a different policy.
+    #[tokio::test]
+    async fn a_response_disagreeing_with_the_token_is_refused() {
+        let k = key();
+        let doc = signed_document(&k, "jti-2", KEY_ID, Some(&"b".repeat(64)), 1);
+        let h = harness(&k, doc).await;
+
+        let result = evaluate(&h).await;
+        assert!(!result.allowed);
+
+        let records = h.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].reason_code.as_deref(),
+            Some("interceptor.inject_denied.policy_identity_mismatch")
+        );
+        assert_eq!(records[0].outcome, Some(apf_audit::Outcome::Refused));
+        assert_eq!(
+            records[0].bundle_digest.as_deref(),
+            Some("b".repeat(64).as_str()),
+            "the record names the signed token's policy, not the response's"
+        );
+    }
+
+    /// VALIDATE re-checks the digest but never the version, so a version-only
+    /// disagreement would otherwise reach a running sandbox.
+    #[tokio::test]
+    async fn a_version_only_disagreement_is_refused() {
+        let k = key();
+        let doc = signed_document(&k, "jti-6", KEY_ID, None, 9);
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.inject_denied.policy_identity_mismatch")
+        );
+        assert_eq!(
+            r.policy_revision,
+            Some(1),
+            "the record names the token's revision, not the response's 9"
+        );
+    }
+
+    /// The identity check intercepts a disagreeing digest, so this is reached
+    /// only when the response and token agree and the body does not hash to
+    /// what they both claim.
+    #[tokio::test]
+    async fn a_body_that_does_not_match_its_digest_is_refused() {
+        let k = key();
+        let mut doc = signed_document(&k, "jti-7", KEY_ID, None, 1);
+        // Digest and claim still agree; the body no longer hashes to either.
+        doc.body.push(0);
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.inject_denied.body_digest_mismatch")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+    }
+
+    /// The third conjunct of the claims filter. Without it a token with an
+    /// empty digest claim is still denied, but under the wrong reason code —
+    /// so only the code distinguishes the two.
+    #[tokio::test]
+    async fn a_token_without_a_document_digest_is_refused_as_a_bad_token() {
+        let k = key();
+        let mut doc = signed_document(&k, "jti-8", KEY_ID, None, 1);
+        doc.provenance_token = mint_test_jwt(&k, KEY_ID, "jti-8", "", None);
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        assert_eq!(
+            h.records()[0].reason_code.as_deref(),
+            Some("interceptor.inject_denied.invalid_jwt"),
+            "an unusable claim is a bad token, not a policy mismatch"
+        );
+    }
+
+    /// Revision 0 is the anti-rollback floor, not a revision the token carried,
+    /// so it must be recorded as absent rather than as fact.
+    #[tokio::test]
+    async fn revision_zero_is_recorded_as_absent() {
+        let k = key();
+        let mut doc = signed_document(&k, "jti-9", KEY_ID, None, 0);
+        doc.provenance_token = mint_test_jwt_full(&k, KEY_ID, "jti-9", &doc.digest, None, "", 0);
+        let h = harness(&k, doc).await;
+
+        assert!(evaluate(&h).await.allowed);
+        assert_eq!(h.records()[0].policy_revision, None);
+    }
+
+    /// A token carrying no `jti` would admit a sandbox whose record joins to
+    /// nothing, because VALIDATE compares the empty annotation to the empty
+    /// claim and passes.
+    #[tokio::test]
+    async fn a_token_without_a_jti_is_refused() {
+        let k = key();
+        let doc = signed_document(&k, "", KEY_ID, None, 1);
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        let records = h.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].reason_code.as_deref(),
+            Some("interceptor.inject_denied.invalid_jwt")
+        );
+    }
+
+    /// Asserted separately from the `jti` case: with only one of the two,
+    /// dropping either conjunct from the claims filter still passes.
+    #[tokio::test]
+    async fn a_token_without_a_signer_identity_is_refused() {
+        let k = key();
+        let doc = signed_document(&k, "jti-3", "", None, 1);
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        assert_eq!(
+            h.records()[0].reason_code.as_deref(),
+            Some("interceptor.inject_denied.invalid_jwt")
+        );
+    }
+
+    /// Nothing is proven before the token verifies, so the record names no
+    /// policy rather than one the response merely asserted.
+    #[tokio::test]
+    async fn a_document_with_no_token_is_refused_without_naming_a_policy() {
+        let k = key();
+        let mut doc = signed_document(&k, "jti-4", KEY_ID, None, 1);
+        doc.provenance_token = String::new();
+        let h = harness(&k, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.inject_denied.no_provenance_token")
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some("unverified"));
+        assert_eq!(r.policy_revision, None);
+    }
+
+    /// A token signed by a key the gateway does not trust.
+    #[tokio::test]
+    async fn a_foreign_signed_token_is_refused() {
+        let trusted = key();
+        let foreign = SigningKey::from_bytes(&[9u8; 32]);
+        let doc = signed_document(&foreign, "jti-5", KEY_ID, None, 1);
+        let h = harness(&trusted, doc).await;
+
+        assert!(!evaluate(&h).await.allowed);
+        let r = &h.records()[0];
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.inject_denied.invalid_jwt")
+        );
+        assert_eq!(r.bundle_digest.as_deref(), Some("unverified"));
     }
 }

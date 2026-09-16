@@ -2,6 +2,7 @@
 //! Shared APF audit event model, validator, and v0 JSONL emitter.
 
 mod coercion;
+mod component;
 mod emitter;
 mod events;
 mod model;
@@ -15,7 +16,8 @@ mod validation;
 pub const AUDIT_EVENT_SCHEMA_JSON: &str =
     include_str!("../../../contracts/audit/apf.audit.event.v1.schema.json");
 
-pub use coercion::{UNSPECIFIED, coerce_id, coerce_lower_dotted, coerce_name};
+pub use coercion::{UNSPECIFIED, coerce_digest, coerce_id, coerce_lower_dotted, coerce_name};
+pub use component::{AuditIdentity, ComponentAudit};
 pub use emitter::{AuditEmitter, AuditError, AuditSink, EmitOutcome, JsonlSink};
 pub use events::{
     AdmissionValidationEvent, AuthenticationEvent, AuthorizationEvent, ConfigGovernanceEvent,

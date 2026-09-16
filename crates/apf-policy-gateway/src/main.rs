@@ -33,9 +33,10 @@ use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+use apf_openshell_interceptor::audit::InterceptorAudit;
 use apf_policy_client::PolicyClientHandle;
 use apf_policy_eval::ActivePolicy;
-use apf_policy_gateway::audit::{PolicyGatewayAudit, Seam};
+use apf_policy_gateway::audit::PolicyGatewayAudit;
 use apf_policy_gateway::digest_watcher::{DigestWatcherConfig, spawn_digest_watcher};
 use apf_policy_gateway::engine::{build_evaluator, new_evaluator_channel};
 use apf_policy_gateway::surfaces::evaluation::EvaluationServiceImpl;
@@ -662,7 +663,7 @@ async fn main() -> anyhow::Result<()> {
         build_evaluator_from_policy_set(&policy_set).context("build initial Cedar evaluator")?;
     info!(digest = %doc.digest, "initial PolicySet loaded");
 
-    let audit = PolicyGatewayAudit::to_jsonl_in(&args.audit_log_dir, Seam::Pdp)
+    let audit = PolicyGatewayAudit::to_jsonl_in(&args.audit_log_dir)
         .map_err(|e| anyhow::anyhow!("open audit log in {:?}: {e}", args.audit_log_dir))?;
 
     // Fail-closed, and before the channel exists: a gateway that cannot record
@@ -835,6 +836,14 @@ async fn main() -> anyhow::Result<()> {
             document_name: args.document_name.clone(),
             signing_key_id: args.document_key_id.clone(),
             verifying_key: Arc::clone(&verifying_key),
+            // Its own file: the interceptor is a separate component that
+            // happens to share this process today.
+            audit: InterceptorAudit::to_jsonl_in(&args.audit_log_dir).map_err(|e| {
+                anyhow::anyhow!(
+                    "open interceptor audit log in {:?}: {e}",
+                    args.audit_log_dir
+                )
+            })?,
         };
 
         match prepared {

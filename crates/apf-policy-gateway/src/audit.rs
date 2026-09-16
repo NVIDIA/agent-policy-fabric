@@ -6,52 +6,24 @@
 //! decision trail for the requests an agent actually made.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use apf_audit::{
-    AuditEmitter, AuditErrorInfo, AuditEvent, AuthorizationEvent, CommonFields, Component,
-    Decision, Finding, JsonlSink, Outcome, PolicyActivationEvent, Resource, SanitizationGuard,
-    Severity, TypedAuditEvent, UNSPECIFIED, Verdict, coerce_id, coerce_lower_dotted, coerce_name,
-    generate_correlation_id, generate_decision_id, join_rejection_detail,
+    AuditErrorInfo, AuditIdentity, AuthorizationEvent, CommonFields, ComponentAudit, Decision,
+    Finding, Outcome, PolicyActivationEvent, Resource, SanitizationGuard, Severity,
+    TypedAuditEvent, UNSPECIFIED, Verdict, coerce_digest, coerce_id, coerce_lower_dotted,
+    coerce_name, generate_correlation_id, generate_decision_id, join_rejection_detail,
 };
 use apf_policy_eval::{Finding as EvalFinding, Severity as EvalSeverity, Verdict as EvalVerdict};
 
-/// Which enforcement seam is emitting.
-///
-/// One file each. The seams share this process today but may not later, and a
-/// shared file would make that split a log-path migration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Seam {
-    /// Decisions this gateway's PDP reached.
-    Pdp,
-    /// Sandbox admission, at the OpenShell interceptor.
-    SandboxAdmission,
-    /// Per-request egress, at the OpenShell supervisor middleware.
-    Egress,
-}
-
-impl Seam {
-    /// Component name, and the audit filename stem.
-    ///
-    /// Prefixed by the process, not the adapter crate: all three seams run
-    /// inside this gateway.
-    const fn component(self) -> &'static str {
-        match self {
-            Self::Pdp => "apf-policy-gateway",
-            Self::SandboxAdmission => "apf-policy-gateway-interceptor",
-            Self::Egress => "apf-policy-gateway-middleware",
-        }
-    }
-
-    /// Audit naming rule: `<emitting-process>:<seam>`.
-    const fn enforcement_point_id(self) -> &'static str {
-        match self {
-            Self::Pdp => "apf-policy-gateway:pdp",
-            Self::SandboxAdmission => "apf-policy-gateway:interceptor",
-            Self::Egress => "apf-policy-gateway:middleware",
-        }
-    }
-}
+/// The PDP's own identity. The interceptor and middleware run in this process
+/// but are separate components and own theirs, so each writes its own file.
+const IDENTITY: AuditIdentity = AuditIdentity {
+    component_name: "apf-policy-gateway",
+    enforcement_point_id: "apf-policy-gateway:pdp",
+    runtime_substrate: RUNTIME_SUBSTRATE,
+    trust_root_id: TRUST_ROOT_ID,
+    version: env!("CARGO_PKG_VERSION"),
+};
 
 /// The substrate this gateway governs.
 const RUNTIME_SUBSTRATE: &str = "openshell";
@@ -59,108 +31,53 @@ const RUNTIME_SUBSTRATE: &str = "openshell";
 /// The gateway verifies against the policy service's signing identity.
 const TRUST_ROOT_ID: &str = "apf-policy-service:signing";
 
+/// Stands in for a digest that cannot be recorded as given. Distinct from a
+/// missing bundle: the policy is known, its identity just is not writable.
+const UNRECORDABLE_DIGEST: &str = "unrecordable";
+
 const ALLOW_REASON_CODE: &str = "policy.request_allowed";
 const DENY_REASON_CODE: &str = "policy.request_denied";
 
 /// Audit emitter for gateway events. `disabled()` drops them.
 #[derive(Clone, Default)]
 pub struct PolicyGatewayAudit {
-    inner: Option<Arc<Inner>>,
-}
-
-struct Inner {
-    emitter: AuditEmitter<JsonlSink>,
-    component: Component,
-    seam: Seam,
+    inner: ComponentAudit,
 }
 
 impl PolicyGatewayAudit {
     #[must_use]
     pub fn disabled() -> Self {
-        Self { inner: None }
+        Self::default()
     }
 
-    /// Build an emitter for one seam, writing to `<dir>/<component>-audit.jsonl`
-    /// and opening it now so an unusable directory fails at startup rather than
-    /// at the first decision.
+    /// Writes `<dir>/apf-policy-gateway-audit.jsonl`, opened now so an unusable
+    /// directory fails at startup rather than at the first decision.
     ///
     /// # Errors
     ///
     /// Returns the sink error when the file cannot be opened for appending.
-    pub fn to_jsonl_in(dir: impl AsRef<Path>, seam: Seam) -> Result<Self, String> {
-        let component_name = seam.component();
-        let sink = JsonlSink::new(dir.as_ref().join(format!("{component_name}-audit.jsonl")));
-        sink.preflight().map_err(|e| e.to_string())?;
+    pub fn to_jsonl_in(dir: impl AsRef<Path>) -> Result<Self, String> {
         Ok(Self {
-            inner: Some(Arc::new(Inner {
-                emitter: AuditEmitter::new(sink),
-                component: Component::new(
-                    component_name,
-                    env!("CARGO_PKG_VERSION"),
-                    seam.enforcement_point_id(),
-                ),
-                seam,
-            })),
+            inner: ComponentAudit::to_jsonl_in(dir, IDENTITY)?,
         })
     }
 
-    /// Envelope for an event with no caller behind it — a policy activation.
-    fn common_for_policy(&self, inner: &Inner, digest: &str, revision: u64) -> CommonFields {
-        let mut common = CommonFields::new_without_subject(
-            generate_correlation_id(),
-            inner.seam.enforcement_point_id(),
-            RUNTIME_SUBSTRATE,
-            inner.component.clone(),
-            digest,
-            TRUST_ROOT_ID,
-        );
-        common.policy_revision = Some(revision);
-        common
-    }
-
     /// Envelope for a decision, carrying the caller's identity and correlation.
-    fn common(&self, inner: &Inner, decision: &DecisionRecord<'_>) -> CommonFields {
-        let mut common = CommonFields::new_without_subject(
-            // The caller's correlation id when it sent one, so a decision joins
-            // to the calling gateway's own events; a fresh one otherwise.
-            decision
-                .correlation_id
-                .filter(|id| !id.is_empty())
-                .map_or_else(generate_correlation_id, coerce_id),
-            inner.seam.enforcement_point_id(),
-            RUNTIME_SUBSTRATE,
-            inner.component.clone(),
-            decision.bundle_digest,
-            TRUST_ROOT_ID,
-        );
-        common.policy_revision = Some(decision.policy_revision);
+    fn common(&self, decision: &DecisionRecord<'_>) -> Option<CommonFields> {
+        let mut common = self.inner.common(
+            &coerce_digest(decision.bundle_digest),
+            Some(decision.policy_revision),
+        )?;
+        // The caller's correlation id when it sent one, so a decision joins to
+        // the calling gateway's own events.
+        if let Some(id) = decision.correlation_id.filter(|id| !id.is_empty()) {
+            common.correlation_id = coerce_id(id);
+        }
         // Absent stays absent: a sentinel would assert an identity never sent.
         common.user_id = non_empty(decision.subject);
         common.agent_id = non_empty(decision.agent_type);
         common.session_id = non_empty(decision.sandbox_id);
-        common
-    }
-
-    /// Best-effort: the caller logs and continues.
-    fn emit_best_effort(&self, event: AuditEvent) -> Result<(), String> {
-        let Some(inner) = &self.inner else {
-            return Ok(());
-        };
-        match inner.emitter.emit_best_effort(&event) {
-            apf_audit::EmitOutcome::Written => Ok(()),
-            apf_audit::EmitOutcome::Failed(error) => Err(error),
-        }
-    }
-
-    /// Fail-closed: the caller must halt rather than continue unrecorded.
-    fn emit_required(&self, event: AuditEvent) -> Result<(), String> {
-        let Some(inner) = &self.inner else {
-            return Ok(());
-        };
-        inner
-            .emitter
-            .emit_required(&event)
-            .map_err(|e| e.to_string())
+        Some(common)
     }
 
     /// Record the policy this gateway is now enforcing.
@@ -177,13 +94,13 @@ impl PolicyGatewayAudit {
         digest: &str,
         revision: u64,
     ) -> Result<(), String> {
-        let Some(inner) = &self.inner else {
+        let Some(common) = self.inner.common(digest, Some(revision)) else {
             return Ok(());
         };
         let event = PolicyActivationEvent::new(Outcome::Success, reason_code)
-            .into_audit_event(&self.common_for_policy(inner, digest, revision))
+            .into_audit_event(&common)
             .map_err(|e| e.to_string())?;
-        self.emit_required(event)
+        self.inner.emit_required(&event)
     }
 
     /// Record a decision the PDP reached.
@@ -195,10 +112,9 @@ impl PolicyGatewayAudit {
     ///
     /// Returns the emission error for the caller to log.
     pub fn emit_decision(&self, decision: &DecisionRecord<'_>) -> Result<(), String> {
-        let Some(inner) = &self.inner else {
+        let Some(common) = self.common(decision) else {
             return Ok(());
         };
-        let common = self.common(inner, decision);
         // Coerced so a malformed value cannot drop the record. `resource.id`
         // is what was acted on; the subject belongs to subject identity.
         let resource = Resource::new(
@@ -249,7 +165,7 @@ impl PolicyGatewayAudit {
             .filter(|event| SanitizationGuard::new().check(event).is_ok());
 
         if let Some(event) = event {
-            return self.emit_best_effort(event);
+            return self.inner.emit_best_effort(&event);
         }
 
         // All caller values dropped at once, not retried piecemeal. Sentinels
@@ -263,6 +179,9 @@ impl PolicyGatewayAudit {
         // Required, so regenerated rather than cleared. Coercion fixes the
         // charset; a credential-shaped id passes it and still trips sanitizing.
         common.correlation_id = generate_correlation_id();
+        // Coercion fixes the charset only, so a credential-shaped digest would
+        // trip the sanitizer on the retry exactly as it did on the primary.
+        common.bundle_digest = UNRECORDABLE_DIGEST.to_owned();
 
         // The fallback keeps the primary's decision: an allow that degrades
         // must never read as a request that was blocked, or vice versa.
@@ -281,7 +200,7 @@ impl PolicyGatewayAudit {
         .into_audit_event(&common)
         .map_err(|e| e.to_string())?;
         fallback.reason = Some("caller-supplied request detail omitted".to_owned());
-        self.emit_best_effort(fallback)
+        self.inner.emit_best_effort(&fallback)
     }
 }
 
@@ -381,28 +300,16 @@ pub struct DecisionRecord<'a> {
 mod audit_tests {
     use super::*;
 
-    /// One file per seam, named for the process that writes it. Pinned because
-    /// a rename is invisible at runtime — the logs simply appear somewhere else,
-    /// and a consumer tailing the old path goes quiet without erroring.
+    /// The filename is pinned because a rename is invisible at runtime — the
+    /// logs simply appear elsewhere and a consumer tailing the old path goes
+    /// quiet without erroring.
     #[test]
-    fn each_seam_writes_its_own_file() {
+    fn the_pdp_writes_its_own_file() {
         let dir = tempfile::tempdir().expect("temp dir");
-        for (seam, expected) in [
-            (Seam::Pdp, "apf-policy-gateway-audit.jsonl"),
-            (
-                Seam::SandboxAdmission,
-                "apf-policy-gateway-interceptor-audit.jsonl",
-            ),
-            (Seam::Egress, "apf-policy-gateway-middleware-audit.jsonl"),
-        ] {
-            PolicyGatewayAudit::to_jsonl_in(dir.path(), seam)
-                .expect("build emitter")
-                .emit_policy_activated("policy.bundle_activated", &"a".repeat(64), 1)
-                .expect("activation recorded");
-            assert!(
-                dir.path().join(expected).exists(),
-                "{seam:?} should write {expected}"
-            );
-        }
+        PolicyGatewayAudit::to_jsonl_in(dir.path())
+            .expect("build emitter")
+            .emit_policy_activated("policy.bundle_activated", &"a".repeat(64), 1)
+            .expect("activation recorded");
+        assert!(dir.path().join("apf-policy-gateway-audit.jsonl").exists());
     }
 }

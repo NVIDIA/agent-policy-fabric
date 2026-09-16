@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+apf-audit           = { path = "../apf-audit" }
 apf-openshell-auth = { path = "../apf-openshell-auth" }
 apf-proto           = { path = "../apf-proto" }
 apf-policy-client   = { path = "../apf-policy-client" }
@@ -32,5 +33,12 @@ tracing       = "0.1"
 uuid          = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+# Serves a stub policy service over a UDS so admission tests can reach past
+# the document fetch. Same version already in the workspace lockfile.
+tokio-stream = { version = "0.1", features = ["net"] }
+# `SigningKey::generate` in tests. Enabled here rather than relying on another
+# workspace crate's feature unification, which broke `cargo test -p` alone.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 jsonwebtoken = "9"
+tempfile     = "3"
 rand         = { version = "0.8", features = ["getrandom"] }

@@ -42,6 +42,18 @@ pub fn coerce_id(value: &str) -> String {
     coerce(value, &['.', '_', ':', '@', '/', '+', '-', '='], 512)
 }
 
+/// `$defs/digest`'s opaque-token alternative: alphanumerics plus `._:@/+-=`,
+/// 256 characters.
+///
+/// Fixes the charset only. A credential-shaped digest passes this and still
+/// trips sanitizing, and the fallback reuses the same envelope — so a producer
+/// must also replace the digest with a sentinel in its fallback, the way it
+/// regenerates `correlation_id`.
+#[must_use]
+pub fn coerce_digest(value: &str) -> String {
+    coerce(value, &['.', '_', ':', '@', '/', '+', '-', '='], 256)
+}
+
 /// `$defs/reason_code` and `$defs/verb`, which share one pattern:
 /// dot-separated lowercase segments, 160 characters.
 ///
@@ -142,6 +154,12 @@ mod tests {
             assert!(
                 matches_profile(&i, &['.', '_', ':', '@', '/', '+', '-', '='], 512),
                 "id rejected {i:?} from {input:?}"
+            );
+
+            let g = coerce_digest(&input);
+            assert!(
+                matches_profile(&g, &['.', '_', ':', '@', '/', '+', '-', '='], 256),
+                "digest rejected {g:?} from {input:?}"
             );
 
             let d = coerce_lower_dotted(&input);

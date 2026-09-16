@@ -108,7 +108,6 @@ impl EvaluationService for EvaluationServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::Seam;
     use crate::engine::new_evaluator_channel;
     use apf_audit::AuditEvent;
     use apf_policy_eval::{
@@ -142,7 +141,7 @@ mod tests {
         drop(_tx);
         EvaluationServiceImpl {
             evaluator: rx,
-            audit: PolicyGatewayAudit::to_jsonl_in(dir, Seam::Pdp).expect("build emitter"),
+            audit: PolicyGatewayAudit::to_jsonl_in(dir).expect("build emitter"),
         }
     }
 

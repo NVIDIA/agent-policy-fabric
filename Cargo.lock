@@ -199,6 +199,7 @@ name = "apf-openshell-interceptor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apf-audit",
  "apf-openshell-auth",
  "apf-policy-client",
  "apf-proto",
@@ -214,8 +215,10 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tracing",
  "uuid",
