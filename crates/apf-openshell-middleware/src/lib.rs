@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+pub mod audit;
 pub mod middleware;
 pub mod patches;
 pub use apf_openshell_auth::{

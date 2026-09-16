@@ -783,3 +783,44 @@ fn distinct_faults_at_one_path_both_survive_dedup() {
     assert!(violations.contains("BAD1"), "got {violations}");
     assert!(violations.contains("BAD2"), "got {violations}");
 }
+
+/// `accepts_string` lets a producer drop one unrecordable field instead of
+/// losing the record. It duplicates `check`'s rules, so a drift would be
+/// silent: a producer would keep a value the guard then rejects, and the whole
+/// record would degrade — exactly what asking was meant to avoid.
+#[test]
+fn accepts_string_agrees_with_the_guard_it_speaks_for() {
+    use apf_audit::SanitizationGuard;
+
+    let cases = [
+        // Ordinary values a policy would plausibly author.
+        "x-openshell-middleware-trace",
+        "/messages/0/content",
+        "content.class",
+        // Credential-shaped, including the substring case that motivated this:
+        // "task-classification" contains "sk-".
+        "x-openshell-middleware-task-classification-id",
+        "sk-abcdefghijklmnopqrstuvwxyz",
+        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        "AKIAIOSFODNN7EXAMPLE",
+        "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc",
+    ];
+
+    // The length rule is not exercised here: `label` caps at 256, well under
+    // the guard's 2048, so no value reaches it through this field. Both sides
+    // read the same constant.
+    for case in cases {
+        // The label is unpatterned, so the value reaches the guard unchanged
+        // and the event's fate is decided by the guard alone.
+        let event = authorize(vec![Finding::new("probe", case, Severity::Low)])
+            .into_audit_event(&ctx())
+            .expect("an unpatterned label always validates");
+        let guard_accepts = SanitizationGuard::new().check(&event).is_ok();
+
+        assert_eq!(
+            SanitizationGuard::accepts_string(case),
+            guard_accepts,
+            "predicate and guard disagree on {case:?}"
+        );
+    }
+}

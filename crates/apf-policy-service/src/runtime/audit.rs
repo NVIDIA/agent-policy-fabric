@@ -3,8 +3,9 @@
 //!
 //! Evaluation events belong to policy-gateway; this component never evaluates.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use apf_audit::{
     AuditEmitter, AuditErrorInfo, AuditEvent, AuthenticationEvent, CommonFields, Component,
@@ -109,6 +110,10 @@ pub struct PolicyServiceAudit {
 struct Inner {
     emitter: AuditEmitter<JsonlSink>,
     component: Component,
+    /// Last `(digest, version)` recorded per `(kind, name)`. A refresh poll
+    /// that returns the same document is a liveness check, not a distribution,
+    /// and recording it as one both overstates it and buries the real events.
+    vended: Mutex<HashMap<(String, String), (String, u64)>>,
 }
 
 impl PolicyServiceAudit {
@@ -139,6 +144,7 @@ impl PolicyServiceAudit {
                     env!("CARGO_PKG_VERSION"),
                     ENFORCEMENT_POINT_ID,
                 ),
+                vended: Mutex::new(HashMap::new()),
             })),
         })
     }
@@ -397,10 +403,15 @@ impl PolicyServiceAudit {
     /// Emitted from both serving surfaces: the gRPC socket gateways poll, and
     /// the optional HTTP surface.
     ///
-    /// Best-effort by design. This fires per request from every gateway on
-    /// every poll, and refusing to serve policy because a log line did not
-    /// write would take the fleet down over a full disk. Unlike a bundle load,
-    /// the record is distribution evidence rather than a security property.
+    /// Records a document the first time it is served and whenever its digest
+    /// or version changes. An unchanged re-poll writes nothing: gateways poll
+    /// on a timer, so recording every one produced thousands of byte-identical
+    /// records a day that named no caller and evidenced no distribution.
+    ///
+    /// Best-effort by design. Refusing to serve policy because a log line did
+    /// not write would take the fleet down over a full disk. Unlike a bundle
+    /// load, the record is distribution evidence rather than a security
+    /// property.
     ///
     /// # Errors
     ///
@@ -421,6 +432,24 @@ impl PolicyServiceAudit {
         // whether or not its bundle can be named.
         let unbundled = digest.is_empty();
         let digest = if unbundled { UNBUNDLED_DIGEST } else { digest };
+
+        // Keyed on the raw kind/name, before coercion: two documents whose
+        // names coerce alike are still distinct documents.
+        let key = (kind.to_owned(), name.to_owned());
+        let current = (digest.to_owned(), version);
+        // A poisoned lock is recovered rather than propagated: the guarded
+        // region only touches owned strings, so there is nothing to corrupt.
+        let already_recorded = |inner: &Inner| {
+            let vended = match inner.vended.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            vended.get(&key) == Some(&current)
+        };
+        // Held only for the lookup, never across the write.
+        if already_recorded(inner) {
+            return Ok(());
+        }
         let vend = |kind: &str, name: &str| {
             PolicyDistributionEvent::new(
                 Resource::new(kind.to_owned(), name.to_owned()),
@@ -440,11 +469,27 @@ impl PolicyServiceAudit {
         // Same protection as the denial path: a document whose own name the
         // record cannot carry would otherwise vanish from the distribution
         // evidence entirely, every time it is served.
+        // Recorded only once the write succeeded. Marking it first would turn
+        // a transient failure — a full disk, the very thing this suppression
+        // protects — into permanent loss of that bundle's distribution record,
+        // since no later poll would try again.
+        let remember = |inner: &Inner| {
+            let mut vended = match inner.vended.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            vended.insert(key.clone(), current.clone());
+        };
+
         if let Some(mut event) = vend(&safe_name(kind), &safe_id(name)) {
             if unbundled {
                 event.reason = Some(NO_BUNDLE_REASON.to_owned());
             }
-            return self.emit_best_effort(event);
+            let outcome = self.emit_best_effort(event);
+            if outcome.is_ok() {
+                remember(inner);
+            }
+            return outcome;
         }
         let Some(mut fallback) = vend("unspecified", "unspecified") else {
             return Err("vend record could not be constructed".to_owned());
@@ -454,7 +499,11 @@ impl PolicyServiceAudit {
         } else {
             "document kind and name omitted".to_owned()
         });
-        self.emit_best_effort(fallback)
+        let outcome = self.emit_best_effort(fallback);
+        if outcome.is_ok() {
+            remember(inner);
+        }
+        outcome
     }
 
     /// Record a document request refused by this surface — unknown kind or
@@ -814,6 +863,143 @@ mod tests {
         assert_eq!(
             fell_back, 1,
             "only the credential-shaped name should reach the fallback: {written}"
+        );
+    }
+
+    /// Gateways poll on a timer. Recording every unchanged answer produced
+    /// thousands of byte-identical records a day, burying the real events and
+    /// risking the disk that fail-closed writes depend on.
+    #[test]
+    fn an_unchanged_re_poll_writes_nothing() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let audit = PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        let digest = "c".repeat(64);
+
+        for _ in 0..50 {
+            audit
+                .emit_document_vended(&digest, "openshell.sandbox.v1", "default", 1)
+                .expect("vended");
+        }
+
+        let written = std::fs::read_to_string(dir.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        assert_eq!(
+            written.lines().count(),
+            1,
+            "first vend records, the other 49 are liveness checks: {written}"
+        );
+    }
+
+    /// Suppression must not cost a real distribution. A new digest, a new
+    /// version, or a different document each mean policy actually moved.
+    #[test]
+    fn a_changed_document_still_records() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let audit = PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        let v1 = "d".repeat(64);
+        let v2 = "e".repeat(64);
+
+        audit
+            .emit_document_vended(&v1, "openshell.sandbox.v1", "default", 1)
+            .expect("first vend");
+        audit
+            .emit_document_vended(&v1, "openshell.sandbox.v1", "default", 1)
+            .expect("unchanged");
+        // Hot-swap: the whole point of auditing distribution.
+        audit
+            .emit_document_vended(&v2, "openshell.sandbox.v1", "default", 2)
+            .expect("new digest");
+        // Same digest, new projection version.
+        audit
+            .emit_document_vended(&v2, "openshell.sandbox.v1", "default", 3)
+            .expect("new version");
+        // A different document is tracked separately, not shadowed.
+        audit
+            .emit_document_vended(&v2, "openshell.provider-profile.v1", "slack", 3)
+            .expect("other document");
+        // Back to the first digest — a rollback is a distribution too.
+        audit
+            .emit_document_vended(&v1, "openshell.sandbox.v1", "default", 1)
+            .expect("rollback");
+
+        let written = std::fs::read_to_string(dir.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        assert_eq!(
+            written.lines().count(),
+            5,
+            "only the repeat is dropped: {written}"
+        );
+    }
+
+    /// Two documents from one bundle share a digest and version exactly, so
+    /// only `kind` separates them. Without it in the key they mask each other
+    /// permanently — one is served for the life of the process unrecorded.
+    #[test]
+    fn documents_differing_only_by_kind_are_tracked_apart() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let audit = PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        let digest = "f".repeat(64);
+
+        audit
+            .emit_document_vended(&digest, "openshell.sandbox.v1", "default", 1)
+            .expect("sandbox doc");
+        audit
+            .emit_document_vended(&digest, "openshell.provider-profile.v1", "default", 1)
+            .expect("profile doc, same name and version");
+
+        let written = std::fs::read_to_string(dir.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        assert_eq!(
+            written.lines().count(),
+            2,
+            "same name, different kind: both are distributions: {written}"
+        );
+    }
+
+    /// One bundle serves many documents of the same kind — the demo bundle has
+    /// six provider profiles — all sharing a digest and version. Without `name`
+    /// in the key the first one served masks the rest permanently.
+    #[test]
+    fn documents_differing_only_by_name_are_tracked_apart() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let audit = PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        let digest = "9".repeat(64);
+
+        for name in ["slack", "github", "anthropic"] {
+            audit
+                .emit_document_vended(&digest, "openshell.provider-profile.v1", name, 1)
+                .expect("profile vended");
+        }
+
+        let written = std::fs::read_to_string(dir.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        assert_eq!(
+            written.lines().count(),
+            3,
+            "same kind, digest and version: each name is its own document: {written}"
+        );
+    }
+
+    /// A hot-swap can carry a new bundle at the same projection version, so the
+    /// digest has to discriminate on its own.
+    #[test]
+    fn a_digest_change_alone_still_records() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let audit = PolicyServiceAudit::to_jsonl_in(dir.path()).expect("build emitter");
+
+        audit
+            .emit_document_vended(&"1".repeat(64), "openshell.sandbox.v1", "default", 4)
+            .expect("first bundle");
+        audit
+            .emit_document_vended(&"2".repeat(64), "openshell.sandbox.v1", "default", 4)
+            .expect("new bundle, same version");
+
+        let written = std::fs::read_to_string(dir.path().join("apf-policy-service-audit.jsonl"))
+            .expect("audit file");
+        assert_eq!(
+            written.lines().count(),
+            2,
+            "the digest alone must discriminate: {written}"
         );
     }
 

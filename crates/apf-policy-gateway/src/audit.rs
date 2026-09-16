@@ -133,9 +133,9 @@ impl PolicyGatewayAudit {
                 ALLOW_REASON_CODE,
             )
             .with_findings(decision.findings.to_vec())
-            // Also drops any finding of kind `policy_verdict`, the wire's
-            // stand-in for the verdict field. The kind is not reserved
-            // upstream, so a policy that defines it loses that finding here.
+            // Also drops any finding of kind `policy_verdict`: the schema
+            // rejects it beside a verdict, so a policy that defines that kind
+            // loses the finding rather than the whole record.
             .with_verdict(decision.verdict)
             .into_audit_event(&common)
         } else {

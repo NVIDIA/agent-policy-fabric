@@ -34,6 +34,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use apf_openshell_interceptor::audit::InterceptorAudit;
+use apf_openshell_middleware::audit::MiddlewareAudit;
 use apf_policy_client::PolicyClientHandle;
 use apf_policy_eval::ActivePolicy;
 use apf_policy_gateway::audit::PolicyGatewayAudit;
@@ -824,6 +825,14 @@ async fn main() -> anyhow::Result<()> {
     // OpenShell gateway interceptor — enabled when --openshell-interceptor-addr is set.
     // The trust/TLS wrapper owns authentication dispatch and message limits;
     // this runtime owns only listener transport and explicit mode selection.
+    // Opened only when a middleware listener is configured: a stale audit file
+    // must not fail a startup that would never have served this seam.
+    let middleware_audit = || {
+        MiddlewareAudit::to_jsonl_in(&args.audit_log_dir).map_err(|e| {
+            anyhow::anyhow!("open middleware audit log in {:?}: {e}", args.audit_log_dir)
+        })
+    };
+
     if let Some(prepared) = interceptor_server {
         use apf_openshell_interceptor::server::{GatewayInterceptorService, InterceptorConfig};
 
@@ -903,8 +912,11 @@ async fn main() -> anyhow::Result<()> {
                 mut server,
             } => {
                 let audience = verifier.audience().to_string();
-                let service =
-                    SupervisorMiddlewareService::authenticated_server(eval_rx.clone(), verifier);
+                let service = SupervisorMiddlewareService::authenticated_server(
+                    eval_rx.clone(),
+                    verifier,
+                    middleware_audit()?,
+                );
                 info!(%addr, %audience, "authenticated OpenShell supervisor middleware enabled");
                 tasks.spawn(async move {
                     server
@@ -919,7 +931,10 @@ async fn main() -> anyhow::Result<()> {
                     %addr,
                     "INSECURE OpenShell supervisor middleware enabled without TLS or caller authentication"
                 );
-                let service = SupervisorMiddlewareService::insecure_server(eval_rx.clone());
+                let service = SupervisorMiddlewareService::insecure_server(
+                    eval_rx.clone(),
+                    middleware_audit()?,
+                );
                 tasks.spawn(async move {
                     tonic::transport::Server::builder()
                         .add_service(service)

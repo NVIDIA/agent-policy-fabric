@@ -229,6 +229,7 @@ name = "apf-openshell-middleware"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apf-audit",
  "apf-openshell-auth",
  "apf-policy-eval",
  "apf-proto",

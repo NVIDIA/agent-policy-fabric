@@ -15,6 +15,14 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
 use crate::audit::{AdmissionPhase, AdmissionRecord, InterceptorAudit, Outcome};
+
+/// The policy a decision was made under. The two are read together so a
+/// hot-swap cannot pair one policy's digest with another's revision.
+#[derive(Clone, Copy)]
+struct PolicyIdentity<'a> {
+    digest: &'a str,
+    revision: Option<u64>,
+}
 use crate::bindings;
 use crate::context;
 use crate::patches::{self, PatchError};
@@ -346,11 +354,15 @@ impl GatewayInterceptorService {
         &self,
         ctx: &context::SandboxReviewContext,
         correlation_id: &str,
-        policy_digest: &str,
-        policy_revision: Option<u64>,
+        policy: PolicyIdentity<'_>,
         reason_code: &str,
         outcome: Outcome<'_>,
+        applied: apf_audit::Effects,
     ) {
+        let PolicyIdentity {
+            digest: policy_digest,
+            revision: policy_revision,
+        } = policy;
         if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
             outcome,
             phase: AdmissionPhase::Injection,
@@ -364,6 +376,7 @@ impl GatewayInterceptorService {
             correlation_id,
             policy_digest,
             policy_revision,
+            applied,
         }) {
             warn!(error = %e, "audit emission failed for sandbox admission");
         }
@@ -413,12 +426,15 @@ impl GatewayInterceptorService {
                 &ctx.correlation_id,
                 // Nothing is proven yet, so the record names no policy rather
                 // than one the response merely asserted.
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 "interceptor.inject_denied.no_provenance_token",
                 Outcome::Refused {
                     detail: "policy service vended no provenance token",
                 },
+                apf_audit::Effects::default(),
             );
             return Ok(Response::new(deny_with_context(
                 "policy service vended no provenance token",
@@ -443,12 +459,15 @@ impl GatewayInterceptorService {
                 &ctx.correlation_id,
                 // Nothing is proven yet, so the record names no policy rather
                 // than one the response merely asserted.
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 "interceptor.inject_denied.invalid_jwt",
                 Outcome::Refused {
                     detail: "provenance JWT invalid",
                 },
+                apf_audit::Effects::default(),
             );
             return Ok(Response::new(deny_with_context(
                 "provenance JWT invalid",
@@ -489,10 +508,13 @@ impl GatewayInterceptorService {
             self.record_admission(
                 &ctx,
                 &ctx.correlation_id,
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 "interceptor.inject_denied.invalid_jwt",
                 Outcome::Refused { detail },
+                apf_audit::Effects::default(),
             );
             return Ok(Response::new(deny_with_context(
                 detail,
@@ -517,12 +539,15 @@ impl GatewayInterceptorService {
             self.record_admission(
                 &ctx,
                 &ctx.correlation_id,
-                &verified.apf_document_digest,
-                Some(verified.apf_version).filter(|v| *v != 0),
+                PolicyIdentity {
+                    digest: &verified.apf_document_digest,
+                    revision: Some(verified.apf_version).filter(|v| *v != 0),
+                },
                 "interceptor.inject_denied.policy_identity_mismatch",
                 Outcome::Refused {
                     detail: "response policy identity disagrees with the signed token",
                 },
+                apf_audit::Effects::default(),
             );
             return Ok(Response::new(deny_with_context(
                 "response policy identity disagrees with the signed token",
@@ -549,12 +574,15 @@ impl GatewayInterceptorService {
                 self.record_admission(
                     &ctx,
                     &ctx.correlation_id,
-                    &verified_digest,
-                    verified_version,
+                    PolicyIdentity {
+                        digest: &verified_digest,
+                        revision: verified_version,
+                    },
                     "interceptor.inject_denied.unsigned_projection",
                     Outcome::Refused {
                         detail: "policy projection has no provenance token",
                     },
+                    apf_audit::Effects::default(),
                 );
                 return Ok(Response::new(deny_with_context(
                     "policy projection has no provenance token",
@@ -571,12 +599,15 @@ impl GatewayInterceptorService {
                 self.record_admission(
                     &ctx,
                     &ctx.correlation_id,
-                    &verified_digest,
-                    verified_version,
+                    PolicyIdentity {
+                        digest: &verified_digest,
+                        revision: verified_version,
+                    },
                     "interceptor.inject_denied.body_digest_mismatch",
                     Outcome::Refused {
                         detail: "policy body digest mismatch",
                     },
+                    apf_audit::Effects::default(),
                 );
                 return Ok(Response::new(deny_with_context(
                     "policy body digest mismatch",
@@ -671,13 +702,42 @@ impl GatewayInterceptorService {
         // The JWT-derived id, not `ctx`: it is what lands in the sandbox
         // annotation and what VALIDATE reads back, so a record keyed on
         // anything else cannot be joined to the sandbox it admitted.
+        // What the injection changed. `policy_injected` alone says a policy
+        // went in; this says which spec paths it rewrote — including the
+        // `/annotations/...` provenance stamps. Paths and ops only: the patch
+        // values carry the policy itself.
+        let applied = apf_audit::Effects {
+            patch_count: Some(patch_list.len() as u64),
+            patches: patch_list
+                .iter()
+                .filter_map(|p| {
+                    // An op the record cannot name is omitted rather than
+                    // guessed at; `patch_count` stays exact either way.
+                    let op = match p.op.as_str() {
+                        "add" => apf_audit::PatchOp::Add,
+                        "replace" => apf_audit::PatchOp::Replace,
+                        "remove" => apf_audit::PatchOp::Remove,
+                        _ => return None,
+                    };
+                    Some(apf_audit::PatchRecord::new(
+                        p.path.chars().take(256).collect::<String>(),
+                        op,
+                    ))
+                })
+                .collect(),
+            ..apf_audit::Effects::default()
+        };
+
         self.record_admission(
             &ctx,
             &correlation_id,
-            &verified_digest,
-            verified_version,
+            PolicyIdentity {
+                digest: &verified_digest,
+                revision: verified_version,
+            },
             "interceptor.policy_injected",
             Outcome::Allowed,
+            applied,
         );
 
         Ok(Response::new(InterceptorResult {
@@ -699,11 +759,14 @@ impl GatewayInterceptorService {
         sandbox_id: &str,
         agent_type: &str,
         correlation_id: &str,
-        policy_digest: &str,
-        policy_revision: Option<u64>,
+        policy: PolicyIdentity<'_>,
         reason_code: &str,
         outcome: Outcome<'_>,
     ) {
+        let PolicyIdentity {
+            digest: policy_digest,
+            revision: policy_revision,
+        } = policy;
         if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
             outcome,
             phase: AdmissionPhase::Validation,
@@ -717,6 +780,7 @@ impl GatewayInterceptorService {
             correlation_id,
             policy_digest,
             policy_revision,
+            applied: apf_audit::Effects::default(),
         }) {
             warn!(error = %e, "audit emission failed for sandbox validation");
         }
@@ -768,8 +832,10 @@ impl GatewayInterceptorService {
                 sandbox_id,
                 agent_type,
                 correlation_id,
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 if token_present {
                     "interceptor.validate_denied.provenance_invalid"
                 } else {
@@ -806,8 +872,10 @@ impl GatewayInterceptorService {
                     sandbox_id,
                     agent_type,
                     correlation_id,
-                    &claims.apf_document_digest,
-                    Some(claims.apf_version).filter(|v| *v != 0),
+                    PolicyIdentity {
+                        digest: &claims.apf_document_digest,
+                        revision: Some(claims.apf_version).filter(|v| *v != 0),
+                    },
                     "interceptor.validate_denied.spec_digest_mismatch",
                     Outcome::Refused {
                         detail: "sandbox spec changed between inject and validate",
@@ -831,8 +899,10 @@ impl GatewayInterceptorService {
             sandbox_id,
             agent_type,
             correlation_id,
-            &claims.apf_document_digest,
-            Some(claims.apf_version).filter(|v| *v != 0),
+            PolicyIdentity {
+                digest: &claims.apf_document_digest,
+                revision: Some(claims.apf_version).filter(|v| *v != 0),
+            },
             if claims.apf_spec_digest.is_empty() {
                 "interceptor.validate_allowed.no_spec_digest"
             } else {
@@ -852,11 +922,14 @@ impl GatewayInterceptorService {
         &self,
         ctx: &context::ProviderReviewContext,
         correlation_id: &str,
-        policy_digest: &str,
-        policy_revision: Option<u64>,
+        policy: PolicyIdentity<'_>,
         reason_code: &str,
         outcome: Outcome<'_>,
     ) {
+        let PolicyIdentity {
+            digest: policy_digest,
+            revision: policy_revision,
+        } = policy;
         if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
             outcome,
             phase: AdmissionPhase::Governance,
@@ -870,6 +943,7 @@ impl GatewayInterceptorService {
             correlation_id,
             policy_digest,
             policy_revision,
+            applied: apf_audit::Effects::default(),
         }) {
             warn!(error = %e, "audit emission failed for config governance");
         }
@@ -904,8 +978,10 @@ impl GatewayInterceptorService {
                 self.record_governance(
                     &ctx,
                     &ctx.correlation_id,
-                    UNVERIFIED_POLICY,
-                    None,
+                    PolicyIdentity {
+                        digest: UNVERIFIED_POLICY,
+                        revision: None,
+                    },
                     "interceptor.govern_denied.approval_mode_change",
                     Outcome::Refused {
                         detail: "approval mode is managed by APF",
@@ -944,8 +1020,10 @@ impl GatewayInterceptorService {
             self.record_governance(
                 &ctx,
                 &ctx.correlation_id,
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 if sets_auto_approval {
                     "interceptor.govern_denied.approval_mode_change"
                 } else {
@@ -1004,8 +1082,10 @@ impl GatewayInterceptorService {
                 self.record_governance(
                     &ctx,
                     &ctx.correlation_id,
-                    UNVERIFIED_POLICY,
-                    None,
+                    PolicyIdentity {
+                        digest: UNVERIFIED_POLICY,
+                        revision: None,
+                    },
                     "interceptor.govern_denied.body_digest_mismatch",
                     Outcome::Refused {
                         detail: "policy body does not hash to the digest in its own token",
@@ -1055,8 +1135,10 @@ impl GatewayInterceptorService {
             self.record_governance(
                 &ctx,
                 &ctx.correlation_id,
-                &claims.apf_document_digest,
-                Some(claims.apf_version).filter(|v| *v != 0),
+                PolicyIdentity {
+                    digest: &claims.apf_document_digest,
+                    revision: Some(claims.apf_version).filter(|v| *v != 0),
+                },
                 "interceptor.govern_denied.policy_identity_mismatch",
                 Outcome::Refused {
                     detail: "response policy identity disagrees with the token",
@@ -1168,8 +1250,10 @@ impl GatewayInterceptorService {
             // The same value that lands in the config annotations and that
             // VALIDATE reads back — the jti when claims parse, ctx otherwise.
             &correlation_id,
-            &policy_digest,
-            Some(policy_version).filter(|v| *v != 0),
+            PolicyIdentity {
+                digest: &policy_digest,
+                revision: Some(policy_version).filter(|v| *v != 0),
+            },
             // A distinct code, not the sandbox path's: this handler never
             // verifies the token, so the digest names what was injected without
             // anything having proved it. Reusing `policy_injected` would make
@@ -1233,8 +1317,10 @@ impl GatewayInterceptorService {
                 self.record_governance(
                     &ctx,
                     refusal_correlation_id,
-                    UNVERIFIED_POLICY,
-                    None,
+                    PolicyIdentity {
+                        digest: UNVERIFIED_POLICY,
+                        revision: None,
+                    },
                     "interceptor.validate_denied.post_injection_mutation",
                     // Hedged: the annotation is caller-presented and unverified
                     // here, so a fabricated one reaches this branch. What is
@@ -1261,8 +1347,10 @@ impl GatewayInterceptorService {
                 self.record_governance(
                     &ctx,
                     refusal_correlation_id,
-                    UNVERIFIED_POLICY,
-                    None,
+                    PolicyIdentity {
+                        digest: UNVERIFIED_POLICY,
+                        revision: None,
+                    },
                     "interceptor.validate_denied.approval_mode_change",
                     Outcome::Refused {
                         detail: "approval mode is managed by APF",
@@ -1313,8 +1401,10 @@ impl GatewayInterceptorService {
             self.record_governance(
                 &provider_ctx,
                 recorded_correlation_id,
-                UNVERIFIED_POLICY,
-                None,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
                 if token_present {
                     "interceptor.validate_denied.provenance_invalid"
                 } else {
@@ -1349,8 +1439,10 @@ impl GatewayInterceptorService {
                 self.record_governance(
                     &context::extract_provider(&eval),
                     correlation_id,
-                    &claims.apf_document_digest,
-                    Some(claims.apf_version).filter(|v| *v != 0),
+                    PolicyIdentity {
+                        digest: &claims.apf_document_digest,
+                        revision: Some(claims.apf_version).filter(|v| *v != 0),
+                    },
                     "interceptor.validate_denied.spec_digest_mismatch",
                     Outcome::Refused {
                         detail: "config policy changed between injection and validation",
@@ -1384,8 +1476,10 @@ impl GatewayInterceptorService {
             self.record_governance(
                 &ctx,
                 correlation_id,
-                &claims.apf_document_digest,
-                Some(claims.apf_version).filter(|v| *v != 0),
+                PolicyIdentity {
+                    digest: &claims.apf_document_digest,
+                    revision: Some(claims.apf_version).filter(|v| *v != 0),
+                },
                 // One code for "the operation changed after injection", shared
                 // with the deletion refusal above; the detail names which
                 // field. The approval-mode refusal keeps its own code.
@@ -3720,6 +3814,40 @@ mod admission_audit_tests {
         assert_eq!(r.correlation_id, "jti-1", "joins to the sandbox annotation");
         assert_eq!(r.session_id.as_deref(), Some("sbx-9"));
         assert_eq!(r.user_id.as_deref(), Some("alice@corp"));
+
+        // The record has to say what the injection changed, not only that one
+        // happened — otherwise reconstructing it means going back to the bundle.
+        let effects = r.effects.as_ref().expect("the injection is recorded");
+        let count = effects.patch_count.expect("patch count recorded");
+        assert!(count > 0, "an injection that patched nothing is not one");
+        assert_eq!(effects.patches.len() as u64, count, "every patch listed");
+        assert!(
+            effects.patches.iter().all(|p| p.path.starts_with('/')),
+            "JSON pointers, not values: {:?}",
+            effects.patches
+        );
+        assert!(
+            effects
+                .patches
+                .iter()
+                .any(|p| p.path.contains("document-digest")),
+            "the provenance annotation stamps are named: {:?}",
+            effects.patches
+        );
+        // Fidelity, not just presence: each audited (path, op) pair must match
+        // what the response actually carried, or the record claims different
+        // spec edits than the ones made.
+        assert_eq!(effects.patches.len(), result.patches.len());
+        for (recorded, actual) in effects.patches.iter().zip(&result.patches) {
+            assert_eq!(recorded.path, actual.path);
+            assert_eq!(recorded.op.as_str(), actual.op, "op for {}", actual.path);
+        }
+        // The token is a patch VALUE. Recording paths must never carry it.
+        let line = serde_json::to_string(r).expect("record serializes");
+        assert!(
+            !line.contains("token\":\"ey"),
+            "no patch value may reach the record: {line}"
+        );
 
         // The other half of the join: a record naming an id the sandbox does
         // not carry is unusable, and VALIDATE reads this same annotation.

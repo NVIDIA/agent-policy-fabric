@@ -10,7 +10,10 @@
 use std::fmt;
 use std::sync::Arc;
 
-use tracing::{debug, info};
+use crate::audit::{BindingMismatch, EgressRecord, MiddlewareAudit};
+use apf_audit::SanitizationGuard;
+
+use tracing::{debug, info, warn};
 
 use apf_policy_eval::{
     ActivePolicy, EvalInput, EvalResult, Finding as EvalFinding, HeaderAction,
@@ -59,11 +62,26 @@ const CODE_REPLACEMENT_BODY_TOO_LARGE: &str = "replacement_body_too_large";
 ///
 /// Bundle loading, evaluator refresh, TLS listener startup, and
 /// `network_middlewares` registration belong to the policy gateway.
+/// The request-derived strings a record needs. Named rather than positional:
+/// all four are strings, and a swap produces a plausible, wrong record.
+#[derive(Clone, Copy)]
+struct RequestFacts<'a> {
+    host: &'a str,
+    method: &'a str,
+    sandbox_id: &'a str,
+    /// The wire's `request_id`, joining this record to the supervisor's log.
+    correlation_id: &'a str,
+}
+
 #[derive(Clone)]
 pub struct SupervisorMiddlewareService {
     evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
     authentication: AuthenticationMode,
+    audit: MiddlewareAudit,
 }
+
+/// Schema cap on `advisory_signals.findings`.
+const MAX_AUDIT_FINDINGS: usize = 32;
 
 /// Size-limited supervisor middleware server protected by extension JWT authentication.
 pub type AuthenticatedSupervisorMiddlewareServer =
@@ -75,12 +93,14 @@ impl SupervisorMiddlewareService {
     pub fn authenticated_server(
         evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
         verifier: ExtensionAuthVerifier,
+        audit: MiddlewareAudit,
     ) -> AuthenticatedSupervisorMiddlewareServer {
         let service = Self {
             evaluator,
             authentication: AuthenticationMode::Required {
                 expected_audience: verifier.audience().to_string(),
             },
+            audit,
         };
         Authenticated::new(service.into_size_limited_server(), verifier)
     }
@@ -92,12 +112,124 @@ impl SupervisorMiddlewareService {
     #[must_use]
     pub fn insecure_server(
         evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
+        audit: MiddlewareAudit,
     ) -> SupervisorMiddlewareServer<Self> {
         Self {
             evaluator,
             authentication: AuthenticationMode::Insecure,
+            audit,
         }
         .into_size_limited_server()
+    }
+
+    /// Record a supervisor credential used on a request claiming another
+    /// sandbox — one sandbox acting as another.
+    ///
+    /// Identity, not policy: no bundle was consulted, so the record names none.
+    fn record_binding_mismatch(&self, ids: &BindingMismatch<'_>) {
+        if let Err(e) = self.audit.emit_sandbox_binding_mismatch(ids) {
+            warn!(error = %e, "audit emission failed for sandbox binding mismatch");
+        }
+    }
+
+    /// Record one egress decision, read off the result rather than built at
+    /// each branch that produced it.
+    ///
+    /// Covers every path out of `evaluate`, including the panic fallback, so a
+    /// refusal added there cannot skip the record. Refusals raised earlier do
+    /// not reach here: binding mismatch has its own event, authentication
+    /// failure currently has none.
+    fn record_egress(
+        &self,
+        response: &wire::HttpRequestResult,
+        verdict: Option<Verdict>,
+        effects: apf_audit::Effects,
+        request: &RequestFacts<'_>,
+        active: &ActivePolicy,
+    ) {
+        let RequestFacts {
+            host,
+            method,
+            sandbox_id,
+            correlation_id,
+        } = *request;
+        let allowed = response.decision == wire::Decision::Allow as i32;
+
+        // `POST` does not satisfy the verb profile, so the raw method coerced
+        // to the sentinel on every record. Namespaced and lowercased, matching
+        // the shape the PDP and interceptor already use.
+        let verb = if method.is_empty() {
+            "http.request".to_owned()
+        } else {
+            format!("http.{}", method.to_ascii_lowercase())
+        };
+
+        // The verdict comes from the evaluator, not from the wire. The wire
+        // carries it as a trailing `policy_verdict` finding, and nothing
+        // distinguishes that stand-in from a real finding a policy defines with
+        // the same kind — so reading it back could both fabricate a verdict and
+        // drop the real observation.
+        let verdict = verdict.map(|v| match v {
+            Verdict::Escalate => apf_audit::Verdict::Escalate,
+            Verdict::Warn => apf_audit::Verdict::Warn,
+            Verdict::Allow => apf_audit::Verdict::Allow,
+        });
+
+        // `map_findings` appends the stand-in only on the allow path and only
+        // for a non-default verdict, so its presence is derived from those two
+        // facts rather than matched by kind — nothing on the wire distinguishes
+        // it from a real finding a policy defines with the same kind.
+        let stand_in = allowed && matches!(verdict, Some(v) if v != apf_audit::Verdict::Allow);
+        let real_count = response
+            .findings
+            .len()
+            .saturating_sub(usize::from(stand_in));
+        let real_findings: Vec<&wire::Finding> =
+            response.findings.iter().take(real_count).collect();
+
+        // The wire codes are unprefixed and would sit unnamespaced beside the
+        // PDP's `policy.request_denied` in a shared log.
+        let reason_code = if !response.reason_code.is_empty() {
+            format!("middleware.{}", response.reason_code)
+        } else if real_findings.is_empty() {
+            "middleware.allowed".to_owned()
+        } else {
+            "middleware.allowed_with_findings".to_owned()
+        };
+
+        let findings: Vec<apf_audit::Finding> = real_findings
+            .into_iter()
+            .take(MAX_AUDIT_FINDINGS)
+            .map(|f| apf_audit::Finding {
+                kind: f.r#type.chars().take(256).collect(),
+                label: f.label.chars().take(256).collect(),
+                severity: match f.severity.as_str() {
+                    "critical" => apf_audit::Severity::Critical,
+                    "high" => apf_audit::Severity::High,
+                    "medium" => apf_audit::Severity::Medium,
+                    _ => apf_audit::Severity::Low,
+                },
+                confidence: f.confidence.parse::<u8>().ok().map(|c| c.min(100)),
+            })
+            .collect();
+
+        if let Err(e) = self.audit.emit_egress(&EgressRecord {
+            allowed,
+            resource_kind: "openshell.egress",
+            host,
+            verb: &verb,
+            reason_code: &reason_code,
+            reason: &response.reason,
+            sandbox_id,
+            correlation_id,
+            verdict,
+            findings: &findings,
+            effects,
+            policy_digest: &active.bundle_digest,
+            policy_revision: Some(active.policy_revision).filter(|v| *v != 0),
+        }) {
+            warn!(error = %e, "audit emission failed for egress decision");
+        }
     }
 
     fn into_size_limited_server(self) -> SupervisorMiddlewareServer<Self> {
@@ -180,6 +312,13 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
             .and_then(AuthenticatedCaller::sandbox_id)
             .map(str::to_owned);
         let evaluation = request.into_inner();
+        // Both sides are needed for the record: which sandbox the credential is
+        // bound to, and which one the request claimed.
+        let bound_sandbox = authenticated_sandbox.clone().unwrap_or_default();
+        let claimed_sandbox = evaluation
+            .context
+            .as_ref()
+            .map_or_else(String::new, |c| c.sandbox_id.clone());
         if authenticated_sandbox.is_some_and(|sandbox_id| {
             evaluation
                 .context
@@ -188,18 +327,61 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
         }) {
             // A valid supervisor token is scoped to exactly one sandbox. Bind
             // that identity before parsing request content or invoking policy.
+            self.record_binding_mismatch(&BindingMismatch {
+                bound_sandbox: &bound_sandbox,
+                claimed_sandbox: &claimed_sandbox,
+            });
             return Err(Status::permission_denied(
                 "OpenShell supervisor sandbox does not match the request context",
             ));
         }
-        let service = self.clone();
-        let response = tokio::task::spawn_blocking(move || service.evaluate(&evaluation))
-            .await
-            .unwrap_or_else(|_| {
-                // A panic or runtime shutdown in the blocking task must not
-                // escape as a gRPC failure that OpenShell could fail open.
-                deny(CODE_EVALUATION_FAILED, "policy evaluation failed")
+        // Read once and passed into the evaluation: reading again inside would
+        // let a hot-swap between the two put one policy in the record and
+        // another in the decision.
+        let active = Arc::clone(&*self.evaluator.borrow());
+        let (host, method) = evaluation
+            .target
+            .as_ref()
+            .map_or((String::new(), String::new()), |t| {
+                (t.host.clone(), t.method.clone())
             });
+        let (sandbox_id, correlation_id) = evaluation
+            .context
+            .as_ref()
+            .map_or((String::new(), String::new()), |c| {
+                (c.sandbox_id.clone(), c.request_id.clone())
+            });
+
+        let service = self.clone();
+        let deciding = Arc::clone(&active);
+        let (response, verdict, effects) =
+            tokio::task::spawn_blocking(move || service.evaluate(&evaluation, &deciding))
+                .await
+                .unwrap_or_else(|_| {
+                    // A panic or runtime shutdown in the blocking task must not
+                    // escape as a gRPC failure that OpenShell could fail open.
+                    (
+                        deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
+                        None,
+                        apf_audit::Effects::default(),
+                    )
+                });
+
+        // One emit at the single exit, reading the result rather than each
+        // branch that built it: a refusal added later cannot skip the record.
+        self.record_egress(
+            &response,
+            verdict,
+            effects,
+            &RequestFacts {
+                host: &host,
+                method: &method,
+                sandbox_id: &sandbox_id,
+                correlation_id: &correlation_id,
+            },
+            &active,
+        );
+
         Ok(Response::new(response))
     }
 
@@ -228,7 +410,16 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
 }
 
 impl SupervisorMiddlewareService {
-    fn evaluate(&self, evaluation: &wire::HttpRequestEvaluation) -> wire::HttpRequestResult {
+    /// Returns the wire result and the verdict the evaluator produced.
+    ///
+    /// The verdict is returned rather than read back off the wire: the wire
+    /// carries it as a `policy_verdict` finding, and nothing distinguishes that
+    /// stand-in from a real finding a policy defines with the same kind.
+    fn evaluate(
+        &self,
+        evaluation: &wire::HttpRequestEvaluation,
+        active: &ActivePolicy,
+    ) -> (wire::HttpRequestResult, Option<Verdict>, apf_audit::Effects) {
         let sandbox_id = evaluation
             .context
             .as_ref()
@@ -242,20 +433,32 @@ impl SupervisorMiddlewareService {
         );
 
         if evaluation.phase != wire::SupervisorMiddlewarePhase::PreCredentials as i32 {
-            return deny(CODE_INVALID_PHASE, "unsupported middleware phase");
+            return (
+                deny(CODE_INVALID_PHASE, "unsupported middleware phase"),
+                None,
+                apf_audit::Effects::default(),
+            );
         }
         if evaluation
             .config
             .as_ref()
             .is_some_and(|config| !config.fields.is_empty())
         {
-            return deny(
-                CODE_INVALID_CONFIG,
-                "middleware configuration must be empty",
+            return (
+                deny(
+                    CODE_INVALID_CONFIG,
+                    "middleware configuration must be empty",
+                ),
+                None,
+                apf_audit::Effects::default(),
             );
         }
         if evaluation.body.len() > MAX_BODY_BYTES {
-            return deny(CODE_BODY_TOO_LARGE, "request body exceeds middleware limit");
+            return (
+                deny(CODE_BODY_TOO_LARGE, "request body exceeds middleware limit"),
+                None,
+                apf_audit::Effects::default(),
+            );
         }
 
         let body_json = match serde_json::from_slice::<Value>(&evaluation.body) {
@@ -263,23 +466,36 @@ impl SupervisorMiddlewareService {
             Err(_) if contains_mcp_tool_call_intent(&evaluation.body) => {
                 // A malformed body that still identifies tools/call cannot
                 // shed its tool identity and fall through to generic policy.
-                return deny(CODE_INVALID_MCP_REQUEST, "invalid MCP tools/call request");
+                return (
+                    deny(CODE_INVALID_MCP_REQUEST, "invalid MCP tools/call request"),
+                    None,
+                    apf_audit::Effects::default(),
+                );
             }
             Err(_) => None,
         };
         let input = match build_eval_input(evaluation, body_json.as_ref()) {
             Ok(input) => input,
-            Err(error) => return deny(error.reason_code(), error.reason()),
+            Err(error) => {
+                return (
+                    deny(error.reason_code(), error.reason()),
+                    None,
+                    apf_audit::Effects::default(),
+                );
+            }
         };
 
         // One read: the evaluator and the digest of the policy it came from
         // travel together, so a hot-swap cannot pair a decision with another
         // policy's identity.
-        let active = Arc::clone(&*self.evaluator.borrow());
         let Ok(result) = active.evaluator.evaluate(input) else {
             // Evaluator errors are intentionally not reflected: backend error
             // text is not a stable or audit-safe wire contract.
-            return deny(CODE_EVALUATION_FAILED, "policy evaluation failed");
+            return (
+                deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
+                None,
+                apf_audit::Effects::default(),
+            );
         };
 
         if !result.allow {
@@ -291,15 +507,23 @@ impl SupervisorMiddlewareService {
                 reason = %result.deny_reason,
                 "middleware: DENY"
             );
-            return policy_deny(&result);
+            return (
+                policy_deny(&result),
+                Some(result.verdict),
+                apf_audit::Effects::default(),
+            );
         }
 
         let Ok(applied) = apply_effects(&evaluation.body, body_json.as_ref(), &result) else {
             // Forwarding an unmodified request would drop a mandated effect,
             // so every application error is a hard deny.
-            return deny(
-                CODE_EFFECT_APPLICATION_FAILED,
-                "policy effects could not be applied",
+            return (
+                deny(
+                    CODE_EFFECT_APPLICATION_FAILED,
+                    "policy effects could not be applied",
+                ),
+                None,
+                apf_audit::Effects::default(),
             );
         };
         if applied
@@ -307,25 +531,42 @@ impl SupervisorMiddlewareService {
             .as_ref()
             .is_some_and(|body| body.len() > MAX_BODY_BYTES)
         {
-            return deny(
-                CODE_REPLACEMENT_BODY_TOO_LARGE,
-                "policy replacement body exceeds middleware limit",
+            return (
+                deny(
+                    CODE_REPLACEMENT_BODY_TOO_LARGE,
+                    "policy replacement body exceeds middleware limit",
+                ),
+                None,
+                apf_audit::Effects::default(),
             );
         }
 
         let Ok(header_mutations) = map_header_mutations(&applied.headers) else {
-            return deny(
-                CODE_INVALID_HEADER_MUTATION,
-                "policy produced an invalid header mutation",
+            return (
+                deny(
+                    CODE_INVALID_HEADER_MUTATION,
+                    "policy produced an invalid header mutation",
+                ),
+                None,
+                apf_audit::Effects::default(),
             );
         };
         let Ok(findings) = map_findings(&result, true) else {
-            return deny(CODE_INVALID_FINDINGS, "policy produced invalid findings");
+            return (
+                deny(CODE_INVALID_FINDINGS, "policy produced invalid findings"),
+                None,
+                apf_audit::Effects::default(),
+            );
         };
 
         let (body, has_body) = applied
             .body
             .map_or_else(|| (Vec::new(), false), |replacement| (replacement, true));
+
+        // Built here, not from the wire: the result carries only the final
+        // bytes, so a targeted patch and a wholesale replacement are
+        // indistinguishable by the time the record is written.
+        let effects = applied_effects(&result, &header_mutations);
 
         let finding_labels: Vec<&str> = result.findings.iter().map(|f| f.label.as_str()).collect();
         if finding_labels.is_empty() {
@@ -342,14 +583,18 @@ impl SupervisorMiddlewareService {
             );
         }
 
-        wire::HttpRequestResult {
-            decision: wire::Decision::Allow as i32,
-            body,
-            has_body,
-            header_mutations,
-            findings,
-            ..Default::default()
-        }
+        (
+            wire::HttpRequestResult {
+                decision: wire::Decision::Allow as i32,
+                body,
+                has_body,
+                header_mutations,
+                findings,
+                ..Default::default()
+            },
+            Some(result.verdict),
+            effects,
+        )
     }
 }
 
@@ -590,6 +835,95 @@ fn has_header_write_prefix(name: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(HEADER_WRITE_PREFIX))
 }
 
+/// Summarise what was applied, while the evaluator's intent is still visible.
+/// The wire carries only the final bytes, so a targeted patch and a wholesale
+/// replacement look identical downstream — and the schema has separate fields
+/// for them precisely because they are different claims.
+fn applied_effects(result: &EvalResult, mutations: &[wire::HeaderMutation]) -> apf_audit::Effects {
+    let mut effects = apf_audit::Effects {
+        // Names only. A header value is where a policy would put a token.
+        header_mutations: mutations
+            .iter()
+            .filter_map(|m| match m.operation.as_ref()? {
+                wire::header_mutation::Operation::Write(w) => {
+                    Some(apf_audit::HeaderMutationRecord::new(
+                        audit_header_name(&w.name)?,
+                        match wire::ExistingHeaderAction::try_from(w.on_existing) {
+                            Ok(wire::ExistingHeaderAction::Append) => apf_audit::HeaderAction::Add,
+                            // Overwrite is the only other value `map_header_mutation`
+                            // produces; anything else is a wire the record cannot
+                            // describe, so it is dropped rather than guessed at.
+                            Ok(wire::ExistingHeaderAction::Overwrite) => {
+                                apf_audit::HeaderAction::Set
+                            }
+                            _ => return None,
+                        },
+                    ))
+                }
+                wire::header_mutation::Operation::Remove(r) => {
+                    Some(apf_audit::HeaderMutationRecord::new(
+                        audit_header_name(&r.name)?,
+                        apf_audit::HeaderAction::Remove,
+                    ))
+                }
+            })
+            .collect(),
+        ..apf_audit::Effects::default()
+    };
+
+    // A replacement supersedes patches in `apply_effects`, so the record says
+    // the same: one claim per request, never both.
+    if result.body_replacement.is_some() {
+        effects.payload_replaced = Some(true);
+    } else if !result.body_patches.is_empty() {
+        effects.patch_count = Some(result.body_patches.len() as u64);
+        effects.patches = result
+            .body_patches
+            .iter()
+            .filter_map(|p| {
+                Some(apf_audit::PatchRecord::new(
+                    // Paths only, never operands: the operand is the content
+                    // the redaction exists to remove.
+                    audit_patch_path(&p.path)?,
+                    match p.op {
+                        apf_policy_eval::PatchOp::Replace => apf_audit::PatchOp::Replace,
+                        apf_policy_eval::PatchOp::Add => apf_audit::PatchOp::Add,
+                        apf_policy_eval::PatchOp::Remove => apf_audit::PatchOp::Remove,
+                    },
+                ))
+            })
+            .collect();
+        effects.truncate_patches();
+    }
+    effects
+}
+
+/// `patch_record.path` and `header_mutation_record.name` maxLength.
+const MAX_RECORDED_NAME_CHARS: usize = 256;
+
+/// A patch path as the record can carry it. Same two gates as a header name:
+/// a JSON pointer is policy-authored and can be long or credential-shaped.
+fn audit_patch_path(path: &str) -> Option<String> {
+    let capped: String = path.chars().take(MAX_RECORDED_NAME_CHARS).collect();
+    SanitizationGuard::accepts_string(&capped).then_some(capped)
+}
+
+/// A header name as the record can carry it, or `None` when it cannot.
+///
+/// If every name is rejected the effect is omitted entirely — there is no
+/// header counterpart to `patch_count` to preserve the fact that headers were
+/// rewritten.
+///
+/// Two gates, and failing either costs the whole record. The wire validator
+/// bounds all names and values together rather than each name, so a long one
+/// overruns `header_mutation_record.name`. And the guard scans for credential
+/// substrings, which an ordinary name can contain — `task-classification` has
+/// `sk-` in it. The recorded name may be a 256-char prefix.
+fn audit_header_name(name: &str) -> Option<String> {
+    let capped: String = name.chars().take(MAX_RECORDED_NAME_CHARS).collect();
+    SanitizationGuard::accepts_string(&capped).then_some(capped)
+}
+
 fn is_valid_header_name(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
@@ -685,6 +1019,11 @@ const fn severity_name(severity: Severity) -> &'static str {
     }
 }
 
+/// The wire has no verdict field, so the verdict travels as a finding of this
+/// kind. Audit has a real field, so the stand-in is lifted rather than recorded
+/// twice.
+const VERDICT_FINDING_TYPE: &str = "policy_verdict";
+
 fn verdict_finding(verdict: Verdict) -> Option<wire::Finding> {
     let (label, severity) = match verdict {
         Verdict::Allow => return None,
@@ -692,7 +1031,7 @@ fn verdict_finding(verdict: Verdict) -> Option<wire::Finding> {
         Verdict::Escalate => ("escalate", "high"),
     };
     Some(wire::Finding {
-        r#type: "policy_verdict".to_string(),
+        r#type: VERDICT_FINDING_TYPE.to_string(),
         label: label.to_string(),
         count: 1,
         confidence: String::new(),
@@ -711,14 +1050,14 @@ mod tests {
 
     const MCP_FIXTURE: &[u8] = br#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send","arguments":{"to":"fixture-recipient@example.com","subject":"test"}}}"#;
 
-    struct StubEvaluator {
+    pub(super) struct StubEvaluator {
         result: EvalResult,
         fail: bool,
         inputs: Mutex<Vec<EvalInput>>,
     }
 
     impl StubEvaluator {
-        fn returning(result: EvalResult) -> Self {
+        pub(super) fn returning(result: EvalResult) -> Self {
             Self {
                 result,
                 fail: false,
@@ -726,7 +1065,7 @@ mod tests {
             }
         }
 
-        fn failing() -> Self {
+        pub(super) fn failing() -> Self {
             Self {
                 result: EvalResult::default(),
                 fail: true,
@@ -764,6 +1103,12 @@ mod tests {
         }
     }
 
+    /// The policy a test service holds, for the direct `evaluate` calls that
+    /// bypass the handler.
+    pub(super) fn service_policy(service: &SupervisorMiddlewareService) -> Arc<ActivePolicy> {
+        Arc::clone(&service.evaluator.borrow())
+    }
+
     fn make_service(evaluator: impl Evaluator + 'static) -> SupervisorMiddlewareService {
         make_service_arc(Arc::new(evaluator) as Arc<dyn Evaluator>)
     }
@@ -777,7 +1122,41 @@ mod tests {
         SupervisorMiddlewareService {
             evaluator: rx,
             authentication: AuthenticationMode::Insecure,
+            audit: MiddlewareAudit::disabled(),
         }
+    }
+
+    pub(super) fn make_audited_service(
+        evaluator: impl Evaluator + 'static,
+        dir: &std::path::Path,
+    ) -> SupervisorMiddlewareService {
+        let (tx, rx) = tokio::sync::watch::channel(Arc::new(ActivePolicy {
+            evaluator: Arc::new(evaluator) as Arc<dyn Evaluator>,
+            bundle_digest: "a".repeat(64),
+            policy_revision: 7,
+        }));
+        // `borrow()` still yields after the sender drops; only `changed()` errors.
+        drop(tx);
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication: AuthenticationMode::Insecure,
+            audit: MiddlewareAudit::to_jsonl_in(dir).expect("build emitter"),
+        }
+    }
+
+    pub(super) fn audit_records(dir: &std::path::Path) -> Vec<apf_audit::AuditEvent> {
+        let written =
+            std::fs::read_to_string(dir.join("apf-policy-gateway-middleware-audit.jsonl"))
+                .expect("audit log was written");
+        written
+            .lines()
+            .map(|line| {
+                let parsed: apf_audit::AuditEvent =
+                    serde_json::from_str(line).expect("deserializes");
+                parsed.validate().expect("validates against the schema");
+                parsed
+            })
+            .collect()
     }
 
     fn make_authenticated_service_arc(
@@ -793,6 +1172,7 @@ mod tests {
             authentication: AuthenticationMode::Required {
                 expected_audience: "urn:openshell:extension:middleware:test".to_string(),
             },
+            audit: MiddlewareAudit::disabled(),
         }
     }
 
@@ -808,7 +1188,7 @@ mod tests {
         request
     }
 
-    fn evaluation(body: &[u8]) -> wire::HttpRequestEvaluation {
+    pub(super) fn evaluation(body: &[u8]) -> wire::HttpRequestEvaluation {
         wire::HttpRequestEvaluation {
             phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
             context: Some(wire::RequestContext {
@@ -1087,7 +1467,9 @@ mod tests {
             ..EvalResult::default()
         }));
 
-        let patched = service.evaluate(&evaluation(MCP_FIXTURE));
+        let patched = service
+            .evaluate(&evaluation(MCP_FIXTURE), &service_policy(&service))
+            .0;
 
         assert_eq!(patched.decision, wire::Decision::Allow as i32);
         assert!(patched.has_body);
@@ -1103,7 +1485,9 @@ mod tests {
             }],
             ..EvalResult::default()
         }));
-        let missing = service.evaluate(&evaluation(MCP_FIXTURE));
+        let missing = service
+            .evaluate(&evaluation(MCP_FIXTURE), &service_policy(&service))
+            .0;
         assert_eq!(missing.decision, wire::Decision::Deny as i32);
         assert_eq!(missing.reason_code, CODE_EFFECT_APPLICATION_FAILED);
     }
@@ -1132,7 +1516,9 @@ mod tests {
         };
         let service = make_service(StubEvaluator::returning(evaluator_result));
 
-        let result = service.evaluate(&evaluation(b"plain text"));
+        let result = service
+            .evaluate(&evaluation(b"plain text"), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Allow as i32);
         assert_eq!(result.header_mutations.len(), 3);
@@ -1182,7 +1568,12 @@ mod tests {
     fn allow_without_effects_preserves_request_body() {
         let service = make_service(StubEvaluator::returning(EvalResult::default()));
 
-        let result = service.evaluate(&evaluation(b"original request body"));
+        let result = service
+            .evaluate(
+                &evaluation(b"original request body"),
+                &service_policy(&service),
+            )
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Allow as i32);
         assert!(!result.has_body);
@@ -1196,7 +1587,12 @@ mod tests {
             ..EvalResult::default()
         }));
 
-        let result = service.evaluate(&evaluation(b"original request body"));
+        let result = service
+            .evaluate(
+                &evaluation(b"original request body"),
+                &service_policy(&service),
+            )
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Allow as i32);
         assert!(result.has_body);
@@ -1209,7 +1605,9 @@ mod tests {
         let service = make_service_arc(evaluator.clone());
         let body = br#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send"}}"#;
 
-        let result = service.evaluate(&evaluation(body));
+        let result = service
+            .evaluate(&evaluation(body), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Allow as i32);
         let input = evaluator
@@ -1231,7 +1629,9 @@ mod tests {
         ];
 
         for body in bodies {
-            let result = service.evaluate(&evaluation(body));
+            let result = service
+                .evaluate(&evaluation(body), &service_policy(&service))
+                .0;
             assert_eq!(result.decision, wire::Decision::Deny as i32);
             assert_eq!(result.reason_code, CODE_INVALID_MCP_REQUEST);
         }
@@ -1248,7 +1648,9 @@ mod tests {
         ];
 
         for body in bodies {
-            let result = service.evaluate(&evaluation(body));
+            let result = service
+                .evaluate(&evaluation(body), &service_policy(&service))
+                .0;
             assert_eq!(result.decision, wire::Decision::Deny as i32);
             assert_eq!(result.reason_code, CODE_INVALID_MCP_REQUEST);
         }
@@ -1261,7 +1663,9 @@ mod tests {
         let service = make_service_arc(evaluator.clone());
         let body = br#"[{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send","arguments":{}}}]"#;
 
-        let result = service.evaluate(&evaluation(body));
+        let result = service
+            .evaluate(&evaluation(body), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Deny as i32);
         assert_eq!(result.reason_code, CODE_INVALID_MCP_REQUEST);
@@ -1274,7 +1678,9 @@ mod tests {
         let service = make_service_arc(evaluator.clone());
         let body = br#"[[{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send","arguments":{}}}]]"#;
 
-        let result = service.evaluate(&evaluation(body));
+        let result = service
+            .evaluate(&evaluation(body), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Deny as i32);
         assert_eq!(result.reason_code, CODE_INVALID_MCP_REQUEST);
@@ -1290,7 +1696,9 @@ mod tests {
         };
         let service = make_service(StubEvaluator::returning(evaluator_result));
 
-        let result = service.evaluate(&evaluation(b"plain text"));
+        let result = service
+            .evaluate(&evaluation(b"plain text"), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Allow as i32);
         assert_eq!(result.findings.len(), 1);
@@ -1370,7 +1778,7 @@ mod tests {
             (missing_target, CODE_MISSING_TARGET),
             (oversized_body, CODE_BODY_TOO_LARGE),
         ] {
-            let result = service.evaluate(&request);
+            let result = service.evaluate(&request, &service_policy(&service)).0;
             assert_eq!(result.decision, wire::Decision::Deny as i32);
             assert_eq!(result.reason_code, reason_code);
         }
@@ -1443,7 +1851,9 @@ mod tests {
 
         for (evaluator_result, reason_code) in results {
             let service = make_service(StubEvaluator::returning(evaluator_result));
-            let result = service.evaluate(&evaluation(b"plain text"));
+            let result = service
+                .evaluate(&evaluation(b"plain text"), &service_policy(&service))
+                .0;
             assert_eq!(result.decision, wire::Decision::Deny as i32);
             assert_eq!(result.reason_code, reason_code);
         }
@@ -1483,7 +1893,9 @@ mod tests {
             ..EvalResult::default()
         }));
 
-        let result = service.evaluate(&evaluation(b"plain text"));
+        let result = service
+            .evaluate(&evaluation(b"plain text"), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Deny as i32);
         assert_eq!(result.findings.len(), 1);
@@ -1499,7 +1911,9 @@ mod tests {
         };
         let service = make_service(StubEvaluator::returning(evaluator_result));
 
-        let result = service.evaluate(&evaluation(b"plain text"));
+        let result = service
+            .evaluate(&evaluation(b"plain text"), &service_policy(&service))
+            .0;
 
         assert_eq!(result.decision, wire::Decision::Deny as i32);
         assert_eq!(result.reason.len(), MAX_REASON_BYTES);
@@ -1564,5 +1978,840 @@ mod tests {
             assert_eq!(result.reason_code, CODE_INVALID_HEADER_MUTATION);
             assert!(!result.reason.contains("fixture-secret"));
         }
+    }
+}
+
+/// Egress decision recording, observed through the real emitter.
+///
+/// The other test module runs with the sink disabled, so nothing there can see
+/// what a decision records. These drive the real handler and read the JSONL
+/// back, which is the only way a wrong decision or a lost record is visible.
+#[cfg(test)]
+mod egress_audit_tests {
+    use super::tests::{StubEvaluator, audit_records, evaluation, make_audited_service};
+    use super::*;
+    use apf_policy_eval::{Finding as EvalFinding, Severity as EvalSeverity};
+
+    async fn decide(evaluator: StubEvaluator, dir: &std::path::Path) -> wire::HttpRequestResult {
+        make_audited_service(evaluator, dir)
+            .evaluate_http_request(Request::new(evaluation(b"{}")))
+            .await
+            .expect("middleware answers")
+            .into_inner()
+    }
+
+    /// An allowed request must name the policy that allowed it and the sandbox
+    /// it came from, and must not claim a human identity OpenShell never
+    /// established.
+    #[tokio::test]
+    async fn an_allowed_request_is_recorded_against_the_deciding_policy() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let result = decide(StubEvaluator::returning(EvalResult::default()), dir.path()).await;
+        assert_eq!(result.decision, wire::Decision::Allow as i32);
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1, "exactly one record per decision");
+        let r = &records[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authorization);
+        assert_eq!(r.decision, Some(apf_audit::Decision::Allow));
+        assert_eq!(r.reason_code.as_deref(), Some("middleware.allowed"));
+        assert_eq!(
+            r.verb.as_deref(),
+            Some("http.post"),
+            "the raw method does not satisfy the verb profile"
+        );
+        let resource = r.resource.as_ref().expect("resource recorded");
+        assert_eq!(resource.id, "api.example.com");
+        assert_eq!(r.bundle_digest.as_deref(), Some("a".repeat(64).as_str()));
+        assert_eq!(r.policy_revision, Some(7));
+        assert_eq!(
+            r.correlation_id, "request-017",
+            "the wire's request id is what joins this record to the supervisor's log"
+        );
+        assert!(
+            r.error_info.is_none(),
+            "an allow carries no denial explanation: {:?}",
+            r.error_info
+        );
+        assert_eq!(r.session_id.as_deref(), Some("sandbox-042"));
+        assert_eq!(
+            r.user_id, None,
+            "OpenShell V1 has no user subject; the sandbox is not one"
+        );
+    }
+
+    /// A hostname the agent chooses must not be able to strip the record. The
+    /// value coerces cleanly but trips the sanitizer, so this is the degrade
+    /// path — the one the whole design rests on, and previously untested.
+    #[tokio::test]
+    async fn a_hostile_hostname_degrades_the_record_rather_than_erasing_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut eval = evaluation(b"{}");
+        if let Some(target) = eval.target.as_mut() {
+            // Three dot-separated base64url runs: a legal DNS name that reads
+            // as a JWT to the sanitizer.
+            target.host = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc".to_string();
+        }
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        let result = service
+            .evaluate_http_request(Request::new(eval))
+            .await
+            .expect("middleware answers")
+            .into_inner();
+        assert_eq!(result.decision, wire::Decision::Allow as i32);
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1, "the request must still leave a record");
+        let r = &records[0];
+        assert_eq!(
+            r.decision,
+            Some(apf_audit::Decision::Allow),
+            "an allowed request must never read as blocked"
+        );
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied request detail omitted"),
+            "the record must mark itself as degraded"
+        );
+    }
+
+    /// A policy is free to define a real finding of the stand-in's kind. It
+    /// must not be read as a verdict, and must survive into the record — the
+    /// count-based strip is what makes that possible.
+    #[tokio::test]
+    async fn a_real_policy_verdict_finding_is_not_mistaken_for_the_stand_in() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let r = decide(
+            StubEvaluator::returning(EvalResult {
+                allow: false,
+                deny_reason: "blocked".to_string(),
+                findings: vec![EvalFinding {
+                    kind: "policy_verdict".to_string(),
+                    label: "escalate".to_string(),
+                    severity: EvalSeverity::Low,
+                    confidence: None,
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+        assert_eq!(r.decision, wire::Decision::Deny as i32);
+
+        let record = &audit_records(dir.path())[0];
+        assert_eq!(
+            record.verdict, None,
+            "the evaluator raised no signal, so none is recorded"
+        );
+        assert!(
+            record
+                .findings
+                .as_ref()
+                .is_some_and(|f| f.iter().any(|x| x.kind == "policy_verdict")),
+            "a policy-defined finding must survive: {:?}",
+            record.findings
+        );
+    }
+
+    /// The allow path with both a real finding and a non-default verdict: the
+    /// stand-in is present here, so this is where the count-based strip has to
+    /// pick the right element.
+    #[tokio::test]
+    async fn an_allow_keeps_a_real_finding_beside_the_lifted_verdict() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                verdict: Verdict::Warn,
+                findings: vec![EvalFinding {
+                    kind: "content.class".to_string(),
+                    label: "pii".to_string(),
+                    severity: EvalSeverity::Medium,
+                    confidence: None,
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.verdict, Some(apf_audit::Verdict::Warn));
+        let findings = r.findings.as_ref().expect("the real finding survives");
+        assert_eq!(findings.len(), 1, "the stand-in must not be recorded too");
+        assert_eq!(findings[0].label, "pii");
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("middleware.allowed_with_findings")
+        );
+    }
+
+    /// The redaction case: a secret was found, the body was rewritten, and the
+    /// sanitised request went through. Without the effect the record reads as
+    /// "found a critical secret and allowed it anyway".
+    #[tokio::test]
+    async fn a_replaced_body_is_recorded_as_an_effect() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                body_replacement: Some(r#"{"apf_redacted":true}"#.to_string()),
+                findings: vec![EvalFinding {
+                    kind: "secret_detected".to_string(),
+                    label: "openai_key".to_string(),
+                    severity: EvalSeverity::Critical,
+                    confidence: None,
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.decision, Some(apf_audit::Decision::Allow));
+        let effects = r.effects.as_ref().expect("the rewrite is recorded");
+        assert_eq!(
+            effects.payload_replaced,
+            Some(true),
+            "the request upstream received was not the one sent"
+        );
+    }
+
+    /// `apply_effects` returns final bytes for both a wholesale replacement and
+    /// a targeted patch, so the wire cannot tell them apart. Recording a patch
+    /// as `payload_replaced` claims the whole body was swapped when one field
+    /// was edited — and the operand must never reach the record.
+    #[tokio::test]
+    async fn a_targeted_patch_records_as_a_patch_not_a_replacement() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                body_patches: vec![apf_policy_eval::JsonPatch {
+                    op: apf_policy_eval::PatchOp::Add,
+                    path: "/content".to_string(),
+                    value: Some(serde_json::json!("sk-not-a-real-key-000000")),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        let effects = r.effects.as_ref().expect("the patch is recorded");
+        assert_eq!(
+            effects.payload_replaced, None,
+            "a patch is not a wholesale replacement"
+        );
+        assert_eq!(effects.patch_count, Some(1));
+        assert_eq!(effects.patches[0].path, "/content");
+        assert_eq!(effects.patches[0].op, apf_audit::PatchOp::Add);
+
+        let line =
+            std::fs::read_to_string(dir.path().join("apf-policy-gateway-middleware-audit.jsonl"))
+                .expect("audit file");
+        assert!(
+            !line.contains("sk-not-a-real-key"),
+            "the patch operand must never reach the record: {line}"
+        );
+    }
+
+    /// Each action must round-trip its own way. Recording an append as a set,
+    /// or a removal as a write, says the request was changed differently than
+    /// it was.
+    #[tokio::test]
+    async fn each_header_action_round_trips() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                header_mutations: vec![
+                    apf_policy_eval::HeaderMutation {
+                        name: "x-openshell-middleware-added".to_string(),
+                        action: apf_policy_eval::HeaderAction::Add,
+                        value: Some("v".to_string()),
+                    },
+                    apf_policy_eval::HeaderMutation {
+                        name: "x-vendor-tracking".to_string(),
+                        action: apf_policy_eval::HeaderAction::Remove,
+                        value: None,
+                    },
+                ],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        let m = &r
+            .effects
+            .as_ref()
+            .expect("mutations recorded")
+            .header_mutations;
+        assert_eq!(m.len(), 2, "order is preserved: {m:?}");
+        assert_eq!(m[0].name, "x-openshell-middleware-added");
+        assert_eq!(m[0].action, apf_audit::HeaderAction::Add);
+        assert_eq!(m[1].name, "x-vendor-tracking");
+        assert_eq!(m[1].action, apf_audit::HeaderAction::Remove);
+    }
+
+    /// An ordinary header name can read as a credential — `task-classification`
+    /// contains `sk-`. The guard scans substrings, so recording it would drop
+    /// the whole record. The mutation goes, the record stays.
+    #[tokio::test]
+    async fn a_credential_shaped_header_name_does_not_degrade_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                header_mutations: vec![apf_policy_eval::HeaderMutation {
+                    name: "x-openshell-middleware-task-classification-id".to_string(),
+                    action: apf_policy_eval::HeaderAction::Set,
+                    value: Some("v".to_string()),
+                }],
+                body_replacement: Some(r#"{"redacted":true}"#.to_string()),
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.reason, None, "the record must not degrade");
+        assert_eq!(
+            r.resource.as_ref().map(|res| res.id.as_str()),
+            Some("api.example.com"),
+            "host survives"
+        );
+        let effects = r.effects.as_ref().expect("the replacement still records");
+        assert_eq!(effects.payload_replaced, Some(true));
+        assert!(
+            effects.header_mutations.is_empty(),
+            "the unrecordable name is dropped, not the record: {effects:?}"
+        );
+    }
+
+    /// A degraded record still has to say the body was rewritten. Dropping the
+    /// effect there would turn the one record proving redaction worked into a
+    /// bare allow — the worst reading, on the least legible record.
+    #[tokio::test]
+    async fn a_degraded_record_keeps_the_payload_replacement() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut eval = evaluation(b"{}");
+        if let Some(target) = eval.target.as_mut() {
+            // Reads as a JWT to the sanitizer, forcing the fallback.
+            target.host = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc".to_string();
+        }
+        let service = make_audited_service(
+            StubEvaluator::returning(EvalResult {
+                body_replacement: Some(r#"{"redacted":true}"#.to_string()),
+                header_mutations: vec![apf_policy_eval::HeaderMutation {
+                    name: "x-openshell-middleware-trace".to_string(),
+                    action: apf_policy_eval::HeaderAction::Set,
+                    value: Some("v".to_string()),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        );
+        service
+            .evaluate_http_request(Request::new(eval))
+            .await
+            .expect("middleware answers");
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied request detail omitted"),
+            "this must be the degraded record"
+        );
+        let effects = r
+            .effects
+            .as_ref()
+            .expect("the rewrite survives degradation");
+        assert_eq!(effects.payload_replaced, Some(true));
+        assert!(
+            effects.header_mutations.is_empty(),
+            "policy-authored names are dropped on the retry: {effects:?}"
+        );
+    }
+
+    /// When the only mutation is unrecordable and nothing else was applied, the
+    /// field must vanish entirely. An `effects: {}` fails the schema `anyOf`
+    /// and would take the whole record down — the opposite of the intent.
+    #[tokio::test]
+    async fn dropping_the_only_mutation_omits_effects_entirely() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                header_mutations: vec![apf_policy_eval::HeaderMutation {
+                    name: "x-openshell-middleware-task-classification-id".to_string(),
+                    action: apf_policy_eval::HeaderAction::Set,
+                    value: Some("v".to_string()),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.reason, None, "the record must not degrade");
+        assert!(
+            r.effects.is_none(),
+            "nothing recordable was applied: {:?}",
+            r.effects
+        );
+    }
+
+    /// Patch paths are policy-authored strings and reach the record exactly as
+    /// header names do — long, or credential-shaped by accident. `/sk-config/`
+    /// is a plausible pointer whose `sk-` prefix the guard reads as a key.
+    #[tokio::test]
+    async fn unrecordable_patch_paths_do_not_degrade_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                body_patches: vec![
+                    apf_policy_eval::JsonPatch {
+                        op: apf_policy_eval::PatchOp::Add,
+                        path: "/sk-configuration-values-name".to_string(),
+                        value: Some(serde_json::json!("x")),
+                    },
+                    apf_policy_eval::JsonPatch {
+                        op: apf_policy_eval::PatchOp::Add,
+                        path: format!("/{}", "p".repeat(400)),
+                        value: Some(serde_json::json!("x")),
+                    },
+                ],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.reason, None, "the record must not degrade");
+        let effects = r.effects.as_ref().expect("the patches are recorded");
+        assert_eq!(
+            effects.patch_count,
+            Some(2),
+            "the count stays exact even when a path cannot be carried"
+        );
+        // The credential-shaped one is dropped; the long one is truncated.
+        assert_eq!(effects.patches.len(), 1, "{:?}", effects.patches);
+        assert_eq!(effects.patches[0].path.chars().count(), 256);
+    }
+
+    /// `replace` says a field was redacted in altered form; `remove` says it is
+    /// gone. Recording one as the other misstates what left the sandbox.
+    #[tokio::test]
+    async fn each_patch_op_round_trips() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                body_patches: vec![
+                    apf_policy_eval::JsonPatch {
+                        op: apf_policy_eval::PatchOp::Add,
+                        path: "/added".to_string(),
+                        value: Some(serde_json::json!("x")),
+                    },
+                    apf_policy_eval::JsonPatch {
+                        op: apf_policy_eval::PatchOp::Replace,
+                        path: "/added".to_string(),
+                        value: Some(serde_json::json!("y")),
+                    },
+                    apf_policy_eval::JsonPatch {
+                        op: apf_policy_eval::PatchOp::Remove,
+                        path: "/added".to_string(),
+                        value: None,
+                    },
+                ],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        let p = &r.effects.as_ref().expect("patches recorded").patches;
+        assert_eq!(p.len(), 3, "order is preserved: {p:?}");
+        assert_eq!(p[0].op, apf_audit::PatchOp::Add);
+        assert_eq!(p[1].op, apf_audit::PatchOp::Replace);
+        assert_eq!(p[2].op, apf_audit::PatchOp::Remove);
+    }
+
+    /// A degraded record must still say the body was patched. `patch_count` is
+    /// an integer, so unlike the paths it cannot be what tripped the guard.
+    #[tokio::test]
+    async fn a_degraded_record_keeps_the_patch_count() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut eval = evaluation(b"{}");
+        if let Some(target) = eval.target.as_mut() {
+            target.host = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc".to_string();
+        }
+        let service = make_audited_service(
+            StubEvaluator::returning(EvalResult {
+                body_patches: vec![apf_policy_eval::JsonPatch {
+                    op: apf_policy_eval::PatchOp::Add,
+                    path: "/content".to_string(),
+                    value: Some(serde_json::json!("redacted")),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        );
+        service
+            .evaluate_http_request(Request::new(eval))
+            .await
+            .expect("middleware answers");
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied request detail omitted"),
+            "this must be the degraded record"
+        );
+        let effects = r
+            .effects
+            .as_ref()
+            .expect("the patching survives degradation");
+        assert_eq!(effects.patch_count, Some(1));
+        assert!(
+            effects.patches.is_empty(),
+            "paths are strings and go: {effects:?}"
+        );
+    }
+
+    /// A plain allow changed nothing, and an empty `effects` object would read
+    /// as "we modified something" to anyone filtering on the field.
+    #[tokio::test]
+    async fn an_untouched_request_records_no_effects() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(StubEvaluator::returning(EvalResult::default()), dir.path()).await;
+
+        let r = &audit_records(dir.path())[0];
+        assert!(r.effects.is_none(), "nothing was applied: {:?}", r.effects);
+    }
+
+    /// Header names are recorded so a reader can see what was rewritten; values
+    /// are not, because that is where a policy would put a token.
+    #[tokio::test]
+    async fn header_mutations_record_names_and_actions_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                header_mutations: vec![apf_policy_eval::HeaderMutation {
+                    name: "x-openshell-middleware-trace".to_string(),
+                    action: apf_policy_eval::HeaderAction::Set,
+                    value: Some("sk-not-a-real-key-000000".to_string()),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        let effects = r.effects.as_ref().expect("the mutation is recorded");
+        assert_eq!(effects.header_mutations.len(), 1);
+        assert_eq!(
+            effects.header_mutations[0].name,
+            "x-openshell-middleware-trace"
+        );
+        assert_eq!(
+            effects.header_mutations[0].action,
+            apf_audit::HeaderAction::Set,
+            "an overwrite is not an append"
+        );
+        let line =
+            std::fs::read_to_string(dir.path().join("apf-policy-gateway-middleware-audit.jsonl"))
+                .expect("audit file");
+        assert!(
+            !line.contains("sk-not-a-real-key"),
+            "the header value must never reach the record: {line}"
+        );
+    }
+
+    /// The wire validator bounds all names and values together, not each name,
+    /// so a long header name reaches the record. Over the schema cap the whole
+    /// record degrades — losing host, verb and findings over a header.
+    #[tokio::test]
+    async fn a_long_header_name_does_not_degrade_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let name = format!("x-openshell-middleware-{}", "n".repeat(400));
+        decide(
+            StubEvaluator::returning(EvalResult {
+                header_mutations: vec![apf_policy_eval::HeaderMutation {
+                    name,
+                    action: apf_policy_eval::HeaderAction::Set,
+                    value: Some("v".to_string()),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(
+            r.reason, None,
+            "a long header name must not force the fallback"
+        );
+        assert_eq!(
+            r.resource.as_ref().map(|res| res.id.as_str()),
+            Some("api.example.com"),
+            "the whole record survives, not just the effect"
+        );
+        let effects = r.effects.as_ref().expect("the mutation is recorded");
+        assert_eq!(effects.header_mutations[0].name.chars().count(), 256);
+    }
+
+    /// A caller-chosen sandbox id must not be able to erase the record of its
+    /// own impersonation attempt.
+    #[tokio::test]
+    async fn a_hostile_claimed_sandbox_id_cannot_erase_the_mismatch_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        service.record_binding_mismatch(&BindingMismatch {
+            bound_sandbox: "sandbox-bound",
+            claimed_sandbox: "AKIAIOSFODNN7EXAMPLE",
+        });
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1, "the attempt must still be recorded");
+        let r = &records[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authentication);
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied sandbox ids omitted"),
+            "degraded rather than lost"
+        );
+    }
+
+    /// The denial's explanation must reach the record's `error`, or every
+    /// egress block reads the same.
+    #[tokio::test]
+    async fn a_substrate_denial_keeps_the_policy_explanation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                allow: false,
+                deny_reason: "egress to an unapproved host".to_string(),
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authorization);
+        assert_eq!(r.decision, Some(apf_audit::Decision::Deny));
+        assert!(
+            r.error_info
+                .as_ref()
+                .is_some_and(|e| e.message.contains("unapproved host")
+                    && e.code == "middleware.policy_denied"),
+            "without it every egress block reads the same: {:?}",
+            r.error_info
+        );
+        assert_eq!(
+            r.reason, None,
+            "`reason` belongs to the degradation marker alone now"
+        );
+    }
+
+    /// A degraded policy denial must still read as one: a rule keyed on the
+    /// `middleware.policy_denied` reason code would otherwise miss exactly the
+    /// records an attacker can force.
+    #[tokio::test]
+    async fn a_degraded_substrate_denial_keeps_its_type() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut eval = evaluation(b"{}");
+        if let Some(target) = eval.target.as_mut() {
+            target.host = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc".to_string();
+        }
+        let service = make_audited_service(
+            StubEvaluator::returning(EvalResult {
+                allow: false,
+                deny_reason: "blocked".to_string(),
+                ..Default::default()
+            }),
+            dir.path(),
+        );
+        service
+            .evaluate_http_request(Request::new(eval))
+            .await
+            .expect("middleware answers");
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.event_type, apf_audit::EventType::Authorization);
+        assert_eq!(
+            r.decision,
+            Some(apf_audit::Decision::Deny),
+            "the denial must survive degradation"
+        );
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("middleware.policy_denied"),
+            "the substrate-vs-policy distinction lives here now"
+        );
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied request detail omitted")
+        );
+    }
+
+    /// One sandbox using a credential bound to another is the highest-value
+    /// event this seam sees, and it is refused before any policy runs.
+    #[tokio::test]
+    async fn a_sandbox_binding_mismatch_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        service.record_binding_mismatch(&BindingMismatch {
+            bound_sandbox: "sandbox-bound",
+            claimed_sandbox: "sandbox-claimed",
+        });
+
+        let r = &audit_records(dir.path())[0];
+        // Typed as an authentication refusal, not an egress denial: modelling
+        // it as a deny would bury an impersonation probe in policy traffic.
+        assert_eq!(r.event_type, apf_audit::EventType::Authentication);
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("extension_auth.sandbox_binding_mismatch")
+        );
+        // Both ids in typed fields, so hostile input cannot strip them out of
+        // a free-text sentence.
+        assert_eq!(r.caller_sandbox_id.as_deref(), Some("sandbox-bound"));
+        assert_eq!(r.claimed_sandbox_id.as_deref(), Some("sandbox-claimed"));
+        assert_eq!(
+            r.bundle_digest, None,
+            "no policy was consulted, so the record names none"
+        );
+    }
+
+    /// The schema leaves this field unpatterned deliberately. Coercing it would
+    /// let `#sandbox-042` record as `sandbox-042` — a claim on a real sandbox,
+    /// indistinguishable from a genuine one.
+    #[tokio::test]
+    async fn a_claimed_sandbox_id_is_recorded_as_claimed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        service.record_binding_mismatch(&BindingMismatch {
+            bound_sandbox: "sandbox-bound",
+            claimed_sandbox: "#sandbox-042",
+        });
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.claimed_sandbox_id.as_deref(), Some("#sandbox-042"));
+        assert_eq!(
+            r.reason, None,
+            "a legal-but-unusual id is not a degraded record"
+        );
+    }
+
+    /// An absent context must not cost the authenticated half of the record.
+    /// Both ids are `minLength: 1`, so an empty claim fails validation and takes
+    /// the bound id down with it unless the sentinel stands in.
+    #[tokio::test]
+    async fn an_empty_claimed_sandbox_id_keeps_the_authenticated_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        service.record_binding_mismatch(&BindingMismatch {
+            bound_sandbox: "sandbox-bound",
+            claimed_sandbox: "",
+        });
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(
+            r.caller_sandbox_id.as_deref(),
+            Some("sandbox-bound"),
+            "the verified id is the one value here that is not caller-chosen"
+        );
+        assert_eq!(r.claimed_sandbox_id.as_deref(), Some("unspecified"));
+        assert_eq!(r.reason, None, "the record is whole, not degraded");
+    }
+
+    /// A blocked request must record as blocked, carrying the policy's reason
+    /// and the observations behind it. A deny recorded as an allow would say
+    /// egress happened when it did not.
+    #[tokio::test]
+    async fn a_denied_request_is_recorded_as_a_denial_with_its_findings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let result = decide(
+            StubEvaluator::returning(EvalResult {
+                allow: false,
+                deny_reason: "egress to an unapproved host".to_string(),
+                findings: vec![EvalFinding {
+                    kind: "content.class".to_string(),
+                    label: "AWS access key".to_string(),
+                    severity: EvalSeverity::High,
+                    confidence: Some(91),
+                }],
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+        assert_eq!(result.decision, wire::Decision::Deny as i32);
+
+        let r = &audit_records(dir.path())[0];
+        // The substrate-vs-PDP distinction lives in the reason_code, and this
+        // code is the substrate's alone.
+        assert_eq!(r.event_type, apf_audit::EventType::Authorization);
+        assert_eq!(r.reason_code.as_deref(), Some("middleware.policy_denied"));
+        let findings = r.findings.as_ref().expect("findings carried");
+        assert_eq!(findings[0].label, "AWS access key", "recorded verbatim");
+        assert_eq!(findings[0].confidence, Some(91));
+    }
+
+    /// The wire carries the verdict as a synthetic finding because it has no
+    /// verdict field. Audit has one, so it must be lifted rather than left to
+    /// masquerade as an observation.
+    #[tokio::test]
+    async fn an_advisory_verdict_is_lifted_out_of_the_findings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        decide(
+            StubEvaluator::returning(EvalResult {
+                verdict: Verdict::Escalate,
+                ..Default::default()
+            }),
+            dir.path(),
+        )
+        .await;
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.verdict, Some(apf_audit::Verdict::Escalate));
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("middleware.allowed"),
+            "the stand-in is not an observation, so this allow carries none"
+        );
+        assert!(
+            r.findings
+                .as_ref()
+                .is_none_or(|f| f.iter().all(|x| x.kind != "policy_verdict")),
+            "the stand-in must not be recorded as an observation too"
+        );
+    }
+
+    /// The evaluator failing is a hard deny, and it is the case where a missing
+    /// record would hide that policy never ran.
+    #[tokio::test]
+    async fn a_failed_evaluation_is_recorded_as_a_denial() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let result = decide(StubEvaluator::failing(), dir.path()).await;
+        assert_eq!(result.decision, wire::Decision::Deny as i32);
+
+        let r = &audit_records(dir.path())[0];
+        assert_eq!(r.decision, Some(apf_audit::Decision::Deny));
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("middleware.evaluation_failed")
+        );
     }
 }

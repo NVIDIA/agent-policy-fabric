@@ -32,6 +32,17 @@ impl SanitizationGuard {
         let value = serde_json::to_value(event)?;
         check_value("$", &value)
     }
+
+    /// Whether one string would pass [`check`](Self::check).
+    ///
+    /// For producers assembling a field from data they do not control: an
+    /// ordinary value can look credential-like — `task-classification` contains
+    /// `sk-` — and one such string takes the whole record down. Dropping the
+    /// field beats losing the record, but only if the producer can ask.
+    #[must_use]
+    pub fn accepts_string(value: &str) -> bool {
+        string_rejection(value).is_none()
+    }
 }
 
 fn check_value(path: &str, value: &Value) -> Result<(), SanitizationError> {
@@ -67,22 +78,35 @@ fn is_redacted_surface(path: &str) -> bool {
         || path.starts_with("$.resource.attributes")
 }
 
-fn check_string(path: &str, value: &str) -> Result<(), SanitizationError> {
+/// Why one string is unrecordable, or `None` when it is fine.
+///
+/// The single definition behind both `check_string` and `accepts_string`: a
+/// producer that asks and a guard that rejects must never disagree, or the
+/// producer keeps a value the guard then refuses and the record is lost.
+fn string_rejection(value: &str) -> Option<Rejection> {
     if value.len() > MAX_SANITIZED_STRING_BYTES {
-        return Err(SanitizationError::ExcessiveString {
-            path: path.to_owned(),
-            byte_len: value.len(),
-        });
+        return Some(Rejection::TooLong(value.len()));
     }
+    classify_credential_like_value(value).map(Rejection::CredentialLike)
+}
 
-    if let Some(reason) = classify_credential_like_value(value) {
-        return Err(SanitizationError::CredentialLikeValue {
+enum Rejection {
+    TooLong(usize),
+    CredentialLike(String),
+}
+
+fn check_string(path: &str, value: &str) -> Result<(), SanitizationError> {
+    match string_rejection(value) {
+        None => Ok(()),
+        Some(Rejection::TooLong(byte_len)) => Err(SanitizationError::ExcessiveString {
+            path: path.to_owned(),
+            byte_len,
+        }),
+        Some(Rejection::CredentialLike(reason)) => Err(SanitizationError::CredentialLikeValue {
             path: path.to_owned(),
             reason,
-        });
+        }),
     }
-
-    Ok(())
 }
 
 fn classify_credential_like_value(value: &str) -> Option<String> {
@@ -170,4 +194,31 @@ fn is_token_char(ch: char) -> bool {
 
 fn is_base64_url_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '=')
+}
+
+#[cfg(test)]
+mod accepts_string_tests {
+    use super::{MAX_SANITIZED_STRING_BYTES, SanitizationGuard};
+
+    /// The substring scan is why this predicate exists: an ordinary name can
+    /// read as a key, and a producer that cannot ask loses the whole record.
+    #[test]
+    fn an_ordinary_name_containing_a_key_prefix_is_rejected() {
+        assert!(!SanitizationGuard::accepts_string(
+            "x-openshell-middleware-task-classification-id"
+        ));
+        assert!(SanitizationGuard::accepts_string(
+            "x-openshell-middleware-trace"
+        ));
+    }
+
+    #[test]
+    fn the_length_bound_is_the_guards_own() {
+        assert!(SanitizationGuard::accepts_string(
+            &"a".repeat(MAX_SANITIZED_STRING_BYTES)
+        ));
+        assert!(!SanitizationGuard::accepts_string(
+            &"a".repeat(MAX_SANITIZED_STRING_BYTES + 1)
+        ));
+    }
 }

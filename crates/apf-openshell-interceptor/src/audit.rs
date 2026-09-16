@@ -10,8 +10,8 @@ use std::path::Path;
 
 use apf_audit::{
     AdmissionValidationEvent, AuditErrorInfo, AuditIdentity, ComponentAudit, ConfigGovernanceEvent,
-    Outcome as AuditOutcome, PolicyInjectionEvent, Resource, SanitizationGuard, TypedAuditEvent,
-    UNSPECIFIED, coerce_digest, coerce_id, coerce_lower_dotted, coerce_name,
+    Effects, Outcome as AuditOutcome, PolicyInjectionEvent, Resource, SanitizationGuard,
+    TypedAuditEvent, UNSPECIFIED, coerce_digest, coerce_id, coerce_lower_dotted, coerce_name,
     generate_correlation_id, join_rejection_detail,
 };
 
@@ -100,6 +100,7 @@ impl InterceptorAudit {
             outcome,
             reason_code.clone(),
             error.clone(),
+            record.applied.clone(),
         )
         .into_audit_event(&common);
 
@@ -125,6 +126,9 @@ impl InterceptorAudit {
         // The phase and outcome survive degradation: recording a permitted
         // phase as refused would say the interceptor blocked something it did
         // not, and losing the phase would unmoor the record from its seam.
+        // Patch paths are policy-derived strings and could be what tripped the
+        // guard; the count is a number and cannot. Keeping it stops a degraded
+        // injection reading as one that changed nothing.
         let mut fallback = build_admission_event(
             record.phase,
             Resource::new(UNSPECIFIED, UNSPECIFIED),
@@ -132,6 +136,10 @@ impl InterceptorAudit {
             outcome,
             reason_code,
             None,
+            Effects {
+                patch_count: record.applied.patch_count,
+                ..Effects::default()
+            },
         )
         .into_audit_event(&common)
         .map_err(|e| e.to_string())?;
@@ -176,10 +184,12 @@ fn build_admission_event(
     outcome: AuditOutcome,
     reason_code: String,
     error: Option<AuditErrorInfo>,
+    applied: Effects,
 ) -> AdmissionEvent {
     match phase {
         AdmissionPhase::Injection => {
-            let mut event = PolicyInjectionEvent::new(resource, verb, outcome, reason_code);
+            let mut event = PolicyInjectionEvent::new(resource, verb, outcome, reason_code)
+                .with_effects(applied);
             if let Some(error) = error {
                 event = event.with_error(error);
             }
@@ -251,6 +261,10 @@ pub struct AdmissionRecord<'a> {
     /// The policy the decision was made under.
     pub policy_digest: &'a str,
     pub policy_revision: Option<u64>,
+    /// What the injection changed. Empty on every path that changed nothing —
+    /// the record says a policy was injected, this says which parts of the
+    /// spec it rewrote.
+    pub applied: Effects,
 }
 
 #[cfg(test)]
@@ -274,6 +288,7 @@ mod tests {
             correlation_id: "corr-1",
             policy_digest: DIGEST,
             policy_revision: Some(7),
+            applied: Effects::default(),
         }
     }
 
@@ -341,6 +356,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A degraded injection must still say how much it changed: the count is
+    /// a number the guard cannot object to, while the paths go with the rest
+    /// of the caller-derived strings.
+    #[test]
+    fn a_degraded_injection_keeps_its_patch_count() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        audit
+            .emit_admission(&AdmissionRecord {
+                policy_digest: "AKIAAAAAAAAAAAAAAAAA",
+                applied: Effects {
+                    patch_count: Some(8),
+                    patches: vec![apf_audit::PatchRecord::new(
+                        "/spec/policy",
+                        apf_audit::PatchOp::Add,
+                    )],
+                    ..Effects::default()
+                },
+                ..record(Outcome::Allowed, "sbx-9")
+            })
+            .expect("recorded");
+
+        let r = &records(dir.path())[0];
+        assert!(r.reason.is_some(), "this must be the degraded record");
+        let effects = r.effects.as_ref().expect("the count survives");
+        assert_eq!(effects.patch_count, Some(8));
+        assert!(effects.patches.is_empty(), "paths are dropped: {effects:?}");
     }
 
     fn records(dir: &Path) -> Vec<AuditEvent> {
