@@ -5,6 +5,7 @@ mod coercion;
 mod component;
 mod emitter;
 mod events;
+mod host;
 mod model;
 mod redaction;
 mod sanitization;
@@ -25,6 +26,7 @@ pub use events::{
     PolicyRefreshEvent, PolicyServiceStartupEvent, PolicyVerificationEvent, ProvenanceSigningEvent,
     ReviewDecisionEvent, ReviewRequestEvent, TypedAuditEvent,
 };
+pub use host::host_qualified_instance_id;
 pub use model::{
     AuditContext, AuditContextError, AuditContextResult, AuditContextTemplate, AuditErrorInfo,
     AuditEvent, CallerKind, CommonFields, Component, CorrelationContext, CredentialScope, Decision,

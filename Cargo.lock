@@ -107,6 +107,7 @@ name = "apf-audit"
 version = "0.1.0"
 dependencies = [
  "jsonschema",
+ "nix",
  "serde",
  "serde_json",
  "thiserror",

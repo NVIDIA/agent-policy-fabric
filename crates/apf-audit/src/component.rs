@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::emitter::{AuditEmitter, EmitOutcome, JsonlSink};
+use crate::host::host_qualified_instance_id;
 use crate::model::{AuditEvent, CommonFields, Component, generate_correlation_id};
 
 /// Who is writing, and under what trust.
@@ -63,7 +64,11 @@ impl ComponentAudit {
         Ok(Self {
             inner: Some(Arc::new(Inner {
                 emitter: AuditEmitter::new(sink),
-                component: Component::new(stem, identity.version, identity.enforcement_point_id),
+                component: Component::new(
+                    stem,
+                    identity.version,
+                    host_qualified_instance_id(identity.enforcement_point_id),
+                ),
                 identity,
             })),
         })

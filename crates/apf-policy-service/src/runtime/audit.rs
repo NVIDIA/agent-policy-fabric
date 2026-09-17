@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use apf_audit::host_qualified_instance_id;
 use apf_audit::{
     AuditEmitter, AuditErrorInfo, AuditEvent, AuthenticationEvent, CommonFields, Component,
     JsonlSink, Outcome, PolicyActivationEvent, PolicyDistributionEvent, PolicyRefreshEvent,
@@ -135,14 +136,10 @@ impl PolicyServiceAudit {
         Ok(Self {
             inner: Some(Arc::new(Inner {
                 emitter: AuditEmitter::new(sink),
-                // TODO: instance_id is the enforcement point id, so every
-                // process of this component shares one. Multi-instance
-                // deployments need a real per-process id, and a per-process
-                // filename to match.
                 component: Component::new(
                     COMPONENT_NAME,
                     env!("CARGO_PKG_VERSION"),
-                    ENFORCEMENT_POINT_ID,
+                    host_qualified_instance_id(ENFORCEMENT_POINT_ID),
                 ),
                 vended: Mutex::new(HashMap::new()),
             })),
