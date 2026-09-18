@@ -94,7 +94,13 @@ impl MiddlewareAudit {
         // Host and method, not the path: a URL path carries request content and
         // the record is evidence of what was attempted, not a copy of it.
         let resource = Resource::new(coerce_name(record.resource_kind), coerce_id(record.host));
-        let verb = coerce_lower_dotted(record.verb);
+        // The tool name is caller-influenced; the coercion pins it to the verb
+        // profile so it cannot fail validation, and the fallback below drops
+        // it with every other caller-derived string.
+        let verb = record.tool.map_or_else(
+            || coerce_lower_dotted(record.verb),
+            |tool| coerce_lower_dotted(&format!("tool.{tool}")),
+        );
         let decision_id = generate_decision_id();
         let reason_code = coerce_lower_dotted(record.reason_code);
 
@@ -311,8 +317,13 @@ pub struct EgressRecord<'a> {
     /// What was acted on — the substrate surface, and the host reached.
     pub resource_kind: &'a str,
     pub host: &'a str,
-    /// The HTTP method, or the MCP tool where one was parsed.
+    /// The HTTP method; superseded on the record by `tool` when present.
     pub verb: &'a str,
+    /// The MCP tool the request invoked, where one was parsed. Recorded as
+    /// the verb (`tool.<name>`): the governed action was a tool invocation,
+    /// not a bare HTTP request, and without it every MCP-path record reads
+    /// as an indistinguishable POST to the MCP front.
+    pub tool: Option<&'a str>,
     pub reason_code: &'a str,
     /// The policy's explanation for a denial. Empty on allow.
     pub reason: &'a str,

@@ -71,6 +71,8 @@ struct RequestFacts<'a> {
     sandbox_id: &'a str,
     /// The wire's `request_id`, joining this record to the supervisor's log.
     correlation_id: &'a str,
+    /// The MCP tool the request invoked, where one was parsed.
+    tool: Option<&'a str>,
 }
 
 #[derive(Clone)]
@@ -172,6 +174,7 @@ impl SupervisorMiddlewareService {
             method,
             sandbox_id,
             correlation_id,
+            tool,
         } = *request;
         let allowed = response.decision == wire::Decision::Allow as i32;
 
@@ -238,6 +241,7 @@ impl SupervisorMiddlewareService {
             resource_kind: "openshell.egress",
             host,
             verb: &verb,
+            tool,
             reason_code: &reason_code,
             reason: &response.reason,
             sandbox_id,
@@ -383,7 +387,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
 
         let service = self.clone();
         let deciding = Arc::clone(&active);
-        let (response, verdict, effects) =
+        let (response, verdict, effects, tool) =
             tokio::task::spawn_blocking(move || service.evaluate(&evaluation, &deciding))
                 .await
                 .unwrap_or_else(|_| {
@@ -393,6 +397,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                         deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
                         None,
                         apf_audit::Effects::default(),
+                        None,
                     )
                 });
 
@@ -407,6 +412,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 method: &method,
                 sandbox_id: &sandbox_id,
                 correlation_id: &correlation_id,
+                tool: tool.as_deref(),
             },
             &active,
         );
@@ -448,7 +454,12 @@ impl SupervisorMiddlewareService {
         &self,
         evaluation: &wire::HttpRequestEvaluation,
         active: &ActivePolicy,
-    ) -> (wire::HttpRequestResult, Option<Verdict>, apf_audit::Effects) {
+    ) -> (
+        wire::HttpRequestResult,
+        Option<Verdict>,
+        apf_audit::Effects,
+        Option<String>,
+    ) {
         let sandbox_id = evaluation
             .context
             .as_ref()
@@ -466,6 +477,7 @@ impl SupervisorMiddlewareService {
                 deny(CODE_INVALID_PHASE, "unsupported middleware phase"),
                 None,
                 apf_audit::Effects::default(),
+                None,
             );
         }
         if evaluation
@@ -480,6 +492,7 @@ impl SupervisorMiddlewareService {
                 ),
                 None,
                 apf_audit::Effects::default(),
+                None,
             );
         }
         if evaluation.body.len() > MAX_BODY_BYTES {
@@ -487,6 +500,7 @@ impl SupervisorMiddlewareService {
                 deny(CODE_BODY_TOO_LARGE, "request body exceeds middleware limit"),
                 None,
                 apf_audit::Effects::default(),
+                None,
             );
         }
 
@@ -499,6 +513,7 @@ impl SupervisorMiddlewareService {
                     deny(CODE_INVALID_MCP_REQUEST, "invalid MCP tools/call request"),
                     None,
                     apf_audit::Effects::default(),
+                    None,
                 );
             }
             Err(_) => None,
@@ -510,9 +525,14 @@ impl SupervisorMiddlewareService {
                     deny(error.reason_code(), error.reason()),
                     None,
                     apf_audit::Effects::default(),
+                    None,
                 );
             }
         };
+
+        // Kept for the audit record: the evaluator consumes the input, and the
+        // record must name the tool the decision was actually about.
+        let tool = input.tool.clone();
 
         // One read: the evaluator and the digest of the policy it came from
         // travel together, so a hot-swap cannot pair a decision with another
@@ -524,6 +544,7 @@ impl SupervisorMiddlewareService {
                 deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
                 None,
                 apf_audit::Effects::default(),
+                tool,
             );
         };
 
@@ -540,6 +561,7 @@ impl SupervisorMiddlewareService {
                 policy_deny(&result),
                 Some(result.verdict),
                 apf_audit::Effects::default(),
+                tool,
             );
         }
 
@@ -553,6 +575,7 @@ impl SupervisorMiddlewareService {
                 ),
                 None,
                 apf_audit::Effects::default(),
+                tool,
             );
         };
         if applied
@@ -567,6 +590,7 @@ impl SupervisorMiddlewareService {
                 ),
                 None,
                 apf_audit::Effects::default(),
+                tool,
             );
         }
 
@@ -578,6 +602,7 @@ impl SupervisorMiddlewareService {
                 ),
                 None,
                 apf_audit::Effects::default(),
+                tool,
             );
         };
         let Ok(findings) = map_findings(&result, true) else {
@@ -585,6 +610,7 @@ impl SupervisorMiddlewareService {
                 deny(CODE_INVALID_FINDINGS, "policy produced invalid findings"),
                 None,
                 apf_audit::Effects::default(),
+                tool,
             );
         };
 
@@ -623,6 +649,7 @@ impl SupervisorMiddlewareService {
             },
             Some(result.verdict),
             effects,
+            tool,
         )
     }
 }
@@ -1077,7 +1104,7 @@ mod tests {
 
     use super::*;
 
-    const MCP_FIXTURE: &[u8] = br#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send","arguments":{"to":"fixture-recipient@example.com","subject":"test"}}}"#;
+    pub(super) const MCP_FIXTURE: &[u8] = br#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"outlook_message_send","arguments":{"to":"fixture-recipient@example.com","subject":"test"}}}"#;
 
     pub(super) struct StubEvaluator {
         result: EvalResult,
@@ -2087,6 +2114,60 @@ mod egress_audit_tests {
         assert_eq!(
             r.user_id, None,
             "OpenShell V1 has no user subject; the sandbox is not one"
+        );
+    }
+
+    /// The record must name the tool the decision was about: on the MCP path
+    /// every request is a POST to the same front, and without the tool every
+    /// record reads identically.
+    #[tokio::test]
+    async fn an_mcp_tool_call_records_the_tool_as_the_verb() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        let result = service
+            .evaluate_http_request(Request::new(evaluation(super::tests::MCP_FIXTURE)))
+            .await
+            .expect("middleware answers")
+            .into_inner();
+        assert_eq!(result.decision, wire::Decision::Allow as i32);
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(
+            r.verb.as_deref(),
+            Some("tool.outlook_message_send"),
+            "the governed action was a tool invocation, not a bare POST"
+        );
+        assert_eq!(
+            r.resource.as_ref().expect("resource").id,
+            "api.example.com",
+            "the L4 host stays on the record"
+        );
+    }
+
+    /// A tool name the agent chooses must not be able to strip the record:
+    /// coercion pins it to the verb profile before validation ever sees it.
+    #[tokio::test]
+    async fn a_hostile_tool_name_cannot_strip_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Sk-EVIL ../;drop name","arguments":{}}}"#;
+        let service =
+            make_audited_service(StubEvaluator::returning(EvalResult::default()), dir.path());
+        let result = service
+            .evaluate_http_request(Request::new(evaluation(body)))
+            .await
+            .expect("middleware answers")
+            .into_inner();
+        assert_eq!(result.decision, wire::Decision::Allow as i32);
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1, "the request must still leave a record");
+        assert_eq!(
+            records[0].verb.as_deref(),
+            Some("tool.k.dropname"),
+            "the hostile name survives only in coerced form"
         );
     }
 
