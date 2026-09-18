@@ -295,9 +295,9 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 operation: wire::SupervisorMiddlewareOperation::HttpRequest as i32,
                 phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
                 max_payload_bytes: MAX_BODY_BYTES as u64,
-                // An empty binding timeout inherits the operator-owned
+                // An absent binding timeout inherits the operator-owned
                 // deadline instead of silently shortening it.
-                timeout: String::new(),
+                request_timeout: None,
             }],
             expected_audience: self.authentication.expected_audience().to_string(),
         }))
@@ -1269,6 +1269,7 @@ mod tests {
                 request_id: "request-017".to_string(),
                 sandbox_id: "sandbox-042".to_string(),
                 originating_process: None,
+                ..Default::default()
             }),
             config: Some(Struct::default()),
             target: Some(wire::HttpRequestTarget {
@@ -1303,7 +1304,7 @@ mod tests {
                 operation: wire::SupervisorMiddlewareOperation::HttpRequest as i32,
                 phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
                 max_payload_bytes: MAX_BODY_BYTES as u64,
-                timeout: String::new(),
+                request_timeout: None,
             }]
         );
     }

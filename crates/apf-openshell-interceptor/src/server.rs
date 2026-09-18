@@ -1897,7 +1897,11 @@ impl GatewayInterceptor for GatewayInterceptorService {
                     }
                     profiles.push(p);
                 }
-                Err(e) => warn!(profile_id = %id, error = %e, "skipping unparseable profile"),
+                Err(_) => {
+                    return Err(Status::failed_precondition(
+                        "provider profile snapshot contains an invalid profile",
+                    ));
+                }
             }
             // Include both the ID and the content bytes so the revision changes
             // when any profile's body changes, not just when the set of IDs changes.
@@ -2793,6 +2797,7 @@ mod admission_audit_tests {
 
     struct StubPolicyService {
         doc: GetDocumentResponse,
+        names: Option<Vec<String>>,
     }
 
     #[tonic::async_trait]
@@ -2813,7 +2818,12 @@ mod admission_audit_tests {
             &self,
             _: Request<ListDocumentsRequest>,
         ) -> Result<Response<ListDocumentsResponse>, Status> {
-            Err(Status::unimplemented("stub"))
+            match &self.names {
+                Some(names) => Ok(Response::new(ListDocumentsResponse {
+                    names: names.clone(),
+                })),
+                None => Err(Status::unimplemented("stub")),
+            }
         }
     }
 
@@ -2840,12 +2850,19 @@ mod admission_audit_tests {
     }
 
     async fn serve_stub(doc: GetDocumentResponse) -> (PolicyClientHandle, SocketGuard) {
+        serve_stub_with_names(doc, None).await
+    }
+
+    async fn serve_stub_with_names(
+        doc: GetDocumentResponse,
+        names: Option<Vec<String>>,
+    ) -> (PolicyClientHandle, SocketGuard) {
         let path = socket_path();
         let listener = UnixListener::bind(&path).expect("bind stub socket");
         let guard = SocketGuard(path.clone());
         tokio::spawn(async move {
             Server::builder()
-                .add_service(PolicyServiceServer::new(StubPolicyService { doc }))
+                .add_service(PolicyServiceServer::new(StubPolicyService { doc, names }))
                 .serve_with_incoming(UnixListenerStream::new(listener))
                 .await
         });
@@ -2964,6 +2981,33 @@ mod admission_audit_tests {
             service,
             dir,
             _socket,
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_profiles_emit_enum_endpoints_and_fail_closed_on_invalid_modes() {
+        for mode in ["enforce", "typo"] {
+            let doc = GetDocumentResponse {
+                body: format!(
+                    "id: p\nendpoints: [{{host: api.example, port: 443, enforcement: {mode}}}]\n"
+                )
+                .into_bytes(),
+                ..Default::default()
+            };
+            let mut h = harness(&key(), doc.clone()).await;
+            let (client, _socket) = serve_stub_with_names(doc, Some(vec!["p".into()])).await;
+            h.service.policy_service = client;
+            let result = h
+                .service
+                .snapshot_provider_profiles(Request::new(ProviderProfileSnapshotRequest {}))
+                .await;
+            if mode == "enforce" {
+                let snapshot = result.unwrap().into_inner();
+                assert_eq!(snapshot.profiles.len(), 1);
+                assert_eq!(snapshot.profiles[0].endpoints[0].enforcement, 1);
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::FailedPrecondition);
+            }
         }
     }
 

@@ -20,13 +20,14 @@ use tokio::sync::broadcast::error::RecvError;
 use tonic::Code;
 use tracing::{info, warn};
 
+use crate::proto::openshell::datamodel::v1::{ObjectMeta, WorkspaceSelector, workspace_selector};
 use crate::proto::openshell::v1::{
     ListSandboxesRequest, Sandbox, SandboxPhase, UpdateConfigRequest,
 };
 use crate::reconciler::connect_gateway;
 use apf_types::events::{BundleEvent, BundleEventReceiver};
 
-const LIST_SANDBOXES_PAGE_SIZE: u32 = 100;
+const LIST_SANDBOXES_PAGE_SIZE: i32 = 100;
 
 /// How far in the future to set the TTL sleep when no deadline is active.
 const FAR_FUTURE: Duration = Duration::from_secs(365 * 24 * 3600);
@@ -141,20 +142,20 @@ async fn refresh_running_sandboxes(
     verifying_key: Arc<RwLock<VerifyingKey>>,
 ) -> Result<u32, String> {
     let mut client = connect_gateway(gateway_endpoint, tls).await?;
-    let mut offset = 0_u32;
+    let mut page_token = String::new();
+    let mut seen_tokens = std::collections::HashSet::new();
     let mut refreshed = 0_u32;
     loop {
         let response = client
             .list_sandboxes(ListSandboxesRequest {
-                limit: LIST_SANDBOXES_PAGE_SIZE,
-                offset,
+                page_size: LIST_SANDBOXES_PAGE_SIZE,
+                page_token: page_token.clone(),
+                workspace_scope: Some(default_workspace()),
                 label_selector: String::new(),
-                ..Default::default()
             })
             .await
             .map_err(|s| format!("list_sandboxes: {s}"))?
             .into_inner();
-        let count = response.sandboxes.len();
         for sandbox in response.sandboxes {
             let Some(metadata) = sandbox.metadata.as_ref() else {
                 continue;
@@ -191,13 +192,7 @@ async fn refresh_running_sandboxes(
             if !accepts_policy_refresh(&sandbox) {
                 continue;
             }
-            let result = client
-                .update_config(UpdateConfigRequest {
-                    name: metadata.name.clone(),
-                    expected_resource_version: metadata.resource_version,
-                    ..Default::default()
-                })
-                .await;
+            let result = client.update_config(refresh_request(metadata)?).await;
             match result {
                 Ok(resp) => {
                     refreshed += 1;
@@ -223,12 +218,35 @@ async fn refresh_running_sandboxes(
                 }
             }
         }
-        if count < usize::try_from(LIST_SANDBOXES_PAGE_SIZE).unwrap_or(usize::MAX) {
+        page_token = response.next_page_token;
+        if page_token.is_empty() {
             break;
         }
-        offset = offset.saturating_add(LIST_SANDBOXES_PAGE_SIZE);
+        if !seen_tokens.insert(page_token.clone()) {
+            return Err("sandbox list returned a repeated page token".into());
+        }
     }
     Ok(refreshed)
+}
+
+fn refresh_request(metadata: &ObjectMeta) -> Result<UpdateConfigRequest, String> {
+    if metadata.workspace != "default" || metadata.name.is_empty() {
+        return Err("sandbox is outside the requested workspace or has no name".into());
+    }
+    Ok(UpdateConfigRequest {
+        name: metadata.name.clone(),
+        expected_resource_version: metadata.resource_version,
+        workspace_scope: Some(default_workspace()),
+        ..Default::default()
+    })
+}
+
+// Preserve the refresher's existing default-workspace scope. Never broaden
+// refresh to every workspace just because the new API permits that selector.
+fn default_workspace() -> WorkspaceSelector {
+    WorkspaceSelector {
+        selection: Some(workspace_selector::Selection::Workspace("default".into())),
+    }
 }
 
 /// Returns true when the JWT has a bad signature (does not verify with the supplied key).
@@ -308,6 +326,30 @@ mod tests {
                 phase: phase as i32,
                 ..Default::default()
             }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refresh_is_scoped_and_preserves_optimistic_concurrency() {
+        let mut metadata = ObjectMeta {
+            name: "same-name".into(),
+            workspace: "default".into(),
+            resource_version: 42,
+            ..Default::default()
+        };
+        let request = refresh_request(&metadata).unwrap();
+        assert_eq!(request.name, "same-name");
+        assert_eq!(request.expected_resource_version, 42);
+        assert_eq!(
+            request.workspace_scope.unwrap().selection,
+            Some(workspace_selector::Selection::Workspace("default".into()))
+        );
+        assert!(!request.global);
+        assert!(request.policy.is_none());
+        for workspace in ["other-user", ""] {
+            metadata.workspace = workspace.into();
+            assert!(refresh_request(&metadata).is_err());
         }
     }
 

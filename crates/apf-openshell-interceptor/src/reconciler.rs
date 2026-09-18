@@ -11,7 +11,8 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::{info, warn};
 
 use crate::proto::openshell::sandbox::v1::{
-    GraphqlOperation, L7Allow, L7DenyRule, L7QueryMatcher, L7Rule, McpOptions, NetworkEndpoint,
+    GraphqlOperation, L7Allow, L7DenyRule, L7QueryMatcher, L7Rule, McpOptions, NetworkAccessPreset,
+    NetworkEndpoint, NetworkEnforcementMode, NetworkTlsMode,
 };
 use crate::proto::openshell::v1::{
     ImportProviderProfilesRequest, ProviderCredentialRefresh, ProviderCredentialRefreshMaterial,
@@ -161,13 +162,13 @@ fn refresh_strategy_from_str(s: &str) -> i32 {
     .into()
 }
 
-fn refresh_from_yaml(r: RefreshYaml) -> ProviderCredentialRefresh {
-    ProviderCredentialRefresh {
+fn refresh_from_yaml(r: RefreshYaml) -> Result<ProviderCredentialRefresh, String> {
+    Ok(ProviderCredentialRefresh {
         strategy: refresh_strategy_from_str(&r.strategy),
         token_url: r.token_url,
         scopes: r.scopes,
-        refresh_before_seconds: r.refresh_before_seconds,
-        max_lifetime_seconds: r.max_lifetime_seconds,
+        refresh_before: duration_seconds(r.refresh_before_seconds)?,
+        max_lifetime: duration_seconds(r.max_lifetime_seconds)?,
         material: r
             .material
             .into_iter()
@@ -186,17 +187,17 @@ fn refresh_from_yaml(r: RefreshYaml) -> ProviderCredentialRefresh {
                 credential: o.credential,
             })
             .collect(),
-    }
+    })
 }
 
-fn token_grant_from_yaml(t: TokenGrantYaml) -> ProviderCredentialTokenGrant {
-    ProviderCredentialTokenGrant {
+fn token_grant_from_yaml(t: TokenGrantYaml) -> Result<ProviderCredentialTokenGrant, String> {
+    Ok(ProviderCredentialTokenGrant {
         token_endpoint: t.token_endpoint,
         audience: t.audience,
         jwt_svid_audience: t.jwt_svid_audience,
         client_assertion_type: t.client_assertion_type,
         scopes: t.scopes,
-        cache_ttl_seconds: t.cache_ttl_seconds,
+        cache_ttl: duration_seconds(t.cache_ttl_seconds)?,
         audience_overrides: t
             .audience_overrides
             .into_iter()
@@ -208,7 +209,16 @@ fn token_grant_from_yaml(t: TokenGrantYaml) -> ProviderCredentialTokenGrant {
                 scopes: o.scopes,
             })
             .collect(),
+        ..Default::default()
+    })
+}
+
+// Zero in APF authoring means no override; preserve that as an absent duration.
+fn duration_seconds(seconds: i64) -> Result<Option<prost_types::Duration>, String> {
+    if !(0..=315_576_000_000).contains(&seconds) {
+        return Err("credential duration seconds out of range".into());
     }
+    Ok((seconds != 0).then_some(prost_types::Duration { seconds, nanos: 0 }))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -388,6 +398,7 @@ fn mcp_options_from_yaml(m: McpOptionsYaml) -> McpOptions {
     McpOptions {
         strict_tool_names: m.strict_tool_names,
         allow_all_known_mcp_methods: m.allow_all_known_mcp_methods,
+        versions: Vec::new(),
     }
 }
 
@@ -422,60 +433,61 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
         credentials: yaml
             .credentials
             .into_iter()
-            .map(|c| ProviderProfileCredential {
-                name: c.name,
-                description: c.description,
-                env_vars: c.env_vars,
-                required: c.required,
-                auth_style: c.auth_style,
-                header_name: c.header_name,
-                query_param: c.query_param,
-                path_template: c.path_template,
-                refresh: c.refresh.map(refresh_from_yaml),
-                token_grant: c.token_grant.map(token_grant_from_yaml),
+            .map(|c| {
+                Ok(ProviderProfileCredential {
+                    name: c.name,
+                    description: c.description,
+                    env_vars: c.env_vars,
+                    required: c.required,
+                    auth_style: c.auth_style,
+                    header_name: c.header_name,
+                    query_param: c.query_param,
+                    path_template: c.path_template,
+                    refresh: c.refresh.map(refresh_from_yaml).transpose()?,
+                    token_grant: c.token_grant.map(token_grant_from_yaml).transpose()?,
+                })
             })
-            .collect(),
+            .collect::<Result<_, String>>()?,
         endpoints: yaml
             .endpoints
             .into_iter()
-            .map(|e| NetworkEndpoint {
-                host: e.host,
-                port: e.port,
-                protocol: e.protocol,
-                access: e.access,
-                enforcement: e.enforcement,
-                tls: e.tls,
-                path: e.path,
-                ports: e.ports,
-                allowed_ips: e.allowed_ips,
-                rules: e.rules.into_iter().map(l7rule_from_yaml).collect(),
-                deny_rules: e
-                    .deny_rules
-                    .into_iter()
-                    .map(l7deny_rule_from_yaml)
-                    .collect(),
-                allow_encoded_slash: e.allow_encoded_slash,
-                websocket_credential_rewrite: e.websocket_credential_rewrite,
-                request_body_credential_rewrite: e.request_body_credential_rewrite,
-                persisted_queries: e.persisted_queries,
-                graphql_persisted_queries: e
-                    .graphql_persisted_queries
-                    .into_iter()
-                    .map(|(k, v)| (k, graphql_operation_from_yaml(v)))
-                    .collect(),
-                graphql_max_body_bytes: e.graphql_max_body_bytes,
-                json_rpc_max_body_bytes: e.json_rpc_max_body_bytes,
-                mcp: e.mcp.map(mcp_options_from_yaml),
-                ..Default::default()
+            .map(|e| {
+                Ok(NetworkEndpoint {
+                    host: e.host,
+                    port: e.port,
+                    protocol: e.protocol,
+                    access: endpoint_access(&e.access)? as i32,
+                    enforcement: endpoint_enforcement(&e.enforcement)? as i32,
+                    tls: endpoint_tls(&e.tls)? as i32,
+                    path: e.path,
+                    ports: e.ports,
+                    allowed_ips: e.allowed_ips,
+                    rules: e.rules.into_iter().map(l7rule_from_yaml).collect(),
+                    deny_rules: e
+                        .deny_rules
+                        .into_iter()
+                        .map(l7deny_rule_from_yaml)
+                        .collect(),
+                    allow_encoded_slash: e.allow_encoded_slash,
+                    websocket_credential_rewrite: e.websocket_credential_rewrite,
+                    request_body_credential_rewrite: e.request_body_credential_rewrite,
+                    persisted_queries: e.persisted_queries,
+                    graphql_persisted_queries: e
+                        .graphql_persisted_queries
+                        .into_iter()
+                        .map(|(k, v)| (k, graphql_operation_from_yaml(v)))
+                        .collect(),
+                    graphql_max_body_bytes: e.graphql_max_body_bytes,
+                    json_rpc_max_body_bytes: e.json_rpc_max_body_bytes,
+                    mcp: e.mcp.map(mcp_options_from_yaml),
+                    ..Default::default()
+                })
             })
-            .collect(),
+            .collect::<Result<_, String>>()?,
         binaries: yaml
             .binaries
             .into_iter()
-            .map(|path| crate::proto::openshell::sandbox::v1::NetworkBinary {
-                path,
-                ..Default::default()
-            })
+            .map(|path| crate::proto::openshell::sandbox::v1::NetworkBinary { path })
             .collect(),
         inference_capable: yaml.inference_capable,
         discovery: yaml.discovery.map(|d| ProviderProfileDiscovery {
@@ -701,9 +713,88 @@ pub fn spawn_profile_reconciler(
     });
 }
 
+// Keep the APF authoring vocabulary stable while emitting the pinned OpenShell
+// enum wire format. Unknown values must fail, never become audit/no inspection.
+fn endpoint_tls(value: &str) -> Result<NetworkTlsMode, String> {
+    match value {
+        "" => Ok(NetworkTlsMode::Unspecified),
+        "skip" => Ok(NetworkTlsMode::Skip),
+        "terminate" => Ok(NetworkTlsMode::Terminate),
+        "passthrough" => Ok(NetworkTlsMode::Passthrough),
+        _ => Err("invalid endpoint tls mode".into()),
+    }
+}
+
+fn endpoint_enforcement(value: &str) -> Result<NetworkEnforcementMode, String> {
+    match value {
+        "" => Ok(NetworkEnforcementMode::Unspecified),
+        "enforce" => Ok(NetworkEnforcementMode::Enforce),
+        "audit" => Ok(NetworkEnforcementMode::Audit),
+        _ => Err("invalid endpoint enforcement mode".into()),
+    }
+}
+
+fn endpoint_access(value: &str) -> Result<NetworkAccessPreset, String> {
+    match value {
+        "" => Ok(NetworkAccessPreset::Unspecified),
+        "read-only" => Ok(NetworkAccessPreset::ReadOnly),
+        "read-write" => Ok(NetworkAccessPreset::ReadWrite),
+        "full" => Ok(NetworkAccessPreset::Full),
+        _ => Err("invalid endpoint access preset".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_modes_use_enum_wire_types() {
+        let profile = profile_from_yaml(
+            b"id: p\nendpoints: [{tls: terminate, enforcement: enforce, access: read-write}]\n",
+        )
+        .unwrap();
+        let endpoint = &profile.endpoints[0];
+        assert_eq!(endpoint.encode_to_vec(), vec![0x20, 2, 0x28, 1, 0x30, 2]);
+        assert!(!endpoint.allow_uninspected_credentials);
+        assert!(!endpoint.provider_credentialed);
+        let defaults = profile_from_yaml(b"id: p\nendpoints: [{}]\n").unwrap();
+        let endpoint = &defaults.endpoints[0];
+        assert_eq!(
+            (endpoint.tls, endpoint.enforcement, endpoint.access),
+            (0, 0, 0)
+        );
+        for (field, value, expected) in [
+            ("tls", "skip", 1),
+            ("tls", "passthrough", 3),
+            ("enforcement", "audit", 2),
+            ("access", "read-only", 1),
+            ("access", "full", 3),
+        ] {
+            let yaml = format!("id: p\nendpoints: [{{{field}: {value}}}]\n");
+            let profile = profile_from_yaml(yaml.as_bytes()).unwrap();
+            let endpoint = &profile.endpoints[0];
+            let actual = match field {
+                "tls" => endpoint.tls,
+                "access" => endpoint.access,
+                _ => endpoint.enforcement,
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn unknown_endpoint_modes_reject_the_entire_profile() {
+        for field in ["tls", "enforcement", "access"] {
+            for value in ["unknown", "ENFORCE", "1"] {
+                let yaml = format!(
+                    "id: p\nendpoints: [{{enforcement: enforce}}, {{{field}: '{value}'}}]\n"
+                );
+                let error = profile_from_yaml(yaml.as_bytes()).unwrap_err();
+                assert!(error.contains(field), "{error}");
+            }
+        }
+    }
 
     #[test]
     fn mcp_endpoint_survives_reconciliation() {
@@ -762,6 +853,42 @@ endpoints:
     }
 
     #[test]
+    fn credential_duration_conversion_preserves_absence_and_rejects_invalid_values() {
+        assert_eq!(duration_seconds(0).unwrap(), None);
+        assert_eq!(
+            duration_seconds(60).unwrap(),
+            Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0
+            })
+        );
+        for seconds in [-1, 315_576_000_001, i64::MAX] {
+            for config in [
+                format!("refresh: {{refresh_before_seconds: {seconds}}}"),
+                format!("refresh: {{max_lifetime_seconds: {seconds}}}"),
+                format!("token_grant: {{cache_ttl_seconds: {seconds}}}"),
+            ] {
+                let yaml = format!("id: p\ncredentials: [{{name: key, {config}}}]\n");
+                assert!(profile_from_yaml(yaml.as_bytes()).is_err());
+            }
+        }
+        let profile = profile_from_yaml(
+            b"id: p\ncredentials: [{name: key, token_grant: {cache_ttl_seconds: 60}}]\n",
+        )
+        .unwrap();
+        let grant = profile.credentials[0].token_grant.as_ref().unwrap();
+        assert_eq!(
+            grant.cache_ttl,
+            Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0
+            })
+        );
+        assert_eq!(grant.grant_type, 0);
+        assert!(grant.subject_token.is_none());
+    }
+
+    #[test]
     fn external_refresh_survives_reconciliation() {
         let yaml = br#"
 id: calendar-read
@@ -796,7 +923,19 @@ credentials:
             refresh.token_url,
             "https://login.microsoftonline.com/common/oauth2/v2.0/token"
         );
-        assert_eq!(refresh.refresh_before_seconds, 600);
-        assert_eq!(refresh.max_lifetime_seconds, 3600);
+        assert_eq!(
+            refresh.refresh_before,
+            Some(prost_types::Duration {
+                seconds: 600,
+                nanos: 0
+            })
+        );
+        assert_eq!(
+            refresh.max_lifetime,
+            Some(prost_types::Duration {
+                seconds: 3600,
+                nanos: 0
+            })
+        );
     }
 }

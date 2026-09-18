@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use apf_proto::ir;
 use apf_proto::openshell_sandbox as os;
+use os::{NetworkAccessPreset, NetworkEnforcementMode, NetworkTlsMode};
 use prost::Message;
 
 use apf_compiler::{CanonicalPolicy, CompiledSurface, ProjectError, Projector};
@@ -61,26 +62,22 @@ impl Projector for OpenShellProjector {
             surfaces.push(CompiledSurface {
                 kind: SURFACE_ID.to_string(),
                 name: name.clone(),
-                bytes: lower_spec_with_middleware(spec, middleware).encode_to_vec(),
+                bytes: lower_spec_with_middleware(spec, middleware)
+                    .map_err(|cause| ProjectError {
+                        target: TARGET.to_string(),
+                        surface: SURFACE_ID.to_string(),
+                        cause: format!("SandboxPolicy '{name}': {cause}"),
+                    })?
+                    .encode_to_vec(),
             });
         }
 
         // ProviderProfiles → openshell.provider-profile.v1 (passthrough; raw
         // YAML bytes).
         //
-        // WHY PASSTHROUGH IS CORRECT: The consumer (OpenShell gateway) has its
-        // own YAML-to-proto deserializer for ProviderProfile documents. The
-        // gateway's ImportProviderProfiles endpoint parses YAML into
-        // `openshell.v1.ProviderProfile` proto messages internally. Vendoring
-        // the full openshell.proto (~1800 lines, 30+ message types) into APF
-        // solely to emit proto-encoded bytes would couple the PDP to the
-        // gateway's internal schema evolution cadence without any consumer
-        // benefit — the gateway would need to re-parse the proto bytes back
-        // into its own generated types anyway.
-        //
-        // Contract: GetDocument(kind="openshell.provider-profile.v1", name=<id>)
-        // returns the YAML bytes verbatim. The gateway is authoritative for
-        // interpreting them.
+        // The policy service preserves the authoring YAML. The interceptor
+        // parses this document into the pinned OpenShell ProviderProfile wire
+        // schema when serving snapshots or reconciling profiles to the gateway.
         for (name, body) in &p.provider_profiles {
             surfaces.push(CompiledSurface {
                 kind: SURFACE_PROVIDER_PROFILE.to_string(),
@@ -415,8 +412,8 @@ fn build_policy_annotators_projection(
 fn lower_spec_with_middleware(
     spec: &ir::SandboxPolicySpec,
     middleware: Option<&BTreeMap<String, apf_compiler::frontend::NetworkMiddlewareConfigDef>>,
-) -> os::SandboxPolicy {
-    os::SandboxPolicy {
+) -> Result<os::SandboxPolicy, String> {
+    Ok(os::SandboxPolicy {
         version: OPENSHELL_POLICY_VERSION,
         filesystem: spec.filesystem.as_ref().map(|fs| os::FilesystemPolicy {
             include_workdir: fs.include_workdir,
@@ -433,8 +430,8 @@ fn lower_spec_with_middleware(
         network_policies: spec
             .network_policies
             .iter()
-            .map(|(key, rule)| (key.clone(), lower_rule(rule)))
-            .collect(),
+            .map(|(key, rule)| Ok((key.clone(), lower_rule(rule)?)))
+            .collect::<Result<_, String>>()?,
         network_middlewares: middleware
             .map(|mw| {
                 mw.iter()
@@ -457,34 +454,37 @@ fn lower_spec_with_middleware(
                     .collect()
             })
             .unwrap_or_default(),
-    }
+    })
 }
 
-fn lower_rule(rule: &ir::NetworkPolicyRule) -> os::NetworkPolicyRule {
-    os::NetworkPolicyRule {
+fn lower_rule(rule: &ir::NetworkPolicyRule) -> Result<os::NetworkPolicyRule, String> {
+    Ok(os::NetworkPolicyRule {
         name: rule.name.clone(),
-        endpoints: rule.endpoints.iter().map(lower_endpoint).collect(),
+        endpoints: rule
+            .endpoints
+            .iter()
+            .map(lower_endpoint)
+            .collect::<Result<_, _>>()?,
         binaries: rule
             .binaries
             .iter()
             .map(|b| os::NetworkBinary {
                 path: b.path.clone(),
-                ..Default::default()
             })
             .collect(),
-    }
+    })
 }
 
-fn lower_endpoint(e: &ir::NetworkEndpoint) -> os::NetworkEndpoint {
-    os::NetworkEndpoint {
+fn lower_endpoint(e: &ir::NetworkEndpoint) -> Result<os::NetworkEndpoint, String> {
+    Ok(os::NetworkEndpoint {
         host: e.host.clone(),
         path: e.path.clone(),
         port: e.port,
         ports: e.ports.clone(),
         protocol: e.protocol.clone(),
-        tls: e.tls.clone(),
-        enforcement: e.enforcement.clone(),
-        access: e.access.clone(),
+        tls: endpoint_tls(&e.tls)? as i32,
+        enforcement: endpoint_enforcement(&e.enforcement)? as i32,
+        access: endpoint_access(&e.access)? as i32,
         rules: e.rules.iter().map(lower_l7rule).collect(),
         allowed_ips: e.allowed_ips.clone(),
         deny_rules: e.deny_rules.iter().map(lower_deny_rule).collect(),
@@ -512,6 +512,7 @@ fn lower_endpoint(e: &ir::NetworkEndpoint) -> os::NetworkEndpoint {
         mcp: e.mcp.as_ref().map(|m| os::McpOptions {
             strict_tool_names: m.strict_tool_names,
             allow_all_known_mcp_methods: m.allow_all_known_mcp_methods,
+            versions: Vec::new(),
         }),
         credential_signing: String::new(),
         signing_region: String::new(),
@@ -521,7 +522,9 @@ fn lower_endpoint(e: &ir::NetworkEndpoint) -> os::NetworkEndpoint {
         // endpointless profiles. `None` is the valid default for every
         // endpoint APF projects.
         credential_binding: None,
-    }
+        allow_uninspected_credentials: false,
+        provider_credentialed: false,
+    })
 }
 
 fn lower_l7rule(r: &ir::L7Rule) -> os::L7Rule {
@@ -575,6 +578,37 @@ fn lower_query(m: &ir::L7QueryMatcher) -> os::L7QueryMatcher {
     }
 }
 
+// Keep the APF authoring vocabulary stable while emitting the pinned OpenShell
+// enum wire format. Unknown values must fail, never become audit/no inspection.
+fn endpoint_tls(value: &str) -> Result<NetworkTlsMode, String> {
+    match value {
+        "" => Ok(NetworkTlsMode::Unspecified),
+        "skip" => Ok(NetworkTlsMode::Skip),
+        "terminate" => Ok(NetworkTlsMode::Terminate),
+        "passthrough" => Ok(NetworkTlsMode::Passthrough),
+        _ => Err("invalid endpoint tls mode".into()),
+    }
+}
+
+fn endpoint_enforcement(value: &str) -> Result<NetworkEnforcementMode, String> {
+    match value {
+        "" => Ok(NetworkEnforcementMode::Unspecified),
+        "enforce" => Ok(NetworkEnforcementMode::Enforce),
+        "audit" => Ok(NetworkEnforcementMode::Audit),
+        _ => Err("invalid endpoint enforcement mode".into()),
+    }
+}
+
+fn endpoint_access(value: &str) -> Result<NetworkAccessPreset, String> {
+    match value {
+        "" => Ok(NetworkAccessPreset::Unspecified),
+        "read-only" => Ok(NetworkAccessPreset::ReadOnly),
+        "read-write" => Ok(NetworkAccessPreset::ReadWrite),
+        "full" => Ok(NetworkAccessPreset::Full),
+        _ => Err("invalid endpoint access preset".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +630,64 @@ mod tests {
     fn parse_and_lower(yaml: &str) -> os::SandboxPolicy {
         let ir = frontend::parse(yaml.as_bytes()).expect("frontend parse");
         os::SandboxPolicy::decode(project_default(ir).as_slice()).expect("decode")
+    }
+
+    #[test]
+    fn endpoint_modes_use_enum_wire_types_and_keep_security_defaults() {
+        let endpoint = lower_endpoint(&ir::NetworkEndpoint {
+            enforcement: "enforce".into(),
+            tls: "terminate".into(),
+            access: "read-write".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        // Fields 4/5/6 are varints in dev.204, not length-delimited strings.
+        assert_eq!(endpoint.encode_to_vec(), vec![0x20, 2, 0x28, 1, 0x30, 2]);
+        assert!(!endpoint.allow_uninspected_credentials);
+        assert!(!endpoint.provider_credentialed);
+        assert!(!endpoint.advisor_proposed);
+        let omitted = lower_endpoint(&ir::NetworkEndpoint::default()).unwrap();
+        assert_eq!(
+            (omitted.tls, omitted.enforcement, omitted.access),
+            (0, 0, 0)
+        );
+        assert_eq!(endpoint_tls("passthrough").unwrap() as i32, 3);
+        assert_eq!(endpoint_tls("skip").unwrap() as i32, 1);
+        assert_eq!(endpoint_enforcement("audit").unwrap() as i32, 2);
+        assert_eq!(endpoint_access("read-only").unwrap() as i32, 1);
+        assert_eq!(endpoint_access("full").unwrap() as i32, 3);
+    }
+
+    #[test]
+    fn invalid_endpoint_modes_reject_the_whole_sandbox_projection() {
+        for field in ["tls", "enforcement", "access"] {
+            let mut endpoint = ir::NetworkEndpoint::default();
+            match field {
+                "tls" => endpoint.tls = "unknown".into(),
+                "enforcement" => endpoint.enforcement = "unknown".into(),
+                _ => endpoint.access = "unknown".into(),
+            }
+            let mut policy = CanonicalPolicy::default();
+            policy.sandbox_policies.insert(
+                "invalid".into(),
+                ir::SandboxPolicy {
+                    spec: Some(ir::SandboxPolicySpec {
+                        network_policies: [(
+                            "test".into(),
+                            ir::NetworkPolicyRule {
+                                endpoints: vec![endpoint],
+                                ..Default::default()
+                            },
+                        )]
+                        .into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            );
+            let error = OpenShellProjector.project(&policy).unwrap_err();
+            assert!(error.cause.contains(field));
+        }
     }
 
     #[test]

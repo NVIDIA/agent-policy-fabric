@@ -5,7 +5,7 @@ use std::process::Command;
 
 // APF IR types: PolicyRule (incl. PolicyRuleRole), SandboxPolicy,
 // Provider, PolicyEffect, PolicyFinding, etc.
-const OPENSHELL_COMMIT: &str = "8d67250a5d17348eb96c4fa46226b06d8041f2ba";
+const OPENSHELL_COMMIT: &str = "e38d7254e6099a42d6b80329b8e4ef6f0817931f";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
