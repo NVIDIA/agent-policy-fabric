@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: verify-copyright
+        name: verify-copyright
+        description: Add/refresh SPDX copyright and license headers on changed files.
+        entry: python3 scripts/verify_copyright.py --fix
+        language: system
+        files: \.(rs|proto|py|sh)$

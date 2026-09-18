@@ -93,4 +93,4 @@ no changes to shared library or service crates are needed.
 ## Commits
 
 - Format: `feat(apf):`, `fix(apf):`, `docs(apf):`, or component-scoped `feat(policy-gateway):`.
-- License header on every new Rust file: `// SPDX-License-Identifier: Apache-2.0`.
+- Copyright header on every new source file — see `CONTRIBUTING.md`; `pre-commit run verify-copyright` adds/updates it for you.

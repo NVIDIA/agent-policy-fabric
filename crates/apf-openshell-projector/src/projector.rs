@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! `OpenShell` projector — projects the canonical APF IR to the `OpenShell`
 //! substrate's surfaces: `openshell.sandbox.v1` (proto bytes from each

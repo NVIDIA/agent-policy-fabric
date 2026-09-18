@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! Bundle parser — `PolicyBundle` envelope per the canonical proto
 //! (`nvidia/agent_policy_fabric/policy/v1alpha1/policy_bundle.proto`).

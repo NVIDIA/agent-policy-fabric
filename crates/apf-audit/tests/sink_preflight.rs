@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! Preflight — a misconfigured audit path must fail at startup, not at the
 //! first event a fail-closed producer tries to write.
