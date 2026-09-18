@@ -1,5 +1,7 @@
 # APF — Agent Policy Fabric
 
+> **Project status:** APF is developed primarily by NVIDIA and follows internal roadmaps and development priorities. Community contributions are welcome and reviewed, but acceptance depends on how well they fit with project goals. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
 APF governs what agentic workloads are allowed to do. Policy is authored and signed once,
 independent of any execution environment, letting the enterprise — not the developer or
 the agent itself — set the rules every decision is evaluated against, rather than each
@@ -33,8 +35,14 @@ and evaluated without a cloud round-trip on the hot path.
 
 ## Contributing
 
-See `AGENTS.md` for build commands, DAG invariants, and commit conventions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process and DCO
+requirements. See [AGENTS.md](AGENTS.md) for build commands, DAG invariants,
+and commit conventions. Project ownership is listed in
+[MAINTAINERS.md](MAINTAINERS.md).
+
+Please follow our [Code of Conduct](CODE_OF_CONDUCT.md). Report suspected
+vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0
+Licensed under the [Apache License 2.0](LICENSE).
