@@ -124,6 +124,7 @@ mod tests {
 
     #[test]
     fn governed_action_span_can_be_constructed() {
+        let _guard = crate::subscriber::TEST_TRACING_LOCK.lock().unwrap();
         let mut ctx = CommonFields::new(
             "corr_test_span",
             "user:example",
@@ -144,6 +145,7 @@ mod tests {
 
     #[test]
     fn operational_spans_can_be_constructed() {
+        let _guard = crate::subscriber::TEST_TRACING_LOCK.lock().unwrap();
         let ctx = test_context();
         let _authorize_span = super::authorize(&ctx, "mail.search");
         let _credential_span = super::credential_issuance(&ctx, "graph");
@@ -152,6 +154,7 @@ mod tests {
 
     #[test]
     fn audit_observability_records_do_not_require_full_payloads() {
+        let _guard = crate::subscriber::TEST_TRACING_LOCK.lock().unwrap();
         let ctx = test_context();
         let event =
             PolicyActivationEvent::new(crate::model::Outcome::Success, "policy.bundle.loaded")

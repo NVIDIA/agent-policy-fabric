@@ -6,6 +6,11 @@ use std::fmt;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 
+// Tracing callsite interest is process-wide. Keep tests that first register the
+// same callsites with and without a thread-local subscriber from racing.
+#[cfg(test)]
+pub(crate) static TEST_TRACING_LOCK: Mutex<()> = Mutex::new(());
+
 use tracing::field::{Field, Visit};
 use tracing::{Event, Id, Subscriber};
 use tracing_subscriber::Layer;
@@ -322,6 +327,7 @@ mod tests {
 
     #[test]
     fn layer_captures_apf_observability_spans_and_events() {
+        let _guard = super::TEST_TRACING_LOCK.lock().unwrap();
         let (layer, sink) = ApfTracingLayer::capture();
         let subscriber = tracing_subscriber::registry().with(layer);
         let ctx = test_context();
@@ -359,6 +365,7 @@ mod tests {
 
     #[test]
     fn layer_drops_non_apf_targets_and_unsafe_fields() {
+        let _guard = super::TEST_TRACING_LOCK.lock().unwrap();
         let (layer, sink) = ApfTracingLayer::capture();
         let subscriber = tracing_subscriber::registry().with(layer);
 
