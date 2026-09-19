@@ -616,6 +616,62 @@ mod tests {
 
     const STUB: &str = include_str!("../../../examples/demo-bundle/sandbox/default-policy.yaml");
 
+    #[test]
+    fn compiler_keeps_protobuf_aggregate_separate_from_individual_yaml_profiles() {
+        use apf_bundle::BundleMembers;
+        use apf_compiler::Compiler;
+        use apf_proto::ProviderProfileSet;
+
+        for legacy in [false, true] {
+            let mut members = BundleMembers::default();
+            members.providers.insert(
+                "composed".into(),
+                br#"
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: composed
+spec:
+  type: other
+  endpoints:
+    - {host: api.example, port: 443, protocol: rest, enforcement: enforce}
+"#
+                .to_vec(),
+            );
+            let yaml = b"id: legacy\nendpoints: [{host: legacy.example, port: 443, enforcement: enforce}]\n".to_vec();
+            if legacy {
+                members
+                    .provider_profiles
+                    .insert("legacy".into(), yaml.clone());
+            }
+            let compiled = Compiler::new(vec![Box::new(OpenShellProjector)])
+                .lower_members(&members, None)
+                .unwrap();
+            let profiles: Vec<_> = compiled
+                .surfaces
+                .iter()
+                .filter(|s| s.kind == SURFACE_PROVIDER_PROFILE)
+                .collect();
+            assert_eq!(profiles.len(), if legacy { 3 } else { 2 });
+            let aggregate = profiles.iter().find(|s| s.name == "default").unwrap();
+            let decoded = ProviderProfileSet::decode(aggregate.bytes.as_slice()).unwrap();
+            assert_eq!(
+                decoded.profiles,
+                if legacy { vec![yaml.clone()] } else { vec![] }
+            );
+            if !legacy {
+                assert!(
+                    aggregate.bytes.is_empty(),
+                    "regression: empty protobuf is not YAML"
+                );
+            }
+            for profile in profiles.iter().filter(|s| s.name != "default") {
+                let document: serde_yaml::Value = serde_yaml::from_slice(&profile.bytes).unwrap();
+                assert_eq!(document["id"].as_str(), Some(profile.name.as_str()));
+            }
+        }
+    }
+
     fn project_default(ir: ir::SandboxPolicy) -> Vec<u8> {
         let mut p = CanonicalPolicy::default();
         p.sandbox_policies.insert("default".to_string(), ir);

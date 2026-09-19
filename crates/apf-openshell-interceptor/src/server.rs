@@ -2131,6 +2131,26 @@ impl GatewayInterceptor for GatewayInterceptorService {
                     }
                     profiles.push(p);
                 }
+                Err(_) if id == "default" => {
+                    // The compiler also emits a legacy protobuf aggregate at
+                    // this name. Its profiles have individual YAML documents
+                    // above; validate it without importing duplicate profiles.
+                    // Parse YAML first so a real profile named default is kept.
+                    use prost::Message as _;
+                    let aggregate = apf_proto::ProviderProfileSet::decode(body.as_slice())
+                        .map_err(|_| {
+                            Status::failed_precondition(
+                                "provider profile snapshot contains an invalid aggregate",
+                            )
+                        })?;
+                    for profile in &aggregate.profiles {
+                        reconciler::profile_from_yaml(profile).map_err(|_| {
+                            Status::failed_precondition(
+                                "provider profile snapshot contains an invalid aggregate profile",
+                            )
+                        })?;
+                    }
+                }
                 Err(_) => {
                     return Err(Status::failed_precondition(
                         "provider profile snapshot contains an invalid profile",
@@ -3265,15 +3285,21 @@ mod admission_audit_tests {
     struct StubPolicyService {
         doc: GetDocumentResponse,
         names: Option<Vec<String>>,
+        documents: BTreeMap<String, GetDocumentResponse>,
     }
 
     #[tonic::async_trait]
     impl PolicyService for StubPolicyService {
         async fn get_document(
             &self,
-            _: Request<GetDocumentRequest>,
+            request: Request<GetDocumentRequest>,
         ) -> Result<Response<GetDocumentResponse>, Status> {
-            Ok(Response::new(self.doc.clone()))
+            Ok(Response::new(
+                self.documents
+                    .get(&request.into_inner().name)
+                    .unwrap_or(&self.doc)
+                    .clone(),
+            ))
         }
         async fn health(
             &self,
@@ -3324,12 +3350,24 @@ mod admission_audit_tests {
         doc: GetDocumentResponse,
         names: Option<Vec<String>>,
     ) -> (PolicyClientHandle, SocketGuard) {
+        serve_stub_documents(doc, names, BTreeMap::new()).await
+    }
+
+    async fn serve_stub_documents(
+        doc: GetDocumentResponse,
+        names: Option<Vec<String>>,
+        documents: BTreeMap<String, GetDocumentResponse>,
+    ) -> (PolicyClientHandle, SocketGuard) {
         let path = socket_path();
         let listener = UnixListener::bind(&path).expect("bind stub socket");
         let guard = SocketGuard(path.clone());
         tokio::spawn(async move {
             Server::builder()
-                .add_service(PolicyServiceServer::new(StubPolicyService { doc, names }))
+                .add_service(PolicyServiceServer::new(StubPolicyService {
+                    doc,
+                    names,
+                    documents,
+                }))
                 .serve_with_incoming(UnixListenerStream::new(listener))
                 .await
         });
@@ -3475,6 +3513,104 @@ mod admission_audit_tests {
             } else {
                 assert_eq!(result.unwrap_err().code(), tonic::Code::FailedPrecondition);
             }
+        }
+    }
+
+    async fn snapshot_documents(
+        bodies: &[(&str, Vec<u8>)],
+    ) -> Result<ProviderProfileSnapshot, Status> {
+        let documents: BTreeMap<_, _> = bodies
+            .iter()
+            .map(|(name, body)| {
+                (
+                    name.to_string(),
+                    GetDocumentResponse {
+                        body: body.clone(),
+                        digest: hex::encode(Sha256::digest(body)),
+                        provenance_token: format!("fixture-provenance-{name}"),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let mut h = harness(&key(), GetDocumentResponse::default()).await;
+        let (client, _socket) = serve_stub_documents(
+            GetDocumentResponse::default(),
+            Some(documents.keys().cloned().collect()),
+            documents,
+        )
+        .await;
+        h.service.policy_service = client;
+        h.service
+            .snapshot_provider_profiles(Request::new(ProviderProfileSnapshotRequest {}))
+            .await
+            .map(Response::into_inner)
+    }
+
+    #[tokio::test]
+    async fn snapshot_accepts_empty_and_populated_compiler_aggregate_without_duplicates() {
+        let profile =
+            b"id: p\nendpoints: [{host: api.example, port: 443, enforcement: enforce}]\n".to_vec();
+        let mut revisions = Vec::new();
+        for profiles in [vec![], vec![profile.clone()]] {
+            let aggregate = apf_proto::ProviderProfileSet { profiles }.encode_to_vec();
+            let snapshot = snapshot_documents(&[("default", aggregate), ("p", profile.clone())])
+                .await
+                .unwrap();
+            assert_eq!(snapshot.profiles.len(), 1);
+            assert_eq!(snapshot.profiles[0].id, "p");
+            assert_eq!(snapshot.profiles[0].endpoints[0].enforcement, 1);
+            assert_eq!(
+                snapshot.profiles[0].annotations["openshell.nvidia.com/profile-hash"],
+                hex::encode(Sha256::digest(&profile))
+            );
+            assert_eq!(
+                snapshot.profiles[0].annotations["openshell.nvidia.com/profile-signature"],
+                "fixture-provenance-p"
+            );
+            revisions.push(snapshot.revision);
+        }
+        assert_ne!(
+            revisions[0], revisions[1],
+            "aggregate remains part of revision identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_keeps_yaml_profile_named_default() {
+        let snapshot = snapshot_documents(&[("default", b"id: default\n".to_vec())])
+            .await
+            .unwrap();
+        assert_eq!(snapshot.profiles.len(), 1);
+        assert_eq!(snapshot.profiles[0].id, "default");
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_malformed_aggregate_and_actual_profiles_atomically() {
+        let valid = b"id: a-valid\n".to_vec();
+        let invalid = b"id: z-invalid\nendpoints: [{enforcement: typo}]\n".to_vec();
+        for broken in [
+            vec![0xff],
+            invalid.clone(),
+            apf_proto::ProviderProfileSet {
+                profiles: vec![invalid.clone()],
+            }
+            .encode_to_vec(),
+        ] {
+            let error = snapshot_documents(&[("a-valid", valid.clone()), ("default", broken)])
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        }
+        for broken in [Vec::new(), invalid] {
+            let error = snapshot_documents(&[
+                ("a-valid", valid.clone()),
+                ("default", Vec::new()),
+                ("z-invalid", broken),
+            ])
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
         }
     }
 
