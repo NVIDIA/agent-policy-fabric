@@ -190,3 +190,16 @@ Three facts about this integration shape the path:
 - **Layer 2 never sees credentials.** The `PRE_CREDENTIALS` hook fires after OpenShell's own
   Layer 1 admission and before OpenShell injects provider credentials, so APF evaluates a
   credential-redacted view of every request.
+### Stable interceptor provider snapshots
+
+The configured OpenShell interceptor source verifies each PAP document's signature,
+optional expiry, body digest, version and signer identity before returning a catalog.
+A mixed bundle identity/version during one fetch fails the entire snapshot. The
+compiler aggregate is verified too. Snapshot revisions include the verified content,
+policy version, bundle identity and verifier identity, without per-request JWT fields.
+
+Source snapshots do not inject `profile-hash` / `profile-signature` import annotations.
+OpenShell trusts this configured source; independent profile import and sandbox
+admission verification remain unchanged. This avoids revision churn for the current
+profiles on OpenShell dev.204. It does not canonicalize OpenShell's hashing of other
+nested protobuf maps or qualify every possible profile shape.

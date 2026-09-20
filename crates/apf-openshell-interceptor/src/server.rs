@@ -2098,37 +2098,68 @@ impl GatewayInterceptor for GatewayInterceptorService {
             .map_err(|e| Status::internal(format!("list_documents: {e}")))?
             .names;
 
-        // Fetch each profile body, digest, and provenance token.
-        // (id, body, digest, provenance_token)
-        let mut profile_entries: Vec<(String, Vec<u8>, String, String)> =
-            Vec::with_capacity(names.len());
+        // Pin one verifier for the whole snapshot. A concurrent key rotation or
+        // bundle change must fail the request rather than mix policy identities.
+        let verifying_key =
+            *self.config.verifying_key.read().map_err(|_| {
+                Status::failed_precondition("provider profile verifier unavailable")
+            })?;
+        let mut profile_entries = Vec::with_capacity(names.len());
+        let mut policy_identity = None;
         for name in &names {
             let resp = policy_service
                 .get_document("openshell.provider-profile.v1", name, None)
                 .await
                 .map_err(|e| Status::internal(format!("get_document '{name}': {e}")))?;
-            profile_entries.push((name.clone(), resp.body, resp.digest, resp.provenance_token));
+            let claims = verify_jwt_internal(&verifying_key, &resp.provenance_token)
+                .map_err(|()| Status::failed_precondition("provider profile provenance invalid"))?;
+            if claims.sub != self.config.signing_key_id
+                || claims.apf_bundle_id.is_empty()
+                || claims.apf_version == 0
+                || claims.apf_version != resp.version
+                || claims.apf_document_digest != resp.digest
+                || hex::encode(Sha256::digest(&resp.body)) != resp.digest
+            {
+                return Err(Status::failed_precondition(
+                    "provider profile provenance mismatch",
+                ));
+            }
+            let identity = (claims.apf_bundle_id, claims.apf_version);
+            if policy_identity
+                .as_ref()
+                .is_some_and(|previous| previous != &identity)
+            {
+                return Err(Status::failed_precondition(
+                    "provider profile policy changed during snapshot",
+                ));
+            }
+            policy_identity = Some(identity);
+            profile_entries.push((name.clone(), resp.body));
         }
         profile_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut profiles = Vec::with_capacity(profile_entries.len());
         let mut hasher = Sha256::new();
-        hasher.update(b"apf-provider-profile-snapshot-v1");
-        for (id, body, digest, provenance_token) in &profile_entries {
+        hasher.update(b"apf-provider-profile-snapshot-v2");
+        hasher.update(verifying_key.as_bytes());
+        // These are verified stable identities, not JWT nonce/issuance fields.
+        for field in [
+            self.config.signing_key_id.as_bytes(),
+            policy_identity
+                .as_ref()
+                .map_or(&b""[..], |p| p.0.as_bytes()),
+        ] {
+            hasher.update((field.len() as u64).to_be_bytes());
+            hasher.update(field);
+        }
+        hasher.update(policy_identity.as_ref().map_or(0, |p| p.1).to_be_bytes());
+        for (id, body) in &profile_entries {
             match reconciler::profile_from_yaml(body) {
-                Ok(mut p) => {
-                    // Annotate each profile with its content hash and policy-service provenance
-                    // JWT so the VALIDATE handler can detect tampering at import time.
-                    p.annotations.insert(
-                        "openshell.nvidia.com/profile-hash".to_string(),
-                        digest.clone(),
-                    );
-                    if !provenance_token.is_empty() {
-                        p.annotations.insert(
-                            "openshell.nvidia.com/profile-signature".to_string(),
-                            provenance_token.clone(),
-                        );
-                    }
+                Ok(p) => {
+                    // OpenShell trusts configured interceptor sources. Verify PAP
+                    // provenance above; do not inject per-read import annotations
+                    // into this catalog's runtime configuration identity. The
+                    // independent profile-import/admission checks remain intact.
                     profiles.push(p);
                 }
                 Err(_) if id == "default" => {
@@ -2159,10 +2190,10 @@ impl GatewayInterceptor for GatewayInterceptorService {
             }
             // Include both the ID and the content bytes so the revision changes
             // when any profile's body changes, not just when the set of IDs changes.
+            hasher.update((id.len() as u64).to_be_bytes());
             hasher.update(id.as_bytes());
-            hasher.update(b"\0");
+            hasher.update((body.len() as u64).to_be_bytes());
             hasher.update(body);
-            hasher.update(b"\0");
         }
         let revision = format!("sha256:{:x}", hasher.finalize());
 
@@ -2294,6 +2325,8 @@ mod tests {
         apf_version: u64,
         #[serde(rename = "apf/spec-digest")]
         apf_spec_digest: String,
+        #[serde(rename = "apf/bundle-id")]
+        apf_bundle_id: String,
     }
 
     pub(super) fn mint_test_jwt(
@@ -2341,6 +2374,7 @@ mod tests {
             apf_document_digest: policy_digest.to_string(),
             apf_version: version,
             apf_spec_digest: spec_digest.to_string(),
+            apf_bundle_id: "test-bundle".to_string(),
         };
         jsonwebtoken::encode(&header, &claims, &encoding_key).expect("encode")
     }
@@ -3492,13 +3526,13 @@ mod admission_audit_tests {
     #[tokio::test]
     async fn snapshot_profiles_emit_enum_endpoints_and_fail_closed_on_invalid_modes() {
         for mode in ["enforce", "typo"] {
-            let doc = GetDocumentResponse {
-                body: format!(
+            let doc = signed_profile(
+                format!(
                     "id: p\nendpoints: [{{host: api.example, port: 443, enforcement: {mode}}}]\n"
                 )
                 .into_bytes(),
-                ..Default::default()
-            };
+                "snapshot",
+            );
             let mut h = harness(&key(), doc.clone()).await;
             let (client, _socket) = serve_stub_with_names(doc, Some(vec!["p".into()])).await;
             h.service.policy_service = client;
@@ -3519,20 +3553,27 @@ mod admission_audit_tests {
     async fn snapshot_documents(
         bodies: &[(&str, Vec<u8>)],
     ) -> Result<ProviderProfileSnapshot, Status> {
-        let documents: BTreeMap<_, _> = bodies
+        let documents = bodies
             .iter()
-            .map(|(name, body)| {
-                (
-                    name.to_string(),
-                    GetDocumentResponse {
-                        body: body.clone(),
-                        digest: hex::encode(Sha256::digest(body)),
-                        provenance_token: format!("fixture-provenance-{name}"),
-                        ..Default::default()
-                    },
-                )
-            })
+            .map(|(name, body)| (name.to_string(), signed_profile(body.clone(), name)))
             .collect();
+        snapshot_responses(documents).await
+    }
+
+    fn signed_profile(body: Vec<u8>, nonce: &str) -> GetDocumentResponse {
+        let digest = hex::encode(Sha256::digest(&body));
+        GetDocumentResponse {
+            provenance_token: mint_test_jwt(&key(), KEY_ID, nonce, &digest, None),
+            body,
+            digest,
+            version: 1,
+            valid_until_ms: 0,
+        }
+    }
+
+    async fn snapshot_responses(
+        documents: BTreeMap<String, GetDocumentResponse>,
+    ) -> Result<ProviderProfileSnapshot, Status> {
         let mut h = harness(&key(), GetDocumentResponse::default()).await;
         let (client, _socket) = serve_stub_documents(
             GetDocumentResponse::default(),
@@ -3560,20 +3601,113 @@ mod admission_audit_tests {
             assert_eq!(snapshot.profiles.len(), 1);
             assert_eq!(snapshot.profiles[0].id, "p");
             assert_eq!(snapshot.profiles[0].endpoints[0].enforcement, 1);
-            assert_eq!(
-                snapshot.profiles[0].annotations["openshell.nvidia.com/profile-hash"],
-                hex::encode(Sha256::digest(&profile))
-            );
-            assert_eq!(
-                snapshot.profiles[0].annotations["openshell.nvidia.com/profile-signature"],
-                "fixture-provenance-p"
-            );
+            assert!(snapshot.profiles[0].annotations.is_empty());
             revisions.push(snapshot.revision);
         }
         assert_ne!(
             revisions[0], revisions[1],
             "aggregate remains part of revision identity"
         );
+    }
+
+    #[tokio::test]
+    async fn snapshot_revision_ignores_fresh_tokens_but_tracks_verified_policy() {
+        let body = b"id: p\nendpoints: [{host: api.example, port: 443}]\n".to_vec();
+        let first = snapshot_responses(BTreeMap::from([(
+            "p".into(),
+            signed_profile(body.clone(), "first"),
+        )]))
+        .await
+        .unwrap();
+        let second = snapshot_responses(BTreeMap::from([(
+            "p".into(),
+            signed_profile(body.clone(), "second"),
+        )]))
+        .await
+        .unwrap();
+        assert_eq!(first.revision, second.revision);
+        assert_eq!(first.profiles, second.profiles);
+        assert!(first.profiles[0].annotations.is_empty());
+        let changed = snapshot_documents(&[(
+            "p",
+            b"id: p\nendpoints: [{host: other.example, port: 443}]\n".to_vec(),
+        )])
+        .await
+        .unwrap();
+        assert_ne!(first.revision, changed.revision);
+        let mut document = signed_profile(body, "third");
+        document.version = 2;
+        document.provenance_token =
+            mint_test_jwt_full(&key(), KEY_ID, "third", &document.digest, None, "", 2);
+        let newer = snapshot_responses(BTreeMap::from([("p".into(), document)]))
+            .await
+            .unwrap();
+        assert_ne!(first.revision, newer.revision);
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_invalid_provenance_atomically_including_aggregate() {
+        for name in ["p", "default"] {
+            let body = if name == "default" {
+                Vec::new()
+            } else {
+                b"id: p\n".to_vec()
+            };
+            for failure in [
+                "missing",
+                "wrong-key",
+                "expired",
+                "body",
+                "digest",
+                "version",
+                "signer",
+                "mixed-version",
+            ] {
+                let mut bad = signed_profile(body.clone(), "bad");
+                match failure {
+                    "missing" => bad.provenance_token.clear(),
+                    "wrong-key" => {
+                        bad.provenance_token = mint_test_jwt(
+                            &SigningKey::from_bytes(&[8; 32]),
+                            KEY_ID,
+                            "bad",
+                            &bad.digest,
+                            None,
+                        )
+                    }
+                    "expired" => {
+                        bad.provenance_token =
+                            mint_test_jwt(&key(), KEY_ID, "bad", &bad.digest, Some(1))
+                    }
+                    "body" => bad.body.push(b' '),
+                    "digest" => bad.digest = "0".repeat(64),
+                    "version" => bad.version += 1,
+                    "signer" => {
+                        bad.provenance_token =
+                            mint_test_jwt(&key(), "other", "bad", &bad.digest, None)
+                    }
+                    "mixed-version" => {
+                        bad.version = 2;
+                        bad.provenance_token =
+                            mint_test_jwt_full(&key(), KEY_ID, "bad", &bad.digest, None, "", 2);
+                    }
+                    _ => unreachable!(),
+                }
+                let result = snapshot_responses(BTreeMap::from([
+                    (
+                        "a-valid".into(),
+                        signed_profile(b"id: a-valid\n".to_vec(), "valid"),
+                    ),
+                    (name.into(), bad),
+                ]))
+                .await;
+                assert_eq!(
+                    result.unwrap_err().code(),
+                    tonic::Code::FailedPrecondition,
+                    "{name}: {failure}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
