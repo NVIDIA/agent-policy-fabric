@@ -949,6 +949,32 @@ impl GatewayInterceptorService {
         reason_code: &str,
         outcome: Outcome<'_>,
     ) {
+        self.record_governance_event(
+            "interceptor.update_config",
+            &self.config.document_kind,
+            &self.config.document_name,
+            &ctx.user_subject,
+            correlation_id,
+            policy,
+            reason_code,
+            outcome,
+        );
+    }
+
+    /// The general form: provider and proposal governance name their own verb
+    /// and resource, while config governance above keeps its policy document.
+    #[allow(clippy::too_many_arguments)]
+    fn record_governance_event(
+        &self,
+        verb: &str,
+        resource_kind: &str,
+        resource_id: &str,
+        user_subject: &str,
+        correlation_id: &str,
+        policy: PolicyIdentity<'_>,
+        reason_code: &str,
+        outcome: Outcome<'_>,
+    ) {
         let PolicyIdentity {
             digest: policy_digest,
             revision: policy_revision,
@@ -956,19 +982,19 @@ impl GatewayInterceptorService {
         if let Err(e) = self.config.audit.emit_admission(&AdmissionRecord {
             outcome,
             phase: AdmissionPhase::Governance,
-            verb: "interceptor.update_config",
+            verb,
             reason_code,
-            resource_kind: &self.config.document_kind,
-            resource_id: &self.config.document_name,
+            resource_kind,
+            resource_id,
             sandbox_id: "",
-            user_subject: &ctx.user_subject,
+            user_subject,
             agent_type: "",
             correlation_id,
             policy_digest,
             policy_revision,
             applied: apf_audit::Effects::default(),
         }) {
-            warn!(error = %e, "audit emission failed for config governance");
+            warn!(error = %e, "audit emission failed for governance decision");
         }
     }
 
@@ -1527,6 +1553,11 @@ impl GatewayInterceptorService {
         &self,
         eval: InterceptorEvaluation,
     ) -> Result<Response<InterceptorResult>, Status> {
+        let ctx = context::extract_provider(&eval);
+        let unverified = PolicyIdentity {
+            digest: UNVERIFIED_POLICY,
+            revision: None,
+        };
         let bundle_ids = match self
             .policy_service
             .clone()
@@ -1538,10 +1569,22 @@ impl GatewayInterceptorService {
                 .into_iter()
                 .collect::<std::collections::HashSet<_>>(),
             Err(e) => {
-                warn!(error = %e, "ImportProviderProfiles VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "ImportProviderProfiles VALIDATE: policy service list_documents failed");
+                self.record_governance_event(
+                    "interceptor.import_provider_profiles",
+                    "openshell.provider_profile",
+                    "unresolved",
+                    &ctx.user_subject,
+                    &ctx.correlation_id,
+                    unverified,
+                    "interceptor.govern_denied.policy_service_unavailable",
+                    Outcome::Refused {
+                        detail: "provider profile governance check failed: policy service unavailable",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     "provider profile governance check failed: policy service unavailable",
-                    "",
+                    &ctx.correlation_id,
                     "",
                     &eval.binding_id,
                 )));
@@ -1562,8 +1605,19 @@ impl GatewayInterceptorService {
                     correlation_id = %correlation_id,
                     "ImportProviderProfiles VALIDATE denied: profile not in bundle"
                 );
+                let reason = format!("provider profile '{id}' is not managed by the APF bundle");
+                self.record_governance_event(
+                    "interceptor.import_provider_profiles",
+                    "openshell.provider_profile",
+                    id,
+                    &ctx.user_subject,
+                    &correlation_id,
+                    unverified,
+                    "interceptor.govern_denied.unmanaged_provider_profile",
+                    Outcome::Refused { detail: &reason },
+                );
                 return Ok(Response::new(deny_with_context(
-                    &format!("provider profile '{id}' is not managed by the APF bundle"),
+                    &reason,
                     &correlation_id,
                     "",
                     &eval.binding_id,
@@ -1603,6 +1657,22 @@ impl GatewayInterceptorService {
                         correlation_id = %correlation_id,
                         "ImportProviderProfiles VALIDATE denied: {deny_message}"
                     );
+                    self.record_governance_event(
+                        "interceptor.import_provider_profiles",
+                        "openshell.provider_profile",
+                        id,
+                        &ctx.user_subject,
+                        &correlation_id,
+                        unverified,
+                        if profile_sig.is_empty() {
+                            "interceptor.govern_denied.profile_provenance_missing"
+                        } else {
+                            "interceptor.govern_denied.profile_provenance_invalid"
+                        },
+                        Outcome::Refused {
+                            detail: deny_message,
+                        },
+                    );
                     return Ok(Response::new(deny_with_context(
                         deny_message,
                         &correlation_id,
@@ -1614,6 +1684,16 @@ impl GatewayInterceptorService {
         }
 
         info!("ImportProviderProfiles VALIDATE allowed");
+        self.record_governance_event(
+            "interceptor.import_provider_profiles",
+            "openshell.provider_profile",
+            &format!("batch:{}", profiles.len()),
+            &ctx.user_subject,
+            &ctx.correlation_id,
+            unverified,
+            "interceptor.provider_profiles_allowed",
+            Outcome::Allowed,
+        );
         Ok(Response::new(allow()))
     }
 
@@ -1622,6 +1702,11 @@ impl GatewayInterceptorService {
         &self,
         eval: InterceptorEvaluation,
     ) -> Result<Response<InterceptorResult>, Status> {
+        let ctx = context::extract_provider(&eval);
+        let unverified = PolicyIdentity {
+            digest: UNVERIFIED_POLICY,
+            revision: None,
+        };
         let bundle_ids = match self
             .policy_service
             .clone()
@@ -1633,10 +1718,22 @@ impl GatewayInterceptorService {
                 .into_iter()
                 .collect::<std::collections::HashSet<_>>(),
             Err(e) => {
-                warn!(error = %e, "UpdateProviderProfiles VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "UpdateProviderProfiles VALIDATE: policy service list_documents failed");
+                self.record_governance_event(
+                    "interceptor.update_provider_profiles",
+                    "openshell.provider_profile",
+                    "unresolved",
+                    &ctx.user_subject,
+                    &ctx.correlation_id,
+                    unverified,
+                    "interceptor.govern_denied.policy_service_unavailable",
+                    Outcome::Refused {
+                        detail: "provider profile governance check failed: policy service unavailable",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     "provider profile governance check failed: policy service unavailable",
-                    "",
+                    &ctx.correlation_id,
                     "",
                     &eval.binding_id,
                 )));
@@ -1652,8 +1749,19 @@ impl GatewayInterceptorService {
                 profile_id = %target_id,
                 "UpdateProviderProfiles VALIDATE denied: profile not in bundle"
             );
+            let reason = format!("provider profile '{target_id}' is not managed by the APF bundle");
+            self.record_governance_event(
+                "interceptor.update_provider_profiles",
+                "openshell.provider_profile",
+                target_id,
+                &ctx.user_subject,
+                &correlation_id,
+                unverified,
+                "interceptor.govern_denied.unmanaged_provider_profile",
+                Outcome::Refused { detail: &reason },
+            );
             return Ok(Response::new(deny_with_context(
-                &format!("provider profile '{target_id}' is not managed by the APF bundle"),
+                &reason,
                 &correlation_id,
                 "",
                 &eval.binding_id,
@@ -1661,6 +1769,16 @@ impl GatewayInterceptorService {
         }
 
         info!("UpdateProviderProfiles VALIDATE allowed");
+        self.record_governance_event(
+            "interceptor.update_provider_profiles",
+            "openshell.provider_profile",
+            target_id,
+            &ctx.user_subject,
+            &ctx.correlation_id,
+            unverified,
+            "interceptor.provider_profiles_allowed",
+            Outcome::Allowed,
+        );
         Ok(Response::new(allow()))
     }
 
@@ -1670,7 +1788,13 @@ impl GatewayInterceptorService {
         &self,
         eval: InterceptorEvaluation,
     ) -> Result<Response<InterceptorResult>, Status> {
-        Ok(self.deny_provider_governance(&eval, "delete-provider-profile", "delete"))
+        Ok(self.deny_provider_governance(
+            &eval,
+            "delete-provider-profile",
+            "delete",
+            "interceptor.delete_provider_profile",
+            "interceptor.govern_denied.profile_delete",
+        ))
     }
 
     /// Handle `VALIDATE` for `CreateProvider` and `UpdateProvider`.
@@ -1679,6 +1803,12 @@ impl GatewayInterceptorService {
         &self,
         eval: InterceptorEvaluation,
     ) -> Result<Response<InterceptorResult>, Status> {
+        let ctx = context::extract_provider(&eval);
+        let verb = if eval.method == "UpdateProvider" {
+            "interceptor.update_provider"
+        } else {
+            "interceptor.create_provider"
+        };
         let bundle_types = match self
             .policy_service
             .clone()
@@ -1690,10 +1820,25 @@ impl GatewayInterceptorService {
                 .into_iter()
                 .collect::<std::collections::HashSet<_>>(),
             Err(e) => {
-                warn!(error = %e, "Provider VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "Provider VALIDATE: policy service list_documents failed");
+                self.record_governance_event(
+                    verb,
+                    "openshell.provider",
+                    "unresolved",
+                    &ctx.user_subject,
+                    &ctx.correlation_id,
+                    PolicyIdentity {
+                        digest: UNVERIFIED_POLICY,
+                        revision: None,
+                    },
+                    "interceptor.govern_denied.policy_service_unavailable",
+                    Outcome::Refused {
+                        detail: "provider type governance check failed: policy service unavailable",
+                    },
+                );
                 return Ok(Response::new(deny_with_context(
                     "provider type governance check failed: policy service unavailable",
-                    "",
+                    &ctx.correlation_id,
                     "",
                     &eval.binding_id,
                 )));
@@ -1714,8 +1859,22 @@ impl GatewayInterceptorService {
                 correlation_id = %correlation_id,
                 "Provider VALIDATE denied: type not in bundle"
             );
+            let reason = format!("provider type '{provider_type}' is not a bundle-managed profile");
+            self.record_governance_event(
+                verb,
+                "openshell.provider",
+                provider_type,
+                &ctx.user_subject,
+                &correlation_id,
+                PolicyIdentity {
+                    digest: UNVERIFIED_POLICY,
+                    revision: None,
+                },
+                "interceptor.govern_denied.unmanaged_provider_type",
+                Outcome::Refused { detail: &reason },
+            );
             return Ok(Response::new(deny_with_context(
-                &format!("provider type '{provider_type}' is not a bundle-managed profile"),
+                &reason,
                 &correlation_id,
                 "",
                 &eval.binding_id,
@@ -1728,6 +1887,19 @@ impl GatewayInterceptorService {
         // point. Credential presence/shape is validated by the gateway against
         // the profile. The interceptor's role is governance — the provider type
         // must reference a bundle-managed profile, checked above.
+        self.record_governance_event(
+            verb,
+            "openshell.provider",
+            provider_type,
+            &ctx.user_subject,
+            &ctx.correlation_id,
+            PolicyIdentity {
+                digest: UNVERIFIED_POLICY,
+                revision: None,
+            },
+            "interceptor.provider_type_allowed",
+            Outcome::Allowed,
+        );
         Ok(Response::new(allow()))
     }
 
@@ -1748,6 +1920,11 @@ impl GatewayInterceptorService {
             .or_else(|| op_json["analysis_mode"].as_str())
             .unwrap_or("");
 
+        let ctx = context::extract_provider(&eval);
+        let unverified = PolicyIdentity {
+            digest: UNVERIFIED_POLICY,
+            revision: None,
+        };
         if mode == "agent_authored" {
             let correlation_id = uuid::Uuid::new_v4().to_string();
             let reason =
@@ -1755,6 +1932,16 @@ impl GatewayInterceptorService {
             warn!(
                 correlation_id = %correlation_id,
                 "SubmitPolicyAnalysis VALIDATE denied: agent_authored proposal blocked"
+            );
+            self.record_governance_event(
+                "interceptor.submit_policy_analysis",
+                "apf.policy_proposal",
+                mode,
+                &ctx.user_subject,
+                &correlation_id,
+                unverified,
+                "interceptor.govern_denied.agent_authored_proposal",
+                Outcome::Refused { detail: reason },
             );
             return Ok(Response::new(deny_with_context(
                 reason,
@@ -1765,6 +1952,19 @@ impl GatewayInterceptorService {
         }
 
         info!("SubmitPolicyAnalysis VALIDATE allowed");
+        // Mechanistic proposals pass so denial telemetry can be collected;
+        // they are still blocked at approval. The allow is a governance
+        // decision too, and must be as visible as the refusal.
+        self.record_governance_event(
+            "interceptor.submit_policy_analysis",
+            "apf.policy_proposal",
+            if mode.is_empty() { "unspecified" } else { mode },
+            &ctx.user_subject,
+            &ctx.correlation_id,
+            unverified,
+            "interceptor.policy_analysis_allowed",
+            Outcome::Allowed,
+        );
         Ok(Response::new(allow()))
     }
 
@@ -1787,11 +1987,28 @@ impl GatewayInterceptorService {
             method,
             "draft chunk approval denied: proposal pathway blocked"
         );
-        let resource_id = match method {
-            "ApproveAllDraftChunks" => "approve-all-draft-chunks",
-            _ => "approve-draft-chunk",
+        let (resource_id, verb) = match method {
+            "ApproveAllDraftChunks" => (
+                "approve-all-draft-chunks",
+                "interceptor.approve_all_draft_chunks",
+            ),
+            _ => ("approve-draft-chunk", "interceptor.approve_draft_chunk"),
         };
         warn!(resource_id, correlation_id = %correlation_id, reason, "draft chunk approval denied");
+        let ctx = context::extract_provider(&eval);
+        self.record_governance_event(
+            verb,
+            "apf.policy_proposal",
+            resource_id,
+            &ctx.user_subject,
+            &correlation_id,
+            PolicyIdentity {
+                digest: UNVERIFIED_POLICY,
+                revision: None,
+            },
+            "interceptor.govern_denied.draft_approval",
+            Outcome::Refused { detail: reason },
+        );
         Ok(Response::new(deny_with_context(
             reason,
             &correlation_id,
@@ -1805,6 +2022,8 @@ impl GatewayInterceptorService {
         eval: &InterceptorEvaluation,
         resource_id: &'static str,
         operation: &str,
+        verb: &'static str,
+        reason_code: &'static str,
     ) -> Response<InterceptorResult> {
         let correlation_id = uuid::Uuid::new_v4().to_string();
         let reason = format!("provider profiles are bundle-managed; {operation} is not permitted");
@@ -1815,6 +2034,21 @@ impl GatewayInterceptorService {
             operation,
             resource_id,
             "provider profile governance denied"
+        );
+
+        let ctx = context::extract_provider(eval);
+        self.record_governance_event(
+            verb,
+            "openshell.provider_profile",
+            resource_id,
+            &ctx.user_subject,
+            &correlation_id,
+            PolicyIdentity {
+                digest: UNVERIFIED_POLICY,
+                revision: None,
+            },
+            reason_code,
+            Outcome::Refused { detail: &reason },
         );
 
         let mut log_annotations = HashMap::new();
@@ -2645,6 +2879,239 @@ mod tests {
     fn operation_has_annotations_false_when_absent() {
         let eval = eval_with_method_and_fields("CreateSandbox", vec![("name", "s1")]);
         assert!(!operation_has_annotations(&eval));
+    }
+
+    /// One audited service for the governance handlers that consult no
+    /// policy document — proposal and profile-delete refusals, and their
+    /// allows, must leave `config_governance` records.
+    fn audited_service(dir: &std::path::Path) -> GatewayInterceptorService {
+        let channel = Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        GatewayInterceptorService {
+            policy_service: PolicyClientHandle::from_channel(channel),
+            config: InterceptorConfig {
+                document_kind: "openshell.sandbox.v1".to_string(),
+                document_name: "default".to_string(),
+                signing_key_id: "test-key".to_string(),
+                verifying_key: Arc::new(std::sync::RwLock::new(
+                    SigningKey::generate(&mut OsRng).verifying_key(),
+                )),
+                audit: InterceptorAudit::to_jsonl_in(dir).expect("build emitter"),
+            },
+            authentication: AuthenticationMode::Insecure,
+        }
+    }
+
+    fn governance_records(dir: &std::path::Path) -> Vec<apf_audit::AuditEvent> {
+        let written =
+            std::fs::read_to_string(dir.join("apf-policy-gateway-interceptor-audit.jsonl"))
+                .expect("audit log was written");
+        written
+            .lines()
+            .map(|line| {
+                let parsed: apf_audit::AuditEvent =
+                    serde_json::from_str(line).expect("deserializes");
+                parsed.validate().expect("validates against the schema");
+                parsed
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn proposal_governance_decisions_leave_records() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let svc = audited_service(dir.path());
+
+        let deny = eval_with_method_and_fields(
+            "SubmitPolicyAnalysis",
+            vec![("analysisMode", "agent_authored")],
+        );
+        assert!(
+            !svc.handle_policy_analysis_verify(deny)
+                .await
+                .unwrap()
+                .into_inner()
+                .allowed
+        );
+        let allow = eval_with_method_and_fields(
+            "SubmitPolicyAnalysis",
+            vec![("analysisMode", "mechanistic")],
+        );
+        assert!(
+            svc.handle_policy_analysis_verify(allow)
+                .await
+                .unwrap()
+                .into_inner()
+                .allowed
+        );
+        let chunk = eval_with_method_and_fields("ApproveDraftChunk", vec![]);
+        assert!(
+            !svc.handle_draft_chunk_approve_deny(chunk, "ApproveDraftChunk")
+                .await
+                .unwrap()
+                .into_inner()
+                .allowed
+        );
+
+        let records = governance_records(dir.path());
+        assert_eq!(records.len(), 3, "every decision leaves a record");
+        for r in &records {
+            assert_eq!(r.event_type, apf_audit::EventType::ConfigGovernance);
+        }
+        assert_eq!(
+            records[0].reason_code.as_deref(),
+            Some("interceptor.govern_denied.agent_authored_proposal")
+        );
+        assert_eq!(
+            records[0].verb.as_deref(),
+            Some("interceptor.submit_policy_analysis")
+        );
+        assert_eq!(records[0].outcome, Some(apf_audit::Outcome::Refused));
+        assert_eq!(
+            records[1].reason_code.as_deref(),
+            Some("interceptor.policy_analysis_allowed")
+        );
+        assert_eq!(records[1].outcome, Some(apf_audit::Outcome::Success));
+        assert_eq!(
+            records[2].reason_code.as_deref(),
+            Some("interceptor.govern_denied.draft_approval")
+        );
+        assert_eq!(
+            records[2].verb.as_deref(),
+            Some("interceptor.approve_draft_chunk")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_delete_refusal_leaves_a_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let svc = audited_service(dir.path());
+        let eval = eval_with_method_and_fields("DeleteProviderProfile", vec![]);
+        let result = svc
+            .handle_provider_profile_delete_verify(eval)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+
+        let records = governance_records(dir.path());
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(r.event_type, apf_audit::EventType::ConfigGovernance);
+        assert_eq!(
+            r.verb.as_deref(),
+            Some("interceptor.delete_provider_profile")
+        );
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.profile_delete")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+    }
+
+    #[tokio::test]
+    async fn provider_create_fails_closed_and_leaves_a_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // The lazy channel has no listener: the catalog fetch fails, and the
+        // governance check must refuse rather than pass ungoverned.
+        let svc = audited_service(dir.path());
+        let eval = eval_with_method_and_fields("CreateProvider", vec![]);
+        let result = svc
+            .handle_provider_instance_type_verify(eval)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+
+        let records = governance_records(dir.path());
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(r.event_type, apf_audit::EventType::ConfigGovernance);
+        assert_eq!(r.verb.as_deref(), Some("interceptor.create_provider"));
+        assert_eq!(
+            r.reason_code.as_deref(),
+            Some("interceptor.govern_denied.policy_service_unavailable")
+        );
+        assert_eq!(r.outcome, Some(apf_audit::Outcome::Refused));
+        assert_eq!(
+            result
+                .log_annotations
+                .get("apf.nvidia.com/correlation-id")
+                .map(String::as_str),
+            Some(r.correlation_id.as_str()),
+            "the deny response and the record must join on one correlation id"
+        );
+    }
+
+    /// A credential-shaped caller value degrades the record, but the record
+    /// must keep the correlation id the response carried — the join matters
+    /// most on exactly the inputs that trip the sanitizer.
+    #[tokio::test]
+    async fn a_degraded_governance_record_keeps_a_safe_correlation_id() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let svc = audited_service(dir.path());
+        let hostile = eval_with_method_and_fields(
+            "SubmitPolicyAnalysis",
+            vec![("analysisMode", "AKIAAAAAAAAAAAAAAAAA")],
+        );
+        let result = svc
+            .handle_policy_analysis_verify(hostile)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed, "non-agent_authored modes pass governance");
+
+        let records = governance_records(dir.path());
+        assert_eq!(records.len(), 1, "the decision must still leave a record");
+        let r = &records[0];
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied admission detail omitted"),
+            "the record must mark itself as degraded"
+        );
+        assert!(
+            uuid::Uuid::parse_str(&r.correlation_id).is_ok(),
+            "a producer-minted uuid survives degradation: {}",
+            r.correlation_id
+        );
+    }
+
+    /// Emitter-level pin for the fallback correlation rule: a safe id is
+    /// kept verbatim, so the record still joins the response that carried it.
+    #[test]
+    fn degraded_record_preserves_a_sanitizer_safe_correlation_id() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let audit = InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter");
+        audit
+            .emit_admission(&AdmissionRecord {
+                outcome: Outcome::Refused {
+                    detail: "credential AKIAAAAAAAAAAAAAAAAA is not a bundle-managed profile",
+                },
+                phase: AdmissionPhase::Governance,
+                verb: "interceptor.create_provider",
+                reason_code: "interceptor.govern_denied.unmanaged_provider_type",
+                resource_kind: "openshell.provider",
+                resource_id: "AKIAAAAAAAAAAAAAAAAA",
+                sandbox_id: "",
+                user_subject: "",
+                agent_type: "",
+                correlation_id: "11111111-2222-4333-8444-555555555555",
+                policy_digest: UNVERIFIED_POLICY,
+                policy_revision: None,
+                applied: apf_audit::Effects::default(),
+            })
+            .expect("emit");
+        let records = governance_records(dir.path());
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("caller-supplied admission detail omitted"),
+            "the hostile detail must degrade the record"
+        );
+        assert_eq!(
+            r.correlation_id, "11111111-2222-4333-8444-555555555555",
+            "the safe correlation id must survive degradation"
+        );
     }
 
     #[tokio::test]

@@ -124,7 +124,18 @@ impl InterceptorAudit {
 
         // The fallback reuses `common`, so any caller-derived value left in it
         // fails the retry exactly as it failed the first attempt.
-        common.correlation_id = generate_correlation_id();
+        //
+        // The correlation id is kept when it is provably safe: the deny
+        // response carries the same id, and regenerating it here would break
+        // the record-to-response join on exactly the hostile inputs the
+        // record exists to evidence. A value the sanitizer would refuse is
+        // replaced — losing the join beats losing the record.
+        let coerced_correlation = coerce_id(&common.correlation_id);
+        common.correlation_id = if SanitizationGuard::accepts_string(&coerced_correlation) {
+            coerced_correlation
+        } else {
+            generate_correlation_id()
+        };
         // Coercion fixes the charset only, so a credential-shaped digest would
         // trip the sanitizer on the retry exactly as it did on the primary.
         common.bundle_digest = UNRECORDABLE_DIGEST.to_owned();
@@ -229,8 +240,8 @@ pub enum AdmissionPhase {
     Injection,
     /// VALIDATE: the injected policy reached commit intact.
     Validation,
-    /// Config-surface governance: UpdateConfig MODIFY and VALIDATE. Provider
-    /// profile refusals are enforced but not yet recorded.
+    /// Config-surface governance: UpdateConfig MODIFY and VALIDATE, provider
+    /// instance and profile governance, and policy-proposal refusals.
     Governance,
 }
 
