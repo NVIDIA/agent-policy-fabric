@@ -1,0 +1,1065 @@
+{
+  "schema_version": 1,
+  "description": "Upstream license and notice supplements for crates whose published archives omit root license files. Revisions come from each published crate .cargo_vcs_info.json. License files are preserved byte for byte; source comment excerpts are explicitly identified.",
+  "packages": [
+    {
+      "name": "buf-tools",
+      "version": "1.72.0-hotfix.1",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/canardleteer/buf-rs",
+      "revision": "d581ff1aa5cee57f9d3562c72434ed28f3008481",
+      "path_in_vcs": "buf-tools",
+      "published_vcs_dirty": true,
+      "copyright_statements": [
+        "Copyright (c) 2026 canardleteer"
+      ],
+      "files": [
+        {
+          "filename": "buf-tools-1.72.0-hotfix.1-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/d581ff1aa5cee57f9d3562c72434ed28f3008481/LICENSE",
+          "sha256": "49402ec3ae117d8fe5574d98fa9b86d5e6888f99739ac6c846ce5a61863d3366",
+          "kind": "license"
+        },
+        {
+          "filename": "buf-tools-1.72.0-hotfix.1-THIRD_PARTY_NOTICES.txt",
+          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/d581ff1aa5cee57f9d3562c72434ed28f3008481/THIRD_PARTY_NOTICES.md",
+          "sha256": "92ea1c87892a14799756f24a3088aa04ef2292735c9c39bd05df621310013693",
+          "kind": "notice"
+        }
+      ]
+    },
+    {
+      "name": "buffa-descriptor",
+      "version": "0.5.2",
+      "declared_license": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "repository": "https://github.com/anthropics/buffa",
+      "revision": "4c264ddd6fdd286f237dac0551fd420907b4864c",
+      "path_in_vcs": "buffa-descriptor",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright 2026 Anthropic, PBC",
+        "Copyright 2008 Google Inc.  All rights reserved."
+      ],
+      "files": [
+        {
+          "filename": "buffa-descriptor-0.5.2-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/LICENSE",
+          "sha256": "e26ae9475108d3b118fe27915d36e8c5ab72732a8bbba24787eb4f45492c3300",
+          "kind": "license"
+        },
+        {
+          "filename": "buffa-descriptor-0.5.2-descriptor.proto-NOTICE.txt",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/buffa-descriptor/protos/google/protobuf/descriptor.proto",
+          "sha256": "2f706d67271d8db967046638e30f7887a5ba6e49593e6395e8145a7c9feab96a",
+          "upstream_sha256": "826dd555e98d16a8360edcaae83778057f0a583ea7059e59d2d838096f912918",
+          "kind": "notice",
+          "extraction": "Verbatim initial comment block through the first blank line.",
+          "source_lines": [
+            1,
+            29
+          ],
+          "license": "BSD-3-Clause"
+        },
+        {
+          "filename": "buffa-descriptor-0.5.2-plugin.proto-NOTICE.txt",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/buffa-descriptor/protos/google/protobuf/compiler/plugin.proto",
+          "sha256": "3223e5930e2208981693edc7883c2d59139cc08846d15d21eee3387d7bf67bc6",
+          "upstream_sha256": "8f5ef6c36fad8e66e3347c0f8d8910dfb14239b8ccfd2a8d16dba8e775b57b7f",
+          "kind": "notice",
+          "extraction": "Verbatim initial comment block through the first blank line.",
+          "source_lines": [
+            1,
+            6
+          ],
+          "license": "BSD-3-Clause"
+        }
+      ],
+      "additional_licenses": [
+        {
+          "license": "BSD-3-Clause",
+          "scope": "Bundled Google Protocol Buffers descriptor.proto and compiler/plugin.proto files."
+        }
+      ]
+    },
+    {
+      "name": "cedar-policy",
+      "version": "4.12.0",
+      "declared_license": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "repository": "https://github.com/cedar-policy/cedar",
+      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "path_in_vcs": "cedar-policy",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright Cedar Contributors"
+      ],
+      "files": [
+        {
+          "filename": "cedar-policy-4.12.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+          "kind": "license"
+        },
+        {
+          "filename": "cedar-policy-4.12.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
+          "kind": "notice"
+        }
+      ]
+    },
+    {
+      "name": "cedar-policy-core",
+      "version": "4.12.0",
+      "declared_license": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "repository": "https://github.com/cedar-policy/cedar",
+      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "path_in_vcs": "cedar-policy-core",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright Cedar Contributors"
+      ],
+      "files": [
+        {
+          "filename": "cedar-policy-4.12.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+          "kind": "license"
+        },
+        {
+          "filename": "cedar-policy-4.12.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
+          "kind": "notice"
+        }
+      ]
+    },
+    {
+      "name": "cedar-policy-formatter",
+      "version": "4.12.0",
+      "declared_license": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "repository": "https://github.com/cedar-policy/cedar",
+      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "path_in_vcs": "cedar-policy-formatter",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright Cedar Contributors"
+      ],
+      "files": [
+        {
+          "filename": "cedar-policy-4.12.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+          "kind": "license"
+        },
+        {
+          "filename": "cedar-policy-4.12.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
+          "kind": "notice"
+        }
+      ]
+    },
+    {
+      "name": "defmt-parser",
+      "version": "1.0.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "repository": "https://github.com/knurling-rs/defmt",
+      "revision": "4a8cdb44891ed57b8ff5a023b6bec7137c48708f",
+      "path_in_vcs": "parser",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright (c) Ferrous Systems"
+      ],
+      "files": [
+        {
+          "filename": "defmt-parser-1.0.0-LICENSE-MIT",
+          "upstream_url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT",
+          "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50",
+          "kind": "license"
+        }
+      ]
+    },
+    {
+      "name": "jsonschema-regex",
+      "version": "0.46.10",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/Stranger6667/jsonschema",
+      "revision": "ecaeceac2340908a8fbf71404442296bd1536520",
+      "path_in_vcs": "crates/jsonschema-regex",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright (c) 2020-2026 Dmitry Dygalo"
+      ],
+      "files": [
+        {
+          "filename": "jsonschema-regex-0.46.10-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/Stranger6667/jsonschema/ecaeceac2340908a8fbf71404442296bd1536520/LICENSE",
+          "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038",
+          "kind": "license"
+        }
+      ]
+    },
+    {
+      "name": "libm",
+      "version": "0.2.16",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/rust-lang/libm",
+      "revision": "dfd2203a4d6110820ad7bb65cafe1bf331a03a3d",
+      "path_in_vcs": "libm",
+      "published_vcs_dirty": false,
+      "files": [
+        {
+          "filename": "libm-0.2.16-SOURCE-NOTICES.txt",
+          "upstream_url": "https://github.com/rust-lang/libm/tree/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src",
+          "sha256": "943c7129e011a796a65622861b3f5099075e88dd08515022b449069b03d635e0",
+          "kind": "notice",
+          "extraction": "Concatenated leading source comment blocks; SOURCE labels identify the original files.",
+          "sources": [
+            {
+              "path": "src/math/acos.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/acos.rs",
+              "upstream_sha256": "efd83a6138061209867f06421c6a756b8ca3aab5c6c0a85c4aba31bedb299da5",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                34
+              ],
+              "extracted_sha256": "593a531d07f4da95d29d8fb36ed381e84508ad1a1e66dcc4d9faa81490523735"
+            },
+            {
+              "path": "src/math/acosf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/acosf.rs",
+              "upstream_sha256": "c5c9c74d267725bbe5f9319e6f4a396af6ce46c890b601d3f963a5d74d12e4c3",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "45260f53ace77c98c966e57f7fee35e85f3af9376e5320bb9017caca08ba6388"
+            },
+            {
+              "path": "src/math/asin.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/asin.rs",
+              "upstream_sha256": "9693a7cb61674ec6fe22be9db8fe20276729c48b1562fd86d5421e372a0a12e4",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                40
+              ],
+              "extracted_sha256": "b5a863769500eee3142168da8e1ee8c962c00c83f965d3c16ab101013bc34bb8"
+            },
+            {
+              "path": "src/math/asinf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/asinf.rs",
+              "upstream_sha256": "25f6b7bbf46fc5aac4ebdd9e00118239747dcd28a79b90b858ddc4633d773d65",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "4d883695a193d68437dce3c3239958e7b4b342c1f5ecc0ef17af9c3becfc1b68"
+            },
+            {
+              "path": "src/math/atan.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/atan.rs",
+              "upstream_sha256": "54181dbddf4f77b90b32b9f6819ac989da570dc02b791f3685d20a23d51324be",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                30
+              ],
+              "extracted_sha256": "9afc9e52d3f8404d95327d3f6836665b4510bbb9fa47cc7ae3666b453dfd4162"
+            },
+            {
+              "path": "src/math/atan2.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/atan2.rs",
+              "upstream_sha256": "7d028d4d397f7484b8feed7b228eda65b84acac94d27729d236d5df95e38d8f0",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                38
+              ],
+              "extracted_sha256": "0c205564d510eed8ccb5ff0056c3b67f6000596d601a9301c193fca57ba22e29"
+            },
+            {
+              "path": "src/math/atan2f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/atan2f.rs",
+              "upstream_sha256": "b9497b5adb75e2788c404fd121aa64dcfa0e9357b67af3b3e7e6d4624dae1ca1",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "674767bc817058e254fc2f7c222c2e5abf60a78bf1eb130de3216872d4c83b58"
+            },
+            {
+              "path": "src/math/atanf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/atanf.rs",
+              "upstream_sha256": "197762f16ed5951236e17d0869c529e857acc329cc287df019ff69e5401f3b4d",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "c34b276efc0c815ca0b74ee4b0ee1e96c91432c89c591ac099e6a71210aef79d"
+            },
+            {
+              "path": "src/math/cbrt.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/cbrt.rs",
+              "upstream_sha256": "1ed98a0943c46ca48e32af54b6baeb80b6e8da5dda550005711fcb26bfcf12c2",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                5
+              ],
+              "extracted_sha256": "f117f16ae37d151238cfc1a3030f060b06f9045ed0298cbdddbdf1ae0b8c0487"
+            },
+            {
+              "path": "src/math/cbrtf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/cbrtf.rs",
+              "upstream_sha256": "7a2b4f190e8618c52cb23b47c040a4b4eacca739c68393cf14fb3f5d73988127",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                18
+              ],
+              "extracted_sha256": "69ae94862f781cfb52e8f96b43ccfe580b83b7b1ee9c9b81b7ab1c921db5f168"
+            },
+            {
+              "path": "src/math/cos.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/cos.rs",
+              "upstream_sha256": "6e81752899c471bd42d04bdf08e0b22bc10a29f92fa2a343281b995fd342f035",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "78faf2571fe417f3bcd7b38798c4d9ddf499ca43d1ede6fa44992ba75445bff7"
+            },
+            {
+              "path": "src/math/cosf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/cosf.rs",
+              "upstream_sha256": "f48aa954f199fe4f54fd73b4e7886a75f2c08afba7fc31c6a36db5b5f90ced69",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "716b05f780529420c7865d540eb90defe63a33e337c734b23f5d02f230cdc919"
+            },
+            {
+              "path": "src/math/erff.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/erff.rs",
+              "upstream_sha256": "62c30876390e532d7dc9ac1f1f1c1f654065fba2b2e534e531964d79e1766196",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "6c047eb102c5630d46169a6efb439835c4d0b87b2afad8eb86b6594d15df7f1c"
+            },
+            {
+              "path": "src/math/exp.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/exp.rs",
+              "upstream_sha256": "1d486e847e1752fb9ce74a714096a11adcac935dacd4f17625ff63819103a80d",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                66
+              ],
+              "extracted_sha256": "a14602187ebd0791f68a5a2f6bd439515b2bd81900c8404414146d6d86701b0c"
+            },
+            {
+              "path": "src/math/exp2.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/exp2.rs",
+              "upstream_sha256": "e7270f15a682b69a49e042c80503c206d37c6c895f2c63da59a5e2431fa5fedc",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                25
+              ],
+              "extracted_sha256": "2728151294eb93196ab6dd7cb28ddc6e9ab76bf7ebf8c2e1a15f0d2221c98c76"
+            },
+            {
+              "path": "src/math/exp2f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/exp2f.rs",
+              "upstream_sha256": "3b4b5cb2e5674e1ce66a6051710738c1a6edc1d1638686fe9c78f0af4792a634",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                25
+              ],
+              "extracted_sha256": "d9d31636bf6dc09dbbe83abe0514e8d867f635bf3ef99b5163b54c56e6524077"
+            },
+            {
+              "path": "src/math/expf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/expf.rs",
+              "upstream_sha256": "33b01180ebd01bb2911379476c5411fd05b066f2e17ef66e48c4dde83a7f01c0",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "738139255471d9eeebd57f9b8941953f88d2bedba1f8b19fd1b66b2159a1b142"
+            },
+            {
+              "path": "src/math/expm1.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/expm1.rs",
+              "upstream_sha256": "6cc612ca7cf1384dc15f541b301a1f176efbc79536aff1293408b3121cc30ad3",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                11
+              ],
+              "extracted_sha256": "3ba10cd82fbae064287ee39dc35eac5bbfe75eec6fa2d0b9ce946bc224b793f1"
+            },
+            {
+              "path": "src/math/expm1f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/expm1f.rs",
+              "upstream_sha256": "2b517f1bcb6279c906aad737f08c83ac30d7871e3beff266ea50a01fa18ccc81",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "cce13b8786574f070d06de60e6f4263dcd21cffd67c6112b061eeb262b9fb71d"
+            },
+            {
+              "path": "src/math/fma.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/fma.rs",
+              "upstream_sha256": "16e72470f5c4407c44183cf06f5868f216c92e0532f3fb387b57dbccf815e2a7",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                2
+              ],
+              "extracted_sha256": "57831bc0962edac1eecbd6877f93c4452a6651b37bb96b540cae36b1331237d2"
+            },
+            {
+              "path": "src/math/generic/ceil.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/ceil.rs",
+              "upstream_sha256": "66b3def2b00ed9dd6a4f59c73765a050853dfe06c828fdf731987ac99e7c2a88",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                8
+              ],
+              "extracted_sha256": "685afe408873997a0160f87bc5cdf9450f30adb2bf9e77d4c2d20d3bed6f87e8"
+            },
+            {
+              "path": "src/math/generic/floor.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/floor.rs",
+              "upstream_sha256": "7d4f15369abefa27645d6deda51d30febbe60ee9dca76e72a9364d574d0711c0",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                8
+              ],
+              "extracted_sha256": "50bfc55401f7c8886f53d34d93f942ca7a1ddd2132dcb4705b8d24cf3cfe5929"
+            },
+            {
+              "path": "src/math/generic/fma.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fma.rs",
+              "upstream_sha256": "ba44930a56d7c1953ab0c96c7c767911c9dc6967083700c8ef02f43672c8482f",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                2
+              ],
+              "extracted_sha256": "8c0ceb8b3a85d042ee4bccf7e00f61bc72dd93cdade05a4cad9c332d555db493"
+            },
+            {
+              "path": "src/math/generic/fmax.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fmax.rs",
+              "upstream_sha256": "68d923950c3f1eab68baeab24679ab50918b663904839bc349ef666d9467518f",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "e1f11ba985bbbc4f7b20e22d87b99dc39c4db577f42e0844d4a819dcc977f7c8"
+            },
+            {
+              "path": "src/math/generic/fmaximum.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fmaximum.rs",
+              "upstream_sha256": "c4b8b7080821a2dc65d0a50baf717ccd9ee20b813ce6d6d3f9f01b5700b674fa",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "a5cbb9617bc95548fbafe78d406e6ff1bff9537d083158859998d4e533057e28"
+            },
+            {
+              "path": "src/math/generic/fmaximum_num.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fmaximum_num.rs",
+              "upstream_sha256": "2f2d41e1f0160eb73469fa63db27d881b5b8eabc6d62fae7ca1b4b03eb35c5d5",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                12
+              ],
+              "extracted_sha256": "75a3456aa4d78433b55a18f1112f182b7d8ffbe3f9620352494f1c673041fc9b"
+            },
+            {
+              "path": "src/math/generic/fmin.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fmin.rs",
+              "upstream_sha256": "9bbdece9606e5eac57f3a91a5db7aab814c8e2b28b6df1813723c6b5715efc55",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "181f85a46788cf48506f79cf5a38af30f80e79c78bcae4b891762e3e1a007c4b"
+            },
+            {
+              "path": "src/math/generic/fminimum.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fminimum.rs",
+              "upstream_sha256": "a6a33085356610eced23957ca86456b7dbe95e0f9d916298d59ce8bd90076b02",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "a236550bc5c35f7e53636eb058333de4d7d426e18a1938ea71c1513a86e9520f"
+            },
+            {
+              "path": "src/math/generic/fminimum_num.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fminimum_num.rs",
+              "upstream_sha256": "f5db65654e690adea16da83839d62a707cc814c998fd4a77e63caaaea1472256",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                12
+              ],
+              "extracted_sha256": "d4889e0eedc2170380942b82e7228cf83a5f0770f4529d690287c5c3c946dd8a"
+            },
+            {
+              "path": "src/math/generic/fmod.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/fmod.rs",
+              "upstream_sha256": "11aae62d08d656d815184eafd78a3b2d5764b6ce308b89e3819cd049bc491fe7",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                1
+              ],
+              "extracted_sha256": "e2c5e3a74a29f6c88233646995cfe44b14516067992b9670439ffa0a595e56a5"
+            },
+            {
+              "path": "src/math/generic/rint.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/rint.rs",
+              "upstream_sha256": "deec183fd0da6c0a47ab272a256990cea4f9231db7faff314697886457d6841a",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                2
+              ],
+              "extracted_sha256": "5add0c338abc2c1d2a5a00e8aa19afff5a4e93a506b8cb14011aeb57a51cf455"
+            },
+            {
+              "path": "src/math/generic/sqrt.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/sqrt.rs",
+              "upstream_sha256": "c58e48ec07404d618109ad45332efe46c5246f42a2ddefdf5b25ba19e4ca9a0f",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                42
+              ],
+              "extracted_sha256": "a1311e57e0c1b5c671c059702534fa1e0b4738aa28388d038a52ce7bff57e80d"
+            },
+            {
+              "path": "src/math/generic/trunc.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/generic/trunc.rs",
+              "upstream_sha256": "46dd2cc35f6da25099ea2202264d8da3330b5ff1a962a8afb671b54b6ef6002d",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                2
+              ],
+              "extracted_sha256": "5c6f62056611d3f0256525565d02e2cfb48385b26812fb4d606fc7d13de1a0d3"
+            },
+            {
+              "path": "src/math/j0.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/j0.rs",
+              "upstream_sha256": "1cb991f0151a626744ad1832d4aedfaca681bcfcecc797de5ac5e9baf2342006",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                55
+              ],
+              "extracted_sha256": "0c74391ade7da36179635cc4c37f8db181e2bef454a7f4e53365ef62c5b6af64"
+            },
+            {
+              "path": "src/math/j0f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/j0f.rs",
+              "upstream_sha256": "de97374b6a0019fd8b3d1f553be1708018546491d3b4a5fc650ee2dcdfc9620e",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "552822778ae113308ab6af66578cd13a79cc8cf1c1c4f3ef30329f0697da33d0"
+            },
+            {
+              "path": "src/math/j1.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/j1.rs",
+              "upstream_sha256": "e0a10746fd11a458d55ee61e758d9f016ff0f2203a07eb9907b5aca709a40469",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                55
+              ],
+              "extracted_sha256": "9857adeed4b7938a20d8c6a8deb357787bd034395b18102a652ac4d6b2de5cff"
+            },
+            {
+              "path": "src/math/j1f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/j1f.rs",
+              "upstream_sha256": "27b586c94d510aa653923b6b83cfec174e1f5da326d9120b0a0135b1190e32dc",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "1fa702ca6b20a78db417bf396f128c7dade6123c58195ec6a32eb0f026d1eed8"
+            },
+            {
+              "path": "src/math/jn.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/jn.rs",
+              "upstream_sha256": "ba36d25d4bbada83aadb3b2986879b7d88b91adb7b502061d21bf96ff3942194",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                35
+              ],
+              "extracted_sha256": "9bab797c5f592173dcf2f4d28a94d520f47a67af5b2164b3ce2dabfe8dc515f3"
+            },
+            {
+              "path": "src/math/jnf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/jnf.rs",
+              "upstream_sha256": "b3861e19644ae669fe17db81d91aeaee9c9f9051b59957ab674017684c98fe32",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "a205aafe4140f090e72903ce746946a84a1110e5fb03b3b8d1f78469d25e5eb9"
+            },
+            {
+              "path": "src/math/k_cos.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_cos.rs",
+              "upstream_sha256": "d4867527877c846aa8e2a0b43cf06f03e2d94c321a548acaf8d5171c09ff4057",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "cd052f4fc22d6625c9f4439c66d4512a9011446d3f2dff15842925b024821cbb"
+            },
+            {
+              "path": "src/math/k_cosf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_cosf.rs",
+              "upstream_sha256": "8f76089d014e217b96c9eca520271e64d467dc0d6542bf313dd70eb96c040f7f",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                17
+              ],
+              "extracted_sha256": "af1ce9c4ebd2414987b2b2815595ce1c007d9981688c5b74ad216f034f15a2ee"
+            },
+            {
+              "path": "src/math/k_sin.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_sin.rs",
+              "upstream_sha256": "dfe6524cb2d530ec51eb1a2ab233aeb65b3f12177c1fb2f50f044ea41170f5d8",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "e00a06f546cd736ac64d82d5c88c23810aec69eec0f61cc64705ea57693e6049"
+            },
+            {
+              "path": "src/math/k_sinf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_sinf.rs",
+              "upstream_sha256": "cf0e8bbe8d73a6704b7f1f710f5b9d31f190f1c633e894d4f69c4e3bc359eba3",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                17
+              ],
+              "extracted_sha256": "4d91f8ae114d8de8c4c1973c3485ee0707c2a35b7dc2e7e774ba7ef96681dd01"
+            },
+            {
+              "path": "src/math/k_tan.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_tan.rs",
+              "upstream_sha256": "dc3f8ece9187bbd65792a7d1068e676092e9c2a0886f28c80579f9bd94d744b7",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                42
+              ],
+              "extracted_sha256": "951052015ab2bb3e50b56e918d5925c01c27480a7db44b1ad5f9b10988f7b465"
+            },
+            {
+              "path": "src/math/k_tanf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/k_tanf.rs",
+              "upstream_sha256": "3381d2d4865bfc98e87aadb96bd8986f7691a389569a58fb1cb8db74fb5d9c20",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                12
+              ],
+              "extracted_sha256": "27006a66c7cca5c5609cef546c8cee2a4f71948bc58a80bd16b7a1a08fa9b522"
+            },
+            {
+              "path": "src/math/lgamma_r.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/lgamma_r.rs",
+              "upstream_sha256": "5d56169c077b5b9f88902e2d243a7a4b4d06b89295aa84283d6fa15d9c244032",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                79
+              ],
+              "extracted_sha256": "7214135df91d11baf28c4c03872a175fd59a46803a9441496c548c5ea370b429"
+            },
+            {
+              "path": "src/math/lgammaf_r.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/lgammaf_r.rs",
+              "upstream_sha256": "0bc2b5e0eec7666973adaca536f4d5fe978c8793bb340484fff9e5e7abb425f0",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "8936b74f7b254b0f97694856a89b1015aee5175d95834bff1248b923c9cdc8ac"
+            },
+            {
+              "path": "src/math/log.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log.rs",
+              "upstream_sha256": "df5f4d1325e89621bfcd9cf7788d0d7e20a6ef7f429110fe35b370b3c9362615",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                61
+              ],
+              "extracted_sha256": "83aea4ddb1914e4002c70016b04acedd04e3b59162bc40e6b18dddd29b603e86"
+            },
+            {
+              "path": "src/math/log10.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log10.rs",
+              "upstream_sha256": "4a96dd2b6a2a505497f2bb7ea956a50491d068dab1b6055a573aec1724a52e40",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                18
+              ],
+              "extracted_sha256": "8fbead8e6352c9725ef64757be6c8b75541d49f65ee26ed0ae21ef483cc4962a"
+            },
+            {
+              "path": "src/math/log10f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log10f.rs",
+              "upstream_sha256": "784a576dd4a4071f4f67c670eb9b221cb03014818c4b2d71afbcbd2211431caf",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "7be502754463b4f0a53d2ebde4362e48262a41aece2464ce01098c37dfa29dea"
+            },
+            {
+              "path": "src/math/log1p.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log1p.rs",
+              "upstream_sha256": "bb8ce741e54d8f001d9c12450a14a663bd413014da2ade9ba1f5fbc9ff0c9a88",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                54
+              ],
+              "extracted_sha256": "f1d6795a9b071bf6173cae5da556ec8e42e8d2cafcd446ede6f1a6346583b427"
+            },
+            {
+              "path": "src/math/log1pf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log1pf.rs",
+              "upstream_sha256": "8736222a9b9004b061f1339bb819c63c6b54414d4a01ef79d5f5a5f0a70677b5",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                11
+              ],
+              "extracted_sha256": "4a505f94994e4cff4684ea764b1112bdc7c02d6ebcc3d04f67300fa19c1f6426"
+            },
+            {
+              "path": "src/math/log2.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log2.rs",
+              "upstream_sha256": "1ec0cdd94bf4435ff0402d209089b1bdbcb1ba9a4cd5f77807f9c84cf534f980",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                18
+              ],
+              "extracted_sha256": "cc8f39a177d99685af235fda705eb0b80970f1c11469c143f6af106fb1d89d38"
+            },
+            {
+              "path": "src/math/log2f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/log2f.rs",
+              "upstream_sha256": "7b3b17ba08df6b5a57dacf6f945bfe1a3c088bee0eb11e201ac5affc7f65925a",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "fafbd40ba9ca63863f78acb00e09f93f87de4aced25fa1c71bac56f4f4be824d"
+            },
+            {
+              "path": "src/math/logf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/logf.rs",
+              "upstream_sha256": "c7dfa5e89fcca0411624fdc594f64c62d5dfa3b91f061fcb7ac3aea18414f238",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "408e470dd9e98fd8b8186c97ef645084b81380fb401510749f111f28bd09da0f"
+            },
+            {
+              "path": "src/math/pow.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/pow.rs",
+              "upstream_sha256": "c5566d0f48682d107e8803b0ed204ff3521503348f18a4f26cbe3f47fef15192",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                59
+              ],
+              "extracted_sha256": "cabb0f6a426ded440f6f4ae2579cdd3daddd4f00bb22c0022189e091dd84f7f8"
+            },
+            {
+              "path": "src/math/powf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/powf.rs",
+              "upstream_sha256": "819971cb8e927d80113aded3cfe90dcd501c031e0eb1c562b58842fddd1751be",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                14
+              ],
+              "extracted_sha256": "6082fa0a02b0148774d8740bf988cf5f3da117801db565f725269b047170c855"
+            },
+            {
+              "path": "src/math/rem_pio2.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/rem_pio2.rs",
+              "upstream_sha256": "5a040ab09dc356bca6d57712327151ed43003e2bac156553e3eb87d1cdefd2d1",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                12
+              ],
+              "extracted_sha256": "da28bd93659d512cba362af000b10121e71e63ef135f3ba398a05f376e90bc7e"
+            },
+            {
+              "path": "src/math/rem_pio2f.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/rem_pio2f.rs",
+              "upstream_sha256": "fb34bab63f8d143dfefa4ef2e31e8166bf21f3c67f1519bfc3ca4fb8eb28cafe",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "76fe740be2b0cb832ab7b6cd4ceece6579207e9b8457d08958c8cd0224dbc50f"
+            },
+            {
+              "path": "src/math/sin.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/sin.rs",
+              "upstream_sha256": "b48cebd120fc2ac93a6563059cabda28a72c8680304eb8335b92b412235cc232",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "0beade56a930d1c1a35daa8cd5bbe8350757c3b38ac025a553f7db8bdfaf9e16"
+            },
+            {
+              "path": "src/math/sincos.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/sincos.rs",
+              "upstream_sha256": "a9c414e828c2e78b6bce4d5e4237b1baa93e81d78421aed5cedeab43df64067f",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                11
+              ],
+              "extracted_sha256": "421d333a961cbe6d0a8586bc90ad996363ea529b912c90ab80983f3f5d9ad95e"
+            },
+            {
+              "path": "src/math/sincosf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/sincosf.rs",
+              "upstream_sha256": "c39b6e3b52be83ccf4015ff105dab55e693577ebfc43745881750e73eebc6fa6",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "30c9c12121bd9681aaec53aaa80685c096acc2df6a0c658a2e27a235ee27978c"
+            },
+            {
+              "path": "src/math/sinf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/sinf.rs",
+              "upstream_sha256": "b17db34d5da39a0f336d831abcb700fab69402c915321823870f1845e66c03d2",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "30c9c12121bd9681aaec53aaa80685c096acc2df6a0c658a2e27a235ee27978c"
+            },
+            {
+              "path": "src/math/support/int_traits/narrowing_div.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/support/int_traits/narrowing_div.rs",
+              "upstream_sha256": "5f5378e33f1da56090d0dce2514926ab465dce65b89ad4ee2f7da07a92f8d5de",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                1
+              ],
+              "extracted_sha256": "e2c5e3a74a29f6c88233646995cfe44b14516067992b9670439ffa0a595e56a5"
+            },
+            {
+              "path": "src/math/support/modular.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/support/modular.rs",
+              "upstream_sha256": "cf6a562d6bdf16336f31d41c59e828ad47f85388849d20d6d3b59fc1c3e388a2",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "45f1d4d6c21be718f2d9dedcf3bd887e23b51ff97f2410527288e2018f11a15d"
+            },
+            {
+              "path": "src/math/tan.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/tan.rs",
+              "upstream_sha256": "2ea87ca18526753db6d149635ed6c895c8fbafd1e0fa7a9c04f7dc44b4eae986",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                10
+              ],
+              "extracted_sha256": "59ee71a59035c18a5043881ef760e797cc17dc0cfd65eb43075f72a0ecf8292a"
+            },
+            {
+              "path": "src/math/tanf.rs",
+              "upstream_url": "https://raw.githubusercontent.com/rust-lang/libm/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/src/math/tanf.rs",
+              "upstream_sha256": "f7140c4193a57709acde5d290c8f83435562da42924c54cab0aa3a4f26095190",
+              "extraction": "Verbatim leading comment blocks before the first Rust token.",
+              "source_lines": [
+                1,
+                15
+              ],
+              "extracted_sha256": "04db4bc1fedba0faa65f176d5fa383f2b61e569d7660c707b6de237829ee0f88"
+            }
+          ]
+        }
+      ],
+      "additional_licenses": [
+        {
+          "license": "BSD-2-Clause",
+          "scope": "Bundled FreeBSD exp2.rs and exp2f.rs implementations; exact source notices retained."
+        }
+      ]
+    },
+    {
+      "name": "prost-reflect",
+      "version": "0.14.7",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "repository": "https://github.com/andrewhickman/prost-reflect",
+      "revision": "71c4c98d7565dfc30f76ebc7daaa139a443419e6",
+      "path_in_vcs": "prost-reflect",
+      "published_vcs_dirty": false,
+      "copyright_statements": [],
+      "files": [
+        {
+          "filename": "prost-reflect-0.14.7-LICENSE-MIT",
+          "upstream_url": "https://raw.githubusercontent.com/andrewhickman/prost-reflect/71c4c98d7565dfc30f76ebc7daaa139a443419e6/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "kind": "license"
+        }
+      ],
+      "attribution": {
+        "kind": "upstream package author",
+        "value": "Andrew Hickman <andrew.hickman1@sky.com>",
+        "upstream_url": "https://raw.githubusercontent.com/andrewhickman/prost-reflect/71c4c98d7565dfc30f76ebc7daaa139a443419e6/prost-reflect/Cargo.toml",
+        "upstream_sha256": "68935c77cf3a4682afae27119b3111e3bb09804eb95b87d812068154755dc71c",
+        "source_line": 7,
+        "source_text": "authors = [\"Andrew Hickman <andrew.hickman1@sky.com>\"]",
+        "note": "The upstream MIT license and published crate source do not state a copyright holder. This is author attribution, not a copyright claim."
+      }
+    },
+    {
+      "name": "uuid-simd",
+      "version": "0.8.0",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/Nugine/simd",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "path_in_vcs": "crates/uuid-simd",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright (c) 2021 Nugine"
+      ],
+      "files": [
+        {
+          "filename": "uuid-simd-0.8.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+          "kind": "license"
+        }
+      ]
+    },
+    {
+      "name": "valuable",
+      "version": "0.1.1",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/tokio-rs/valuable",
+      "revision": "9efc29b6e58cef28f6566a47aa7e142a55fead77",
+      "path_in_vcs": "valuable",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright (c) 2021 Valuable Contributors"
+      ],
+      "files": [
+        {
+          "filename": "valuable-0.1.1-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/tokio-rs/valuable/9efc29b6e58cef28f6566a47aa7e142a55fead77/LICENSE",
+          "sha256": "ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44",
+          "kind": "license"
+        }
+      ]
+    },
+    {
+      "name": "vsimd",
+      "version": "0.8.0",
+      "declared_license": "MIT",
+      "selected_license": "MIT",
+      "repository": "https://github.com/Nugine/simd",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "path_in_vcs": "crates/vsimd",
+      "published_vcs_dirty": false,
+      "copyright_statements": [
+        "Copyright (c) 2021 Nugine"
+      ],
+      "files": [
+        {
+          "filename": "uuid-simd-0.8.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+          "kind": "license"
+        }
+      ]
+    }
+  ]
+}

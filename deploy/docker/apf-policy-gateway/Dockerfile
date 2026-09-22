@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /apf-policy-gateway /usr/local/bin/apf-policy-gateway
+COPY --from=build /src/LICENSE /src/THIRD_PARTY_LICENSES.txt /usr/share/licenses/apf/
 
 RUN mkdir -p /run/apf /run/apf-gateway /var/lib/apf /data/keys /etc/apf
 

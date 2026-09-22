@@ -1,3 +1,5 @@
+<!-- rumdl-disable MD013 -->
+
 # APF — Agent Policy Fabric
 
 > **Project status:** APF is developed primarily by NVIDIA and follows internal roadmaps and development priorities. Community contributions are welcome and reviewed, but acceptance depends on how well they fit with project goals. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
@@ -19,6 +21,7 @@ layer on every action. Every layer has to agree before a call proceeds:
 
 APF applies this to sandbox policy wherever agents run; OpenShell is the sandbox runtime
 it's integrated with today.
+
 - **Gateway interceptor** — at sandbox admission, injects the compiled `SandboxPolicy`
 - **Supervisor middleware** — on every egress request, evaluates and returns the decision OpenShell enforces
 
@@ -46,3 +49,5 @@ vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+Third-party crate licenses and attribution are published in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). See [license selection and regeneration](docs/third-party-licenses.md) for the explicit MIT choice for `r-efi` and the distribution requirements.

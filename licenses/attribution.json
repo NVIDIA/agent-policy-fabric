@@ -1,0 +1,122 @@
+[
+  {
+    "name": "ar_archive_writer",
+    "version": "0.5.3",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "LLVM Project and ar_archive_writer contributors (upstream project attribution)",
+      "crate_file": "Readme.md",
+      "sha256": "f8dfc1f489a94ff054e6cc3467ce9388850ac20b4defbe9c92881cdffa90e1ed"
+    }
+  },
+  {
+    "name": "curve25519-dalek-derive",
+    "version": "0.1.1",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "curve25519-dalek project contributors (dalek-cryptography/curve25519-dalek)",
+      "crate_file": "Cargo.toml",
+      "sha256": "60d2093fbabea9e72ad1350ae4a616ae56b2592742a64d2bd679a749f7a6bb4d"
+    }
+  },
+  {
+    "name": "pin-project",
+    "version": "1.1.13",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "pin-project project contributors (taiki-e/pin-project)",
+      "crate_file": "Cargo.toml",
+      "sha256": "e980de84ace5fb6bccf2e93bb65567966dd8c1b2420c6b32cfb80ffdd968660b"
+    }
+  },
+  {
+    "name": "pin-project-internal",
+    "version": "1.1.13",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "pin-project project contributors (taiki-e/pin-project)",
+      "crate_file": "Cargo.toml",
+      "sha256": "97da4056c49820d7ce1ffcf63bf61c0b9511efcad06bf0d06101e481fe228ca7"
+    }
+  },
+  {
+    "name": "pin-project-lite",
+    "version": "0.2.17",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "pin-project-lite project contributors (taiki-e/pin-project-lite)",
+      "crate_file": "Cargo.toml",
+      "sha256": "473f9cfe9738986d0d1c46e306bd11ad3e36bca8f1eab5bbe9f7297313fb33f4"
+    }
+  },
+  {
+    "name": "portable-atomic",
+    "version": "1.15.0",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "portable-atomic project contributors (taiki-e/portable-atomic)",
+      "crate_file": "Cargo.toml",
+      "sha256": "30e602bcf54f19dbdcf52315a262c88e8efbd12455ee4d4fe63f2880e4ac10e1"
+    }
+  },
+  {
+    "name": "portable-atomic-util",
+    "version": "0.2.7",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "portable-atomic-util project contributors (taiki-e/portable-atomic-util)",
+      "crate_file": "Cargo.toml",
+      "sha256": "7e675f1b51996fcdb653b99655c23c961b22a69d1c416e496151f9ee677b8838"
+    }
+  },
+  {
+    "name": "rustc-literal-escaper",
+    "version": "0.0.8",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "Rust literal-escaper project contributors (rust-lang/literal-escaper)",
+      "crate_file": "Cargo.toml",
+      "sha256": "42864d0d78afe687857242cd08b274a381d2b0d24f7d0ddb5fd44ec116365335"
+    }
+  },
+  {
+    "name": "wasip2",
+    "version": "1.0.4+wasi-0.2.12",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "Bytecode Alliance wasip2 project contributors",
+      "crate_file": "README.md",
+      "sha256": "a1728680d45922d434e910078fccbea1ef436af46e1c85c67a1c65925aa08d9e"
+    }
+  },
+  {
+    "name": "webpki-roots",
+    "version": "1.0.9",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "Mozilla root certificate program; Common CA Database (CCADB) data providers; webpki-roots contributors",
+      "crate_file": "README.md",
+      "sha256": "3f785bbd28b6628dadc4203a9368b729453aaa65df454e54a0c2f8a7a42395f5"
+    }
+  },
+  {
+    "name": "winnow",
+    "version": "0.7.15",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "winnow contributors; Geal and the original nom contributors",
+      "crate_file": "README.md",
+      "sha256": "589c0c83344fad178dafd45e05d87e463e12cbe5b3602352b8d524fb376dff6b"
+    }
+  },
+  {
+    "name": "winnow",
+    "version": "1.0.4",
+    "attribution": {
+      "kind": "upstream project attribution",
+      "value": "winnow contributors; Geal and the original nom contributors",
+      "crate_file": "README.md",
+      "sha256": "589c0c83344fad178dafd45e05d87e463e12cbe5b3602352b8d524fb376dff6b"
+    }
+  }
+]
