@@ -87,6 +87,7 @@ no changes to shared library or service crates are needed.
 
 - Wire contract change (`contracts/proto/`) — new proto package or `$id` if breaking; `buf breaking` must pass.
 - New crate — add to `[workspace] members`; run `cargo xtask dag-guard` before opening a pull request.
+- New or updated dependency — `cargo-deny --locked check licenses -D no-license-field` must pass (CI job `lint:cargo-deny-licenses`; version pinned by `CARGO_DENY_VERSION` in the CI configuration). Only MIT and Apache-2.0 are allowed globally. Any other license needs a per-crate exception in `deny.toml` that lists only the licenses the crate declares, a `licenses/selections.json` entry if its expression is new, and a regenerated `THIRD_PARTY_LICENSES.txt` (see `docs/third-party-licenses.md`). Never widen the global `allow` list to admit one crate; treat any `deny.toml` edit as a license decision.
 
 ---
 

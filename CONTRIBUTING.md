@@ -84,8 +84,10 @@ Install the basic tools used by the APF repository:
 rustup toolchain install stable
 rustup default stable
 
-# Install Rust helper tools.
-cargo install cargo-nextest cargo-deny
+# Install Rust helper tools. The cargo-deny version matches CARGO_DENY_VERSION
+# in CI.
+cargo install cargo-nextest
+cargo install --locked cargo-deny@0.20.2
 
 # Install buf if needed on macOS.
 brew install bufbuild/buf/buf

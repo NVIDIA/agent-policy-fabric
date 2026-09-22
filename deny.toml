@@ -1,13 +1,89 @@
+# cargo-deny configuration. CI job lint:cargo-deny-licenses runs
+# `cargo-deny --locked check licenses -D no-license-field` in every merge
+# request pipeline; see docs/third-party-licenses.md. Every key below can
+# change which crates pass, so treat any edit as a license decision.
+
+[graph]
+# Resolve optional features the same way the third-party notice generator does.
+# No `targets` filter, so platform-specific dependencies are checked too.
+all-features = true
+
 [advisories]
 ignore = []
 
 [licenses]
-allow = ["Apache-2.0", "MIT", "MIT-0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-DFS-2016", "Zlib"]
-deny = []
-copyleft = "warn"
-allow-osi-fsf-free = "neither"
-default = "deny"
-exceptions = []
+# MIT and Apache-2.0 are allowed for every crate. Any other license, whether it
+# is a crate's only license or an extra AND term, is granted to one named crate
+# in `exceptions`. An exception covers every version and source of that crate
+# name, but only for the licenses it lists. A new crate with any other license,
+# or a new license on an excepted crate, fails the check until an exception
+# here grants it. List only the licenses the crate needs; cargo-deny does not
+# flag an exception that grants more.
+allow = ["Apache-2.0", "MIT"]
+# cargo-deny skips crates that are only dev-dependencies unless include-dev is
+# true. include-build = true is the default and is set so a default change
+# cannot narrow the check.
+include-dev = true
+include-build = true
+# An exception that the check does not use fails it. That happens when the
+# crate leaves the build or stops needing the license, so a stale grant cannot
+# admit a future crate.
+unused-license-exception = "deny"
+exceptions = [
+    # Apache-2.0 WITH LLVM-exception is a distinct SPDX expression; plain
+    # Apache-2.0 does not satisfy it.
+    { crate = "ar_archive_writer", allow = ["Apache-2.0 WITH LLVM-exception"] },
+
+    # BSD-3-Clause
+    { crate = "curve25519-dalek", allow = ["BSD-3-Clause"] },
+    { crate = "ed25519-dalek", allow = ["BSD-3-Clause"] },
+    { crate = "encoding_rs", allow = ["BSD-3-Clause"] },
+    { crate = "matchit", allow = ["BSD-3-Clause"] },
+    { crate = "subtle", allow = ["BSD-3-Clause"] },
+
+    # CDLA-Permissive-2.0 (Mozilla CA certificate data)
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+
+    # ISC
+    { crate = "ring", allow = ["ISC"] },
+    { crate = "rustls-webpki", allow = ["ISC"] },
+    { crate = "simple_asn1", allow = ["ISC"] },
+    { crate = "untrusted", allow = ["ISC"] },
+
+    # MIT-0
+    { crate = "borrow-or-share", allow = ["MIT-0"] },
+
+    # MPL-2.0
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+
+    # Unicode-3.0 (ICU4X crates and Unicode data)
+    { crate = "icu_collections", allow = ["Unicode-3.0"] },
+    { crate = "icu_locale_core", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer_data", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties_data", allow = ["Unicode-3.0"] },
+    { crate = "icu_provider", allow = ["Unicode-3.0"] },
+    { crate = "litemap", allow = ["Unicode-3.0"] },
+    { crate = "potential_utf", allow = ["Unicode-3.0"] },
+    { crate = "tinystr", allow = ["Unicode-3.0"] },
+    { crate = "unicode-ident", allow = ["Unicode-3.0"] },
+    { crate = "writeable", allow = ["Unicode-3.0"] },
+    { crate = "yoke", allow = ["Unicode-3.0"] },
+    { crate = "yoke-derive", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom-derive", allow = ["Unicode-3.0"] },
+    { crate = "zerotrie", allow = ["Unicode-3.0"] },
+    { crate = "zerovec", allow = ["Unicode-3.0"] },
+    { crate = "zerovec-derive", allow = ["Unicode-3.0"] },
+
+    # Zlib
+    { crate = "foldhash", allow = ["Zlib"] },
+]
+
+[licenses.private]
+# Check APF's own crates too; each inherits the workspace Apache-2.0 license.
+ignore = false
 
 [bans]
 multiple-versions = "warn"

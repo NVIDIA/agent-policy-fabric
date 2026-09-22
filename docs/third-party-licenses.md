@@ -28,6 +28,26 @@ The generator copies license, copyright, author and notice documents from the pu
 
 Some upstream projects publish license terms without a separate copyright statement. The notice identifies their published authors or project contributors and labels that attribution explicitly. It does not turn author metadata into a copyright claim. Version-specific project attribution and checksums for its source evidence are recorded in [`licenses/attribution.json`](../licenses/attribution.json).
 
+## Dependency license check
+
+APF allows MIT and Apache-2.0 for every crate it builds. Any other license must be granted to a named crate by an exception in [`deny.toml`](../deny.toml). That covers a crate licensed only under another license (`option-ext` is MPL-2.0) and a crate whose license adds a required term (`ring` is `Apache-2.0 AND ISC`, so its exception grants ISC to `ring` and to no other crate). The `lint:cargo-deny-licenses` CI job enforces this by running `cargo-deny --locked check licenses -D no-license-field` in every pull request pipeline. GitLab requires a successful pipeline before a pull request can merge, so a failed check blocks the merge. Maintainers can still push directly to `main`; the pipeline that runs after such a push reports a violation but does not prevent it.
+
+The check fails when a new crate needs a license outside MIT and Apache-2.0, when an excepted crate adds a license that its exception does not list, when a crate omits the `license` field, and when an exception is no longer needed. An exception applies to every version and source of the crate name it lists. cargo-deny does not report an exception that lists more licenses than its crate needs, so reviewers must check that each exception names only licenses the crate declares. Other `deny.toml` keys can also admit a crate, including `[graph]` settings, `[[licenses.clarify]]` and `[licenses.private]`; treat any change to that file as a license decision.
+
+The check covers development and build dependencies, every feature of APF's own crates, dependencies for all target platforms, and APF's workspace crates. It reads Cargo metadata only. The OpenShell protobuf sources that the `apf-proto` build script exports with `buf` and the operating-system packages in container images are outside it; review changes to those as dependency changes too.
+
+This check and `licenses/selections.json` review different things. A selection applies to a license expression: once `ISC` has a selection, a later ISC crate gets a notice without another review. A cargo-deny exception names a crate, so each new crate with another license still needs its own decision. To add such a crate, add an exception that names the crate and only its additional license, add a selection if its expression is new, and regenerate `THIRD_PARTY_LICENSES.txt` in the same pull request. An exception records that decision in the repository; it does not replace open-source review.
+
+`Cargo.lock` also lists crates that no APF build compiles. Most are optional dependencies of third-party crates behind features APF does not enable, such as `iana-time-zone` behind the `clock` feature of `chrono`. cargo-deny skips these crates and checks them once a change adds them to a build. The notice lists them regardless.
+
+Run the check locally with the version that CI pins in `CARGO_DENY_VERSION`, currently 0.20.2. Calling `cargo-deny` directly, as CI does, runs the first copy on `PATH`; `cargo deny` can prefer a different copy in `$CARGO_HOME/bin`.
+
+```fish
+cargo install --locked cargo-deny@0.20.2
+cargo-deny --version
+cargo-deny --locked check licenses -D no-license-field
+```
+
 ## Distribution
 
 The release build includes `LICENSE` and `THIRD_PARTY_LICENSES.txt` in `dist/`. Binary publishing jobs upload both files beside the binaries in the revision-specific and `latest` directories. Container recipes copy both files into `/usr/share/licenses/apf/`; demo and release targets inherit them.
