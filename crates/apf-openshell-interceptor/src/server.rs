@@ -115,6 +115,20 @@ impl GatewayInterceptorService {
             .max_encoding_message_size(GRPC_MESSAGE_BYTES)
     }
 
+    /// Resolve the set of provider-profile IDs the current bundle manages.
+    ///
+    /// Governance checks below compare an incoming profile's `id` against
+    /// this set. It must reflect actual profile identities, not raw document
+    /// names — a bundle that publishes profiles only as the atomic
+    /// `ProviderProfileSet` aggregate (no per-profile documents) would
+    /// otherwise expose just the literal name `"default"`.
+    async fn provider_profile_ids(&self) -> Result<std::collections::HashSet<String>, String> {
+        let mut policy_service = self.policy_service.clone();
+        let documents = reconciler::fetch_provider_profile_documents(&mut policy_service).await?;
+        let profiles = reconciler::resolve_provider_profiles(&documents)?;
+        Ok(profiles.into_iter().map(|p| p.id).collect())
+    }
+
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), AuthorizationFailure> {
         // Every GatewayInterceptor RPC is called exclusively by the OpenShell
         // gateway at admission time — there is no supervisor caller on this surface.
@@ -1558,18 +1572,10 @@ impl GatewayInterceptorService {
             digest: UNVERIFIED_POLICY,
             revision: None,
         };
-        let bundle_ids = match self
-            .policy_service
-            .clone()
-            .list_documents("openshell.provider-profile.v1")
-            .await
-        {
-            Ok(r) => r
-                .names
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
+        let bundle_ids = match self.provider_profile_ids().await {
+            Ok(ids) => ids,
             Err(e) => {
-                warn!(error = %e, correlation_id = %ctx.correlation_id, "ImportProviderProfiles VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "ImportProviderProfiles VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
                     "interceptor.import_provider_profiles",
                     "openshell.provider_profile",
@@ -1707,18 +1713,10 @@ impl GatewayInterceptorService {
             digest: UNVERIFIED_POLICY,
             revision: None,
         };
-        let bundle_ids = match self
-            .policy_service
-            .clone()
-            .list_documents("openshell.provider-profile.v1")
-            .await
-        {
-            Ok(r) => r
-                .names
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
+        let bundle_ids = match self.provider_profile_ids().await {
+            Ok(ids) => ids,
             Err(e) => {
-                warn!(error = %e, correlation_id = %ctx.correlation_id, "UpdateProviderProfiles VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "UpdateProviderProfiles VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
                     "interceptor.update_provider_profiles",
                     "openshell.provider_profile",
@@ -1809,18 +1807,10 @@ impl GatewayInterceptorService {
         } else {
             "interceptor.create_provider"
         };
-        let bundle_types = match self
-            .policy_service
-            .clone()
-            .list_documents("openshell.provider-profile.v1")
-            .await
-        {
-            Ok(r) => r
-                .names
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
+        let bundle_types = match self.provider_profile_ids().await {
+            Ok(ids) => ids,
             Err(e) => {
-                warn!(error = %e, correlation_id = %ctx.correlation_id, "Provider VALIDATE: policy service list_documents failed");
+                warn!(error = %e, correlation_id = %ctx.correlation_id, "Provider VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
                     verb,
                     "openshell.provider",
@@ -2138,7 +2128,6 @@ impl GatewayInterceptor for GatewayInterceptorService {
         }
         profile_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut profiles = Vec::with_capacity(profile_entries.len());
         let mut hasher = Sha256::new();
         hasher.update(b"apf-provider-profile-snapshot-v2");
         hasher.update(verifying_key.as_bytes());
@@ -2154,40 +2143,6 @@ impl GatewayInterceptor for GatewayInterceptorService {
         }
         hasher.update(policy_identity.as_ref().map_or(0, |p| p.1).to_be_bytes());
         for (id, body) in &profile_entries {
-            match reconciler::profile_from_yaml(body) {
-                Ok(p) => {
-                    // OpenShell trusts configured interceptor sources. Verify PAP
-                    // provenance above; do not inject per-read import annotations
-                    // into this catalog's runtime configuration identity. The
-                    // independent profile-import/admission checks remain intact.
-                    profiles.push(p);
-                }
-                Err(_) if id == "default" => {
-                    // The compiler also emits a legacy protobuf aggregate at
-                    // this name. Its profiles have individual YAML documents
-                    // above; validate it without importing duplicate profiles.
-                    // Parse YAML first so a real profile named default is kept.
-                    use prost::Message as _;
-                    let aggregate = apf_proto::ProviderProfileSet::decode(body.as_slice())
-                        .map_err(|_| {
-                            Status::failed_precondition(
-                                "provider profile snapshot contains an invalid aggregate",
-                            )
-                        })?;
-                    for profile in &aggregate.profiles {
-                        reconciler::profile_from_yaml(profile).map_err(|_| {
-                            Status::failed_precondition(
-                                "provider profile snapshot contains an invalid aggregate profile",
-                            )
-                        })?;
-                    }
-                }
-                Err(_) => {
-                    return Err(Status::failed_precondition(
-                        "provider profile snapshot contains an invalid profile",
-                    ));
-                }
-            }
             // Include both the ID and the content bytes so the revision changes
             // when any profile's body changes, not just when the set of IDs changes.
             hasher.update((id.len() as u64).to_be_bytes());
@@ -2196,6 +2151,22 @@ impl GatewayInterceptor for GatewayInterceptorService {
             hasher.update(body);
         }
         let revision = format!("sha256:{:x}", hasher.finalize());
+
+        // OpenShell trusts configured interceptor sources. Provenance is
+        // verified above; do not inject per-read import annotations into this
+        // catalog's runtime configuration identity. The independent
+        // profile-import/admission checks remain intact.
+        let documents: Vec<reconciler::ProviderProfileDocument> = profile_entries
+            .into_iter()
+            .map(|(name, body)| reconciler::ProviderProfileDocument {
+                name,
+                body,
+                digest: String::new(),
+            })
+            .collect();
+        let profiles = reconciler::resolve_provider_profiles(&documents).map_err(|_| {
+            Status::failed_precondition("provider profile snapshot contains an invalid profile")
+        })?;
 
         Ok(Response::new(ProviderProfileSnapshot {
             revision,
@@ -3608,6 +3579,22 @@ mod admission_audit_tests {
             revisions[0], revisions[1],
             "aggregate remains part of revision identity"
         );
+    }
+
+    #[tokio::test]
+    async fn snapshot_imports_aggregate_profiles_when_no_individual_documents_exist() {
+        // Bundles signed before the compiler composed one document per
+        // profile publish only the `default` ProviderProfileSet aggregate.
+        let profile =
+            b"id: p\nendpoints: [{host: api.example, port: 443, enforcement: enforce}]\n".to_vec();
+        let aggregate = apf_proto::ProviderProfileSet {
+            profiles: vec![profile],
+        }
+        .encode_to_vec();
+        let snapshot = snapshot_documents(&[("default", aggregate)]).await.unwrap();
+        assert_eq!(snapshot.profiles.len(), 1);
+        assert_eq!(snapshot.profiles[0].id, "p");
+        assert_eq!(snapshot.profiles[0].endpoints[0].enforcement, 1);
     }
 
     #[tokio::test]

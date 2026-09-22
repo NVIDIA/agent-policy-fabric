@@ -499,6 +499,81 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
     })
 }
 
+/// One `openshell.provider-profile.v1` document as returned by the policy service.
+pub struct ProviderProfileDocument {
+    pub name: String,
+    pub body: Vec<u8>,
+    pub digest: String,
+}
+
+/// List and fetch every `openshell.provider-profile.v1` document the policy
+/// service currently publishes.
+pub async fn fetch_provider_profile_documents(
+    policy_service: &mut PolicyClientHandle,
+) -> Result<Vec<ProviderProfileDocument>, String> {
+    const KIND: &str = "openshell.provider-profile.v1";
+    let names = policy_service
+        .list_documents(KIND)
+        .await
+        .map_err(|e| format!("list_documents provider-profile: {e}"))?
+        .names;
+    let mut documents = Vec::with_capacity(names.len());
+    for name in names {
+        let doc = policy_service
+            .get_document(KIND, &name, None)
+            .await
+            .map_err(|e| format!("get_document '{name}': {e}"))?;
+        documents.push(ProviderProfileDocument {
+            name,
+            body: doc.body,
+            digest: doc.digest,
+        });
+    }
+    Ok(documents)
+}
+
+/// Resolve the provider profiles a bundle publishes from its raw
+/// `openshell.provider-profile.v1` documents.
+///
+/// The compiler emits one document per profile plus an aggregate
+/// `ProviderProfileSet` at `default` covering the legacy passthrough
+/// profiles, so both layouts coexist for those bundles. Bundles signed
+/// before the compiler composed individual documents for every profile
+/// publish only that `default` aggregate. Resolve both: when any document
+/// besides `default` exists, `default`'s aggregate (if present) is
+/// redundant with those individual documents and is validated but not
+/// imported, to avoid duplicates; otherwise `default`'s aggregate is the
+/// sole source of profiles. A document that fails to parse under either
+/// interpretation fails the whole resolution.
+pub fn resolve_provider_profiles(
+    documents: &[ProviderProfileDocument],
+) -> Result<Vec<ProviderProfile>, String> {
+    let has_individual_documents = documents.iter().any(|doc| doc.name != "default");
+    let mut profiles = Vec::with_capacity(documents.len());
+    for doc in documents {
+        match profile_from_yaml(&doc.body) {
+            Ok(profile) => profiles.push(profile),
+            Err(_) if doc.name == "default" => {
+                let aggregate = ProviderProfileSet::decode(doc.body.as_slice())
+                    .map_err(|e| format!("decode ProviderProfileSet: {e}"))?;
+                let members = aggregate
+                    .profiles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, bytes)| {
+                        profile_from_yaml(bytes).map_err(|e| format!("profile[{i}] YAML: {e}"))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                if !has_individual_documents {
+                    profiles.extend(members);
+                }
+            }
+            Err(e) => return Err(format!("profile '{}' YAML: {e}", doc.name)),
+        }
+    }
+    Ok(profiles)
+}
+
 // ---------------------------------------------------------------------------
 // Gateway client helpers
 // ---------------------------------------------------------------------------
@@ -611,31 +686,27 @@ async fn reconcile_all(
     tls: Option<ClientTlsConfig>,
     mut policy_service: PolicyClientHandle,
 ) -> Result<String, String> {
-    let doc = policy_service
-        .get_document("openshell.provider-profile.v1", "default", None)
-        .await
-        .map_err(|e| format!("get_document provider-profile set: {e}"))?;
+    let documents = fetch_provider_profile_documents(&mut policy_service).await?;
+    let revision = documents
+        .iter()
+        .find(|doc| doc.name == "default")
+        .map_or_else(String::new, |doc| doc.digest.clone());
+    let profiles = resolve_provider_profiles(&documents)?;
 
-    let profile_set = ProviderProfileSet::decode(doc.body.as_slice())
-        .map_err(|e| format!("decode ProviderProfileSet: {e}"))?;
-
-    if profile_set.profiles.is_empty() {
+    if profiles.is_empty() {
         info!("bundle has no provider profiles; nothing to reconcile");
-        return Ok(doc.digest);
+        return Ok(revision);
     }
 
     let mut client = connect_gateway(gateway_endpoint, tls).await?;
 
-    for (i, bytes) in profile_set.profiles.iter().enumerate() {
-        let profile = profile_from_yaml(bytes).map_err(|e| format!("profile[{i}] YAML: {e}"))?;
+    let count = profiles.len();
+    for profile in profiles {
         reconcile_one(&mut client, profile).await?;
     }
 
-    info!(
-        count = profile_set.profiles.len(),
-        "provider profile reconciliation complete"
-    );
-    Ok(doc.digest)
+    info!(count, "provider profile reconciliation complete");
+    Ok(revision)
 }
 
 /// Spawn a background task that reconciles bundle-managed provider profiles with
@@ -747,6 +818,74 @@ fn endpoint_access(value: &str) -> Result<NetworkAccessPreset, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_imports_individual_documents_and_validates_default_without_duplicating() {
+        let p = b"id: p\nendpoints: [{host: api.example, port: 443}]\n".to_vec();
+        let aggregate = ProviderProfileSet {
+            profiles: vec![p.clone()],
+        }
+        .encode_to_vec();
+        let documents = [
+            ProviderProfileDocument {
+                name: "p".into(),
+                body: p,
+                digest: String::new(),
+            },
+            ProviderProfileDocument {
+                name: "default".into(),
+                body: aggregate,
+                digest: String::new(),
+            },
+        ];
+        let profiles = resolve_provider_profiles(&documents).unwrap();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "aggregate duplicate must not be imported"
+        );
+        assert_eq!(profiles[0].id, "p");
+    }
+
+    #[test]
+    fn resolve_imports_aggregate_when_it_is_the_only_document() {
+        let p = b"id: p\nendpoints: [{host: api.example, port: 443}]\n".to_vec();
+        let aggregate = ProviderProfileSet { profiles: vec![p] }.encode_to_vec();
+        let documents = [ProviderProfileDocument {
+            name: "default".into(),
+            body: aggregate,
+            digest: String::new(),
+        }];
+        let profiles = resolve_provider_profiles(&documents).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "p");
+    }
+
+    #[test]
+    fn resolve_keeps_a_real_profile_named_default() {
+        let documents = [ProviderProfileDocument {
+            name: "default".into(),
+            body: b"id: default\n".to_vec(),
+            digest: String::new(),
+        }];
+        let profiles = resolve_provider_profiles(&documents).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "default");
+    }
+
+    #[test]
+    fn resolve_fails_closed_on_a_malformed_aggregate_member() {
+        let aggregate = ProviderProfileSet {
+            profiles: vec![b"id: [unterminated\n".to_vec()],
+        }
+        .encode_to_vec();
+        let documents = [ProviderProfileDocument {
+            name: "default".into(),
+            body: aggregate,
+            digest: String::new(),
+        }];
+        assert!(resolve_provider_profiles(&documents).is_err());
+    }
 
     #[test]
     fn profile_modes_use_enum_wire_types() {
