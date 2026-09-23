@@ -1,0 +1,19 @@
+version = "1.0.0"
+
+##########################################################################
+# Pulse trufflehog allow list
+##########################################################################
+[pulse-trufflehog]
+
+########
+# false positives
+########
+# Deliberate negative test fixture: apf-audit's schema must REJECT records
+# carrying secret-named fields, and this fixture proves it. The flagged
+# "password" value is a placeholder, not a credential. The allowlist value
+# is the scanner's redacted form so this file cannot itself trip a scan.
+[[pulse-trufflehog.files]]
+file = "crates/apf-audit/tests/fixtures/invalid/forbidden_secret_field.invalid.json"
+  [[pulse-trufflehog.files.secrets]]
+  type = "Password"
+  values = [ "\"pa**************er2\"" ]
