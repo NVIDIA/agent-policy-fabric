@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::reconciler;
+use apf_openshell_auth::protocol::{ExtensionFamily, validate_gateway_metadata};
 use apf_openshell_auth::{
     Authenticated, AuthenticatedCaller, AuthenticationMode, AuthorizationFailure,
     ExtensionAuthVerifier, ExtensionCallerKind,
@@ -2069,6 +2070,16 @@ impl GatewayInterceptor for GatewayInterceptorService {
         self.authorize(&request)
             .map_err(AuthorizationFailure::into_status)?;
         let mut manifest = bindings::manifest();
+        validate_gateway_metadata(
+            ExtensionFamily::GatewayInterceptor,
+            &manifest.name,
+            manifest
+                .extension
+                .as_ref()
+                .expect("interceptor manifest protocol metadata is static"),
+            request.into_inner().gateway,
+        )
+        .map_err(|error| Status::failed_precondition(error.to_string()))?;
         manifest.expected_audience = self.expected_audience().to_string();
         Ok(Response::new(manifest))
     }
@@ -2404,6 +2415,44 @@ mod tests {
             },
             authentication: AuthenticationMode::Insecure,
         }
+    }
+
+    fn describe_request() -> DescribeRequest {
+        DescribeRequest {
+            gateway: Some(apf_openshell_auth::protocol::extension_metadata(
+                ExtensionFamily::GatewayInterceptor,
+                "openshell/gateway",
+                "0.0.117",
+            )),
+        }
+    }
+
+    #[tokio::test]
+    async fn describe_negotiates_gateway_interceptor_protocol() {
+        let manifest = service()
+            .describe(Request::new(describe_request()))
+            .await
+            .expect("matching gateway protocol should negotiate")
+            .into_inner();
+        let metadata = manifest.extension.expect("protocol metadata");
+        assert_eq!(
+            metadata.required_capabilities,
+            vec!["openshell.gateway-interceptor.contract"]
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_rejects_missing_gateway_protocol_metadata() {
+        let error = service()
+            .describe(Request::new(DescribeRequest { gateway: None }))
+            .await
+            .expect_err("missing gateway metadata must fail closed");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            error
+                .message()
+                .contains("did not provide protocol metadata")
+        );
     }
 
     fn post_commit_evaluation() -> InterceptorEvaluation {

@@ -36,6 +36,11 @@ pub mod nvidia {
 }
 
 pub mod openshell {
+    pub mod extension {
+        pub mod v1 {
+            tonic::include_proto!("openshell.extension.v1");
+        }
+    }
     pub mod datamodel {
         pub mod v1 {
             #![allow(clippy::doc_markdown)]
@@ -78,6 +83,7 @@ pub mod openshell {
     }
 }
 
+pub use openshell::extension::v1 as extension_v1;
 pub use openshell::gateway_interceptor::v1 as gateway_interceptor_v1;
 pub use openshell::middleware::v1 as supervisor_middleware_v1;
 

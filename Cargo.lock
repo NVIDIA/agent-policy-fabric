@@ -184,6 +184,7 @@ name = "apf-openshell-auth"
 version = "0.1.0"
 dependencies = [
  "apf-audit",
+ "apf-proto",
  "jsonwebtoken",
  "nix",
  "serde",

@@ -5,7 +5,7 @@ use std::process::Command;
 
 // APF IR types: PolicyRule (incl. PolicyRuleRole), SandboxPolicy,
 // Provider, PolicyEffect, PolicyFinding, etc.
-const OPENSHELL_COMMIT: &str = "e38d7254e6099a42d6b80329b8e4ef6f0817931f";
+const OPENSHELL_COMMIT: &str = "490055b4267a78132e364d88d5ca4d873f8af462";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
@@ -34,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let os_export = out_dir.join("openshell-proto-export");
     export_openshell(&os_export, OPENSHELL_COMMIT)?;
     let sandbox_proto = os_export.join("sandbox.proto");
+    let extension_proto = os_export.join("extension.proto");
     let gateway_interceptor = os_export.join("gateway_interceptor.proto");
     let supervisor_middleware = os_export.join("supervisor_middleware.proto");
     let datamodel_proto = os_export.join("datamodel.proto");
@@ -52,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_protos: Vec<PathBuf> = ir_protos;
     for p in [
         &sandbox_proto,
+        &extension_proto,
         &gateway_interceptor,
         &supervisor_middleware,
         &datamodel_proto,

@@ -5,6 +5,7 @@
 use crate::proto::{
     GatewayInterceptorPhase, InterceptorBinding, InterceptorManifest, InterceptorSelector,
 };
+use apf_openshell_auth::protocol::{ExtensionFamily, extension_metadata};
 
 #[must_use]
 pub fn manifest() -> InterceptorManifest {
@@ -16,6 +17,11 @@ pub fn manifest() -> InterceptorManifest {
         // trust profile) and is set by `GatewayInterceptorService::describe`
         // before this manifest reaches a caller.
         expected_audience: String::new(),
+        extension: Some(extension_metadata(
+            ExtensionFamily::GatewayInterceptor,
+            "apf/policy-adapter",
+            env!("CARGO_PKG_VERSION"),
+        )),
         bindings: vec![
             sandbox_policy_inject(),
             sandbox_policy_verify(),
@@ -220,6 +226,22 @@ mod tests {
     #[test]
     fn manifest_failure_policy_is_fail_closed() {
         assert_eq!(manifest().failure_policy, "fail_closed");
+    }
+
+    #[test]
+    fn manifest_advertises_gateway_interceptor_protocol() {
+        let metadata = manifest().extension.expect("protocol metadata");
+        let version = metadata.protocol_version.expect("protocol version");
+        assert_eq!((version.major, version.minor), (1, 0));
+        assert_eq!(metadata.implementation_name, "apf/policy-adapter");
+        assert_eq!(
+            metadata.supported_capabilities,
+            vec!["openshell.gateway-interceptor.contract"]
+        );
+        assert_eq!(
+            metadata.required_capabilities,
+            vec!["openshell.gateway-interceptor.contract"]
+        );
     }
 
     #[test]

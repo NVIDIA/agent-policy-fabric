@@ -24,6 +24,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use tonic::{Request, Response, Status};
 
+use apf_openshell_auth::protocol::{
+    ExtensionFamily, extension_metadata, validate_gateway_metadata,
+};
 use apf_openshell_auth::{
     Authenticated, AuthenticatedCaller, AuthenticationMode, AuthorizationFailure,
     ExtensionAuthVerifier, ExtensionCallerKind,
@@ -274,7 +277,7 @@ impl fmt::Debug for SupervisorMiddlewareService {
 impl SupervisorMiddleware for SupervisorMiddlewareService {
     async fn describe(
         &self,
-        request: Request<()>,
+        request: Request<wire::MiddlewareDescribeRequest>,
     ) -> Result<Response<wire::MiddlewareManifest>, Status> {
         self.authentication
             .authorize(
@@ -288,7 +291,7 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 self.record_authorization_failure(&request, failure);
                 failure.into_status()
             })?;
-        Ok(Response::new(wire::MiddlewareManifest {
+        let manifest = wire::MiddlewareManifest {
             name: SERVICE_NAME.to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
             bindings: vec![wire::MiddlewareBinding {
@@ -300,7 +303,23 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
                 request_timeout: None,
             }],
             expected_audience: self.authentication.expected_audience().to_string(),
-        }))
+            extension: Some(extension_metadata(
+                ExtensionFamily::SupervisorMiddleware,
+                "apf/content-policy",
+                env!("CARGO_PKG_VERSION"),
+            )),
+        };
+        validate_gateway_metadata(
+            ExtensionFamily::SupervisorMiddleware,
+            &manifest.name,
+            manifest
+                .extension
+                .as_ref()
+                .expect("middleware manifest protocol metadata is static"),
+            request.into_inner().gateway,
+        )
+        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        Ok(Response::new(manifest))
     }
 
     async fn validate_config(
@@ -1262,6 +1281,16 @@ mod tests {
         request
     }
 
+    fn describe_request() -> wire::MiddlewareDescribeRequest {
+        wire::MiddlewareDescribeRequest {
+            gateway: Some(extension_metadata(
+                ExtensionFamily::SupervisorMiddleware,
+                "openshell/gateway",
+                "0.0.117",
+            )),
+        }
+    }
+
     pub(super) fn evaluation(body: &[u8]) -> wire::HttpRequestEvaluation {
         wire::HttpRequestEvaluation {
             phase: wire::SupervisorMiddlewarePhase::PreCredentials as i32,
@@ -1290,7 +1319,7 @@ mod tests {
     async fn describe_advertises_exact_v1_binding() {
         let service = make_service(StubEvaluator::returning(EvalResult::default()));
         let manifest = service
-            .describe(Request::new(()))
+            .describe(Request::new(describe_request()))
             .await
             .expect("Describe should be infallible")
             .into_inner();
@@ -1298,6 +1327,11 @@ mod tests {
         assert_eq!(manifest.name, SERVICE_NAME);
         assert_eq!(manifest.service_version, env!("CARGO_PKG_VERSION"));
         assert!(manifest.expected_audience.is_empty());
+        let metadata = manifest.extension.expect("protocol metadata");
+        assert_eq!(
+            metadata.supported_capabilities,
+            vec!["openshell.supervisor-middleware.contract"]
+        );
         assert_eq!(
             manifest.bindings,
             vec![wire::MiddlewareBinding {
@@ -1319,7 +1353,7 @@ mod tests {
             (ExtensionCallerKind::Supervisor, Some("sandbox-042")),
         ] {
             let manifest = service
-                .describe(authenticated_request((), kind, sandbox_id))
+                .describe(authenticated_request(describe_request(), kind, sandbox_id))
                 .await
                 .expect("Describe accepts gateway and supervisor callers")
                 .into_inner();
@@ -1378,11 +1412,28 @@ mod tests {
 
         assert_eq!(
             service
-                .describe(Request::new(()))
+                .describe(Request::new(describe_request()))
                 .await
                 .expect_err("authenticated dispatch must reject a missing caller")
                 .code(),
             tonic::Code::Unauthenticated
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_rejects_missing_gateway_protocol_metadata() {
+        let service = make_service(StubEvaluator::returning(EvalResult::default()));
+        let error = service
+            .describe(Request::new(wire::MiddlewareDescribeRequest {
+                gateway: None,
+            }))
+            .await
+            .expect_err("missing gateway metadata must fail closed");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            error
+                .message()
+                .contains("did not provide protocol metadata")
         );
     }
 

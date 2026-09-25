@@ -234,7 +234,7 @@ fn refresh_request(metadata: &ObjectMeta) -> Result<UpdateConfigRequest, String>
         return Err("sandbox is outside the requested workspace or has no name".into());
     }
     Ok(UpdateConfigRequest {
-        name: metadata.name.clone(),
+        sandbox: metadata.name.clone(),
         expected_resource_version: metadata.resource_version,
         workspace_scope: Some(default_workspace()),
         ..Default::default()
@@ -339,7 +339,7 @@ mod tests {
             ..Default::default()
         };
         let request = refresh_request(&metadata).unwrap();
-        assert_eq!(request.name, "same-name");
+        assert_eq!(request.sandbox, "same-name");
         assert_eq!(request.expected_resource_version, 42);
         assert_eq!(
             request.workspace_scope.unwrap().selection,

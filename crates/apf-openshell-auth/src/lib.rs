@@ -10,6 +10,7 @@
 //! type, exact audience, and exact caller shape in addition to a valid signature.
 
 pub mod audit;
+pub mod protocol;
 
 use apf_audit::ComponentAudit;
 
