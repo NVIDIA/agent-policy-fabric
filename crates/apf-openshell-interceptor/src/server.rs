@@ -34,7 +34,7 @@ use crate::proto::{
     ProviderProfileSnapshotRequest, interceptor_evaluation,
 };
 use apf_proto::json as util;
-use apf_proto::spec_digest::canonical_json_digest;
+use apf_proto::spec_digest::{canonical_json_digest, provider_profile_to_json};
 
 // Bounds CreateSandbox specs, config patches, and aggregated provider-profile
 // snapshots. Unlike the middleware's HTTP body limit, there is no single
@@ -116,18 +116,23 @@ impl GatewayInterceptorService {
             .max_encoding_message_size(GRPC_MESSAGE_BYTES)
     }
 
-    /// Resolve the set of provider-profile IDs the current bundle manages.
+    /// Resolve the provider profiles the current bundle manages, keyed by ID.
     ///
-    /// Governance checks below compare an incoming profile's `id` against
-    /// this set. It must reflect actual profile identities, not raw document
-    /// names — a bundle that publishes profiles only as the atomic
+    /// Governance checks below compare an incoming profile's `id` and content
+    /// against this map. Identities must come from resolved profiles, not raw
+    /// document names — a bundle that publishes profiles only as the atomic
     /// `ProviderProfileSet` aggregate (no per-profile documents) would
     /// otherwise expose just the literal name `"default"`.
-    async fn provider_profile_ids(&self) -> Result<std::collections::HashSet<String>, String> {
+    async fn bundle_provider_profiles(
+        &self,
+    ) -> Result<
+        std::collections::HashMap<String, crate::proto::openshell::v1::ProviderProfile>,
+        String,
+    > {
         let mut policy_service = self.policy_service.clone();
         let documents = reconciler::fetch_provider_profile_documents(&mut policy_service).await?;
         let profiles = reconciler::resolve_provider_profiles(&documents)?;
-        Ok(profiles.into_iter().map(|p| p.id).collect())
+        Ok(profiles.into_iter().map(|p| (p.id.clone(), p)).collect())
     }
 
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), AuthorizationFailure> {
@@ -322,6 +327,28 @@ fn compute_spec_digest_from_policy(policy: &serde_json::Value) -> String {
 /// Canonical spec-digest from a `CreateSandbox` operation (policy at `/spec/policy`).
 fn compute_spec_digest_from_op(op_json: &serde_json::Value) -> String {
     compute_spec_digest_from_policy(&op_json["spec"]["policy"])
+}
+
+/// Compare an incoming provider-profile operation value against the bundle's
+/// own profile for the same ID, using the identical canonical proto3-JSON
+/// representation the gateway itself reconstructs — not a caller-supplied
+/// annotation, which this RPC has no ModifyOperation phase to let APF stamp.
+///
+/// `resourceVersion` and `annotations` are storage/runtime metadata, not bundle
+/// content — the bundle's copy never carries them (they default to the
+/// omitted-from-JSON zero/empty value), so they are stripped from the incoming
+/// side before comparing.
+fn provider_profile_matches_bundle(
+    bundle_profile: &crate::proto::openshell::v1::ProviderProfile,
+    incoming: &serde_json::Value,
+) -> bool {
+    let mut incoming = incoming.clone();
+    if let Some(object) = incoming.as_object_mut() {
+        object.remove("resourceVersion");
+        object.remove("annotations");
+    }
+    canonical_json_digest(&provider_profile_to_json(bundle_profile))
+        == canonical_json_digest(&incoming)
 }
 
 /// Build an `allow` result with no patches or annotations.
@@ -1573,8 +1600,8 @@ impl GatewayInterceptorService {
             digest: UNVERIFIED_POLICY,
             revision: None,
         };
-        let bundle_ids = match self.provider_profile_ids().await {
-            Ok(ids) => ids,
+        let bundle_profiles = match self.bundle_provider_profiles().await {
+            Ok(profiles) => profiles,
             Err(e) => {
                 warn!(error = %e, correlation_id = %ctx.correlation_id, "ImportProviderProfiles VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
@@ -1605,7 +1632,7 @@ impl GatewayInterceptorService {
         for item in &profiles {
             let profile = &item["profile"];
             let id = profile["id"].as_str().unwrap_or("");
-            if !bundle_ids.contains(id) {
+            let Some(bundle_profile) = bundle_profiles.get(id) else {
                 let correlation_id = uuid::Uuid::new_v4().to_string();
                 warn!(
                     profile_id = %id,
@@ -1629,64 +1656,38 @@ impl GatewayInterceptorService {
                     "",
                     &eval.binding_id,
                 )));
-            }
+            };
 
-            // Verify the policy-service-minted provenance JWT stored in the profile annotation.
-            // This detects profiles that were tampered with after being snapshotted.
-            {
-                let annotations = &profile["annotations"];
-                let profile_hash = annotations["openshell.nvidia.com/profile-hash"]
-                    .as_str()
-                    .unwrap_or("");
-                let profile_sig = annotations["openshell.nvidia.com/profile-signature"]
-                    .as_str()
-                    .unwrap_or("");
-
-                let sig_ok = if profile_sig.is_empty() {
-                    false
-                } else {
-                    verify_jwt_internal(
-                        &self.config.verifying_key.read().unwrap().clone(),
-                        profile_sig,
-                    )
-                    .is_ok_and(|c| c.apf_document_digest == profile_hash)
-                };
-
-                if !sig_ok {
-                    let correlation_id = uuid::Uuid::new_v4().to_string();
-                    let deny_message = if profile_sig.is_empty() {
-                        "provider profile missing policy-service provenance signature"
-                    } else {
-                        "provider profile provenance signature invalid or hash mismatch"
-                    };
-                    warn!(
-                        profile_id = %id,
-                        correlation_id = %correlation_id,
-                        "ImportProviderProfiles VALIDATE denied: {deny_message}"
-                    );
-                    self.record_governance_event(
-                        "interceptor.import_provider_profiles",
-                        "openshell.provider_profile",
-                        id,
-                        &ctx.user_subject,
-                        &correlation_id,
-                        unverified,
-                        if profile_sig.is_empty() {
-                            "interceptor.govern_denied.profile_provenance_missing"
-                        } else {
-                            "interceptor.govern_denied.profile_provenance_invalid"
-                        },
-                        Outcome::Refused {
-                            detail: deny_message,
-                        },
-                    );
-                    return Ok(Response::new(deny_with_context(
-                        deny_message,
-                        &correlation_id,
-                        "",
-                        &eval.binding_id,
-                    )));
-                }
+            // Compare the incoming profile against the bundle's own copy for this ID,
+            // rather than trusting a caller-supplied provenance annotation — this RPC
+            // has no ModifyOperation phase for APF to stamp, and the binding applies to
+            // any caller, not just the reconciler. A bundle-managed ID with tampered
+            // content (weakened enforcement, added endpoints, ...) must still be denied.
+            if !provider_profile_matches_bundle(bundle_profile, profile) {
+                let correlation_id = uuid::Uuid::new_v4().to_string();
+                let reason =
+                    format!("provider profile '{id}' content does not match the APF bundle");
+                warn!(
+                    profile_id = %id,
+                    correlation_id = %correlation_id,
+                    "ImportProviderProfiles VALIDATE denied: {reason}"
+                );
+                self.record_governance_event(
+                    "interceptor.import_provider_profiles",
+                    "openshell.provider_profile",
+                    id,
+                    &ctx.user_subject,
+                    &correlation_id,
+                    unverified,
+                    "interceptor.govern_denied.profile_content_mismatch",
+                    Outcome::Refused { detail: &reason },
+                );
+                return Ok(Response::new(deny_with_context(
+                    &reason,
+                    &correlation_id,
+                    "",
+                    &eval.binding_id,
+                )));
             }
         }
 
@@ -1714,8 +1715,8 @@ impl GatewayInterceptorService {
             digest: UNVERIFIED_POLICY,
             revision: None,
         };
-        let bundle_ids = match self.provider_profile_ids().await {
-            Ok(ids) => ids,
+        let bundle_profiles = match self.bundle_provider_profiles().await {
+            Ok(profiles) => profiles,
             Err(e) => {
                 warn!(error = %e, correlation_id = %ctx.correlation_id, "UpdateProviderProfiles VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
@@ -1742,7 +1743,7 @@ impl GatewayInterceptorService {
         let op_json =
             context::operation_struct(&eval).map_or(serde_json::Value::Null, util::struct_to_json);
         let target_id = op_json["id"].as_str().unwrap_or("");
-        if !bundle_ids.contains(target_id) {
+        let Some(bundle_profile) = bundle_profiles.get(target_id) else {
             let correlation_id = uuid::Uuid::new_v4().to_string();
             warn!(
                 profile_id = %target_id,
@@ -1757,6 +1758,38 @@ impl GatewayInterceptorService {
                 &correlation_id,
                 unverified,
                 "interceptor.govern_denied.unmanaged_provider_profile",
+                Outcome::Refused { detail: &reason },
+            );
+            return Ok(Response::new(deny_with_context(
+                &reason,
+                &correlation_id,
+                "",
+                &eval.binding_id,
+            )));
+        };
+
+        // As with ImportProviderProfiles: compare the update payload's content
+        // against the bundle's own copy for this ID. Bundle-ID membership alone
+        // does not prove the payload's content — endpoints, credentials, enforcement
+        // mode — actually matches what the bundle says for that ID.
+        let incoming_profile = &op_json["profile"]["profile"];
+        if !provider_profile_matches_bundle(bundle_profile, incoming_profile) {
+            let correlation_id = uuid::Uuid::new_v4().to_string();
+            let reason =
+                format!("provider profile '{target_id}' content does not match the APF bundle");
+            warn!(
+                profile_id = %target_id,
+                correlation_id = %correlation_id,
+                "UpdateProviderProfiles VALIDATE denied: {reason}"
+            );
+            self.record_governance_event(
+                "interceptor.update_provider_profiles",
+                "openshell.provider_profile",
+                target_id,
+                &ctx.user_subject,
+                &correlation_id,
+                unverified,
+                "interceptor.govern_denied.profile_content_mismatch",
                 Outcome::Refused { detail: &reason },
             );
             return Ok(Response::new(deny_with_context(
@@ -1808,8 +1841,10 @@ impl GatewayInterceptorService {
         } else {
             "interceptor.create_provider"
         };
-        let bundle_types = match self.provider_profile_ids().await {
-            Ok(ids) => ids,
+        let bundle_types = match self.bundle_provider_profiles().await {
+            Ok(profiles) => profiles
+                .into_keys()
+                .collect::<std::collections::HashSet<_>>(),
             Err(e) => {
                 warn!(error = %e, correlation_id = %ctx.correlation_id, "Provider VALIDATE: provider-profile set unavailable");
                 self.record_governance_event(
@@ -3788,6 +3823,177 @@ mod admission_audit_tests {
             .unwrap_err();
             assert_eq!(error.code(), tonic::Code::FailedPrecondition);
         }
+    }
+
+    fn json_operation_struct(value: serde_json::Value) -> ProstStruct {
+        match apf_proto::json::json_to_proto_value(&value)
+            .expect("test fixture is valid JSON")
+            .kind
+        {
+            Some(prost_types::value::Kind::StructValue(s)) => s,
+            other => panic!("expected a JSON object, got {other:?}"),
+        }
+    }
+
+    fn import_provider_profiles_validate(profile: serde_json::Value) -> InterceptorEvaluation {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        InterceptorEvaluation {
+            method: "ImportProviderProfiles".to_string(),
+            phase: Some(Phase::Validate(ValidateEvaluation {
+                proposed_operation: Some(json_operation_struct(serde_json::json!({
+                    "profiles": [{ "profile": profile }]
+                }))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn update_provider_profiles_validate(
+        id: &str,
+        profile: serde_json::Value,
+    ) -> InterceptorEvaluation {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        InterceptorEvaluation {
+            method: "UpdateProviderProfiles".to_string(),
+            phase: Some(Phase::Validate(ValidateEvaluation {
+                proposed_operation: Some(json_operation_struct(serde_json::json!({
+                    "id": id,
+                    "profile": { "profile": profile }
+                }))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// The bundle's own profile for `yaml`, and the same content in the
+    /// canonical proto3-JSON shape the gateway hands the interceptor at
+    /// VALIDATE — the unmodified fixture every content-comparison test starts
+    /// from.
+    fn bundle_profile_and_json(yaml: &[u8]) -> serde_json::Value {
+        let profile = reconciler::profile_from_yaml(yaml).expect("valid profile YAML");
+        apf_proto::spec_digest::provider_profile_to_json(&profile)
+    }
+
+    async fn provider_profile_harness(yaml: Vec<u8>) -> Harness {
+        let mut h = harness(&key(), GetDocumentResponse::default()).await;
+        let (client, _socket) = serve_stub_with_names(
+            GetDocumentResponse {
+                body: yaml,
+                ..Default::default()
+            },
+            Some(vec!["p".into()]),
+        )
+        .await;
+        h.service.policy_service = client;
+        h._socket = _socket;
+        h
+    }
+
+    const PROFILE_YAML: &[u8] =
+        b"id: p\nendpoints: [{host: api.example, port: 443, enforcement: enforce}]\n";
+
+    #[tokio::test]
+    async fn import_provider_profiles_allowed_when_content_matches_bundle() {
+        let profile_json = bundle_profile_and_json(PROFILE_YAML);
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(import_provider_profiles_validate(
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn import_provider_profiles_denied_when_id_not_in_bundle() {
+        let mut profile_json = bundle_profile_and_json(PROFILE_YAML);
+        profile_json["id"] = serde_json::json!("not-managed");
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(import_provider_profiles_validate(
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn import_provider_profiles_denied_when_content_differs_from_bundle() {
+        let mut profile_json = bundle_profile_and_json(PROFILE_YAML);
+        // Same ID, tampered content: a port the bundle never authored.
+        profile_json["endpoints"][0]["port"] = serde_json::json!(9999);
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(import_provider_profiles_validate(
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn update_provider_profiles_allowed_when_content_matches_bundle_ignoring_resource_version()
+     {
+        let mut profile_json = bundle_profile_and_json(PROFILE_YAML);
+        // A real UpdateProviderProfiles call carries the gateway's existing
+        // resource_version, which the bundle's own copy never has — must be
+        // ignored, not treated as a content mismatch.
+        profile_json["resourceVersion"] = serde_json::json!("7");
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(update_provider_profiles_validate(
+                "p",
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn update_provider_profiles_denied_when_id_not_in_bundle() {
+        let profile_json = bundle_profile_and_json(PROFILE_YAML);
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(update_provider_profiles_validate(
+                "not-managed",
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn update_provider_profiles_denied_when_content_differs_from_bundle() {
+        let mut profile_json = bundle_profile_and_json(PROFILE_YAML);
+        profile_json["endpoints"][0]["enforcement"] = serde_json::json!("AUDIT");
+        let h = provider_profile_harness(PROFILE_YAML.to_vec()).await;
+        let result = h
+            .service
+            .evaluate(Request::new(update_provider_profiles_validate(
+                "p",
+                profile_json,
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed);
     }
 
     fn key() -> SigningKey {

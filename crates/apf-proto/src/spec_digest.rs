@@ -20,10 +20,14 @@ use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
+use crate::openshell::v1::ProviderProfile;
 use crate::openshell_sandbox::SandboxPolicy;
 
 /// Fully-qualified name of the message serialized for the spec-digest.
 const SANDBOX_POLICY_FQN: &str = "openshell.sandbox.v1.SandboxPolicy";
+
+/// Fully-qualified name of the message serialized for provider-profile content comparison.
+const PROVIDER_PROFILE_FQN: &str = "openshell.v1.ProviderProfile";
 
 /// Descriptor pool built from the self-contained set emitted at build time.
 static DESCRIPTOR_POOL: LazyLock<DescriptorPool> = LazyLock::new(|| {
@@ -74,12 +78,25 @@ fn canonicalize(value: &JsonValue) -> JsonValue {
 /// agree on one representation.
 #[must_use]
 pub fn sandbox_policy_to_json(policy: &SandboxPolicy) -> JsonValue {
+    message_to_json(SANDBOX_POLICY_FQN, policy.encode_to_vec())
+}
+
+/// Serialize a `ProviderProfile` to canonical proto3-JSON via the compiled
+/// descriptor, in the same representation the gateway uses for the operation
+/// it hands the interceptor at VALIDATE. Lets a caller-supplied profile be
+/// compared directly against the bundle's own copy for that ID.
+#[must_use]
+pub fn provider_profile_to_json(profile: &ProviderProfile) -> JsonValue {
+    message_to_json(PROVIDER_PROFILE_FQN, profile.encode_to_vec())
+}
+
+/// Decode `bytes` against `fqn`'s descriptor and serialize to canonical proto3-JSON.
+fn message_to_json(fqn: &str, bytes: Vec<u8>) -> JsonValue {
     let descriptor = DESCRIPTOR_POOL
-        .get_message_by_name(SANDBOX_POLICY_FQN)
-        .expect("SandboxPolicy descriptor present in pool");
-    let bytes = policy.encode_to_vec();
+        .get_message_by_name(fqn)
+        .unwrap_or_else(|| panic!("{fqn} descriptor present in pool"));
     let dynamic = DynamicMessage::decode(descriptor, bytes.as_ref())
-        .expect("SandboxPolicy bytes decode against its descriptor");
+        .unwrap_or_else(|e| panic!("{fqn} bytes decode against its descriptor: {e}"));
     dynamic
         .serialize_with_options(serde_json::value::Serializer, &SerializeOptions::new())
         .expect("dynamic message serializes to JSON")
@@ -88,9 +105,50 @@ pub fn sandbox_policy_to_json(policy: &SandboxPolicy) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openshell::v1::ProviderProfileCredential;
     use crate::openshell_sandbox::{
         FilesystemPolicy, LandlockPolicy, ProcessPolicy, SandboxPolicy,
     };
+
+    #[test]
+    fn provider_profile_to_json_uses_camel_case_and_omits_defaults() {
+        let profile = ProviderProfile {
+            id: "nvidia".to_string(),
+            inference_capable: true,
+            credentials: vec![ProviderProfileCredential {
+                name: "api-key".to_string(),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let value = provider_profile_to_json(&profile);
+        assert_eq!(value["id"], "nvidia");
+        assert_eq!(value["inferenceCapable"], true);
+        assert_eq!(value["credentials"][0]["name"], "api-key");
+        assert!(
+            value.get("resourceVersion").is_none(),
+            "zero-valued resourceVersion must be omitted: {value}"
+        );
+        assert!(
+            value.get("annotations").is_none(),
+            "empty annotations map must be omitted: {value}"
+        );
+    }
+
+    #[test]
+    fn provider_profile_to_json_differs_on_content_change() {
+        let base = ProviderProfile {
+            id: "nvidia".to_string(),
+            ..Default::default()
+        };
+        let mut changed = base.clone();
+        changed.inference_capable = true;
+        assert_ne!(
+            provider_profile_to_json(&base),
+            provider_profile_to_json(&changed)
+        );
+    }
 
     #[test]
     fn spec_digest_is_64_hex_chars() {
