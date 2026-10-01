@@ -10,16 +10,11 @@ publish = false
 apf-bundle       = { path = "../apf-bundle" }
 apf-policy-eval  = { path = "../apf-policy-eval" }
 apf-proto        = { path = "../apf-proto" }
-
-hex         = "0.4"
 prost       = "0.13"
 prost-types = "0.13"
-regex       = "1"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 serde_yaml  = "0.9"
-sha2        = "0.10"
 thiserror   = "2"
 
 [dev-dependencies]
-tempfile = "3"

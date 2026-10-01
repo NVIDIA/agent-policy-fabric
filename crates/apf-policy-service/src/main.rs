@@ -21,7 +21,6 @@ use apf_proto::policy_service_v1alpha1::policy_service_server::PolicyServiceServ
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
 use tokio::net::UnixListener;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::{StreamExt, wrappers::UnixListenerStream};
@@ -253,7 +252,7 @@ fn run_keygen(args: KeygenArgs) -> anyhow::Result<()> {
     }
 
     std::fs::create_dir_all(&args.output_dir)?;
-    let sk = SigningKey::generate(&mut OsRng);
+    let sk = SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(getrandom::SysRng));
     let vk = sk.verifying_key();
     let seed_b64 = base64::engine::general_purpose::STANDARD.encode(sk.to_bytes());
     let pub_b64 = base64::engine::general_purpose::STANDARD.encode(vk.to_bytes());
@@ -358,7 +357,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
             signing_key: sk,
         }
     } else {
-        let sk = SigningKey::generate(&mut OsRng);
+        let sk = SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(getrandom::SysRng));
         let pk_b64 =
             base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
         warn!(

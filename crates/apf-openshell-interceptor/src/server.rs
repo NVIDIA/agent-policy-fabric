@@ -2278,7 +2278,6 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use prost_types::{Struct as ProstStruct, Value as ProstValue, value::Kind};
-    use rand::rngs::OsRng;
     use serde::Serialize;
     use std::collections::BTreeMap;
     use tonic::transport::Endpoint;
@@ -2395,7 +2394,8 @@ mod tests {
     }
 
     fn test_keypair() -> (SigningKey, VerifyingKey) {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key =
+            SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(getrandom::SysRng));
         let verifying_key = signing_key.verifying_key();
         (signing_key, verifying_key)
     }
@@ -2409,7 +2409,10 @@ mod tests {
                 document_name: "default".to_string(),
                 signing_key_id: "test-key".to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(
-                    SigningKey::generate(&mut OsRng).verifying_key(),
+                    SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+                        getrandom::SysRng,
+                    ))
+                    .verifying_key(),
                 )),
                 audit: InterceptorAudit::disabled(),
             },
@@ -2967,7 +2970,10 @@ mod tests {
                 document_name: "default".to_string(),
                 signing_key_id: "test-key".to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(
-                    SigningKey::generate(&mut OsRng).verifying_key(),
+                    SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+                        getrandom::SysRng,
+                    ))
+                    .verifying_key(),
                 )),
                 audit: InterceptorAudit::to_jsonl_in(dir).expect("build emitter"),
             },

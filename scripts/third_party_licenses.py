@@ -17,7 +17,7 @@ OUTPUT = ROOT / "THIRD_PARTY_LICENSES.txt"
 DOCUMENT_NAME = re.compile(r"licen[sc]e|copying|copyright|notice|authors", re.I)
 COPYRIGHT = re.compile(
     r"^\s*(?:[/#*!<>-]+\s*)?(?:SPDX-FileCopyrightText:\s*)?"
-    r"(?:Copyright\s+(?:\([cC]\)\s*|©\s*)?(?:\[?[12][0-9]{3}|[A-Z][a-zA-Z.,-]+\b)|©\s*[12][0-9]{3})"
+    r"(?:Copyright\s+(?:\([cC]\)\s*|©\s*)?(?:\[?[12][0-9]{3}|[A-Z][a-zA-Z.,-]+\b)|©\s*[12][0-9]{3}|\([cC]\)\s*[12][0-9]{3}\b)"
 )
 
 

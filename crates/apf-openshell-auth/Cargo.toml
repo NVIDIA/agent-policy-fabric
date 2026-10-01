@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 apf-audit    = { path = "../apf-audit" }
 apf-proto    = { path = "../apf-proto" }
-jsonwebtoken = "9"
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 nix          = { version = "0.29", features = ["fs"] }
 serde        = { version = "1", features = ["derive"] }
 thiserror    = "2"

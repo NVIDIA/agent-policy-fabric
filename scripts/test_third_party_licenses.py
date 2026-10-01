@@ -111,6 +111,13 @@ class NoticeTests(unittest.TestCase):
         ):
             self.render(supplements=extra)
 
+    def test_zlib_parenthetical_notice_is_a_copyright_statement(self):
+        """A zlib-style `(C) YEAR holder` line is the copyright statement."""
+        self.assertEqual(
+            notices.copyright_lines("(C) 2024 Copyright\n"),
+            {"(C) 2024 Copyright"},
+        )
+
     def test_template_copyright_is_not_attribution(self):
         """Do not publish placeholders as if they identified a rights holder."""
         self.assertFalse(

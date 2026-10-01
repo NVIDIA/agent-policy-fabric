@@ -61,12 +61,12 @@
   },
   {
     "name": "portable-atomic-util",
-    "version": "0.2.7",
+    "version": "0.2.8",
     "attribution": {
       "kind": "upstream project attribution",
       "value": "portable-atomic-util project contributors (taiki-e/portable-atomic-util)",
       "crate_file": "Cargo.toml",
-      "sha256": "7e675f1b51996fcdb653b99655c23c961b22a69d1c416e496151f9ee677b8838"
+      "sha256": "27d857892513acbb2bf4b615991822388d3b30c568a677d50ad031735517517c"
     }
   },
   {

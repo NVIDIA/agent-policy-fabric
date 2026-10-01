@@ -20,9 +20,8 @@ impl Ed25519Signer {
 
     /// Generate a random keypair for tests and dev fixtures.
     pub fn generate() -> Self {
-        use rand::rngs::OsRng;
         Self {
-            key: SigningKey::generate(&mut OsRng),
+            key: SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(getrandom::SysRng)),
         }
     }
 

@@ -680,7 +680,9 @@ spec:
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("sandbox")).unwrap();
 
-        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let key = ed25519_dalek::SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+            getrandom::SysRng,
+        ));
         let signed_member = sign_yaml_sigil(SANDBOX_MEMBER, &key, "test-key");
         assert_ne!(
             signed_member,

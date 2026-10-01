@@ -8,6 +8,6 @@ rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-yaml-sigil-verification = "0.5.0-rc.1"
-yaml-sigil-signing      = "0.5.0-rc.1"
-yaml-sigil-traits       = "0.4.0-rc.1"
+yaml-sigil-verification = "0.6.0"
+yaml-sigil-signing      = "0.6.0"
+yaml-sigil-traits       = "0.4.1"

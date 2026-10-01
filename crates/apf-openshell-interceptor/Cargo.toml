@@ -12,16 +12,12 @@ apf-openshell-auth = { path = "../apf-openshell-auth" }
 apf-proto           = { path = "../apf-proto" }
 apf-policy-client   = { path = "../apf-policy-client" }
 apf-types           = { path = "../apf-types" }
-
-
-anyhow        = "1"
 hex        = "0.4"
 base64        = "0.22"
-ed25519-dalek = "2"
-jsonwebtoken  = "9"
+ed25519-dalek = "3"
+jsonwebtoken  = { version = "11.1.0", features = ["rust_crypto"] }
 prost         = "0.13"
 prost-types   = "0.13"
-rand          = { version = "0.8", features = ["getrandom"] }
 serde         = { version = "1", features = ["derive"] }
 serde_json    = "1"
 serde_yaml    = "0.9"
@@ -38,7 +34,7 @@ uuid          = { version = "1", features = ["v4"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 # `SigningKey::generate` in tests. Enabled here rather than relying on another
 # workspace crate's feature unification, which broke `cargo test -p` alone.
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-jsonwebtoken = "9"
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 tempfile     = "3"
-rand         = { version = "0.8", features = ["getrandom"] }

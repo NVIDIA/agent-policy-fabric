@@ -4,26 +4,26 @@
   "packages": [
     {
       "name": "buf-tools",
-      "version": "1.72.0-hotfix.1",
+      "version": "1.73.0",
       "declared_license": "MIT",
       "selected_license": "MIT",
       "repository": "https://github.com/canardleteer/buf-rs",
-      "revision": "d581ff1aa5cee57f9d3562c72434ed28f3008481",
+      "revision": "559b58b35c50359b27165931779fb3809a27f43c",
       "path_in_vcs": "buf-tools",
-      "published_vcs_dirty": true,
+      "published_vcs_dirty": false,
       "copyright_statements": [
         "Copyright (c) 2026 canardleteer"
       ],
       "files": [
         {
-          "filename": "buf-tools-1.72.0-hotfix.1-LICENSE",
-          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/d581ff1aa5cee57f9d3562c72434ed28f3008481/LICENSE",
+          "filename": "buf-tools-1.73.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/559b58b35c50359b27165931779fb3809a27f43c/LICENSE",
           "sha256": "49402ec3ae117d8fe5574d98fa9b86d5e6888f99739ac6c846ce5a61863d3366",
           "kind": "license"
         },
         {
-          "filename": "buf-tools-1.72.0-hotfix.1-THIRD_PARTY_NOTICES.txt",
-          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/d581ff1aa5cee57f9d3562c72434ed28f3008481/THIRD_PARTY_NOTICES.md",
+          "filename": "buf-tools-1.73.0-THIRD_PARTY_NOTICES.txt",
+          "upstream_url": "https://raw.githubusercontent.com/canardleteer/buf-rs/559b58b35c50359b27165931779fb3809a27f43c/THIRD_PARTY_NOTICES.md",
           "sha256": "92ea1c87892a14799756f24a3088aa04ef2292735c9c39bd05df621310013693",
           "kind": "notice"
         }
@@ -31,11 +31,11 @@
     },
     {
       "name": "buffa-descriptor",
-      "version": "0.5.2",
+      "version": "0.9.2",
       "declared_license": "Apache-2.0",
       "selected_license": "Apache-2.0",
       "repository": "https://github.com/anthropics/buffa",
-      "revision": "4c264ddd6fdd286f237dac0551fd420907b4864c",
+      "revision": "1f5d80e2c8d31c147742d8ec826a3219c4fcd4a7",
       "path_in_vcs": "buffa-descriptor",
       "published_vcs_dirty": false,
       "copyright_statements": [
@@ -44,14 +44,14 @@
       ],
       "files": [
         {
-          "filename": "buffa-descriptor-0.5.2-LICENSE",
-          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/LICENSE",
+          "filename": "buffa-descriptor-0.9.2-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/1f5d80e2c8d31c147742d8ec826a3219c4fcd4a7/LICENSE",
           "sha256": "e26ae9475108d3b118fe27915d36e8c5ab72732a8bbba24787eb4f45492c3300",
           "kind": "license"
         },
         {
-          "filename": "buffa-descriptor-0.5.2-descriptor.proto-NOTICE.txt",
-          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/buffa-descriptor/protos/google/protobuf/descriptor.proto",
+          "filename": "buffa-descriptor-0.9.2-descriptor.proto-NOTICE.txt",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/1f5d80e2c8d31c147742d8ec826a3219c4fcd4a7/buffa-descriptor/protos/google/protobuf/descriptor.proto",
           "sha256": "2f706d67271d8db967046638e30f7887a5ba6e49593e6395e8145a7c9feab96a",
           "upstream_sha256": "826dd555e98d16a8360edcaae83778057f0a583ea7059e59d2d838096f912918",
           "kind": "notice",
@@ -63,8 +63,8 @@
           "license": "BSD-3-Clause"
         },
         {
-          "filename": "buffa-descriptor-0.5.2-plugin.proto-NOTICE.txt",
-          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/4c264ddd6fdd286f237dac0551fd420907b4864c/buffa-descriptor/protos/google/protobuf/compiler/plugin.proto",
+          "filename": "buffa-descriptor-0.9.2-plugin.proto-NOTICE.txt",
+          "upstream_url": "https://raw.githubusercontent.com/anthropics/buffa/1f5d80e2c8d31c147742d8ec826a3219c4fcd4a7/buffa-descriptor/protos/google/protobuf/compiler/plugin.proto",
           "sha256": "3223e5930e2208981693edc7883c2d59139cc08846d15d21eee3387d7bf67bc6",
           "upstream_sha256": "8f5ef6c36fad8e66e3347c0f8d8910dfb14239b8ccfd2a8d16dba8e775b57b7f",
           "kind": "notice",
@@ -85,11 +85,11 @@
     },
     {
       "name": "cedar-policy",
-      "version": "4.12.0",
+      "version": "4.13.0",
       "declared_license": "Apache-2.0",
       "selected_license": "Apache-2.0",
       "repository": "https://github.com/cedar-policy/cedar",
-      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "revision": "324d3c09fc94ab91464ec340eb81e4b167deb6f5",
       "path_in_vcs": "cedar-policy",
       "published_vcs_dirty": false,
       "copyright_statements": [
@@ -97,14 +97,14 @@
       ],
       "files": [
         {
-          "filename": "cedar-policy-4.12.0-LICENSE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "filename": "cedar-policy-4.13.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/LICENSE",
           "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
           "kind": "license"
         },
         {
-          "filename": "cedar-policy-4.12.0-NOTICE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "filename": "cedar-policy-4.13.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/NOTICE",
           "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
           "kind": "notice"
         }
@@ -112,11 +112,11 @@
     },
     {
       "name": "cedar-policy-core",
-      "version": "4.12.0",
+      "version": "4.13.0",
       "declared_license": "Apache-2.0",
       "selected_license": "Apache-2.0",
       "repository": "https://github.com/cedar-policy/cedar",
-      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "revision": "324d3c09fc94ab91464ec340eb81e4b167deb6f5",
       "path_in_vcs": "cedar-policy-core",
       "published_vcs_dirty": false,
       "copyright_statements": [
@@ -124,14 +124,14 @@
       ],
       "files": [
         {
-          "filename": "cedar-policy-4.12.0-LICENSE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "filename": "cedar-policy-4.13.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/LICENSE",
           "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
           "kind": "license"
         },
         {
-          "filename": "cedar-policy-4.12.0-NOTICE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "filename": "cedar-policy-4.13.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/NOTICE",
           "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
           "kind": "notice"
         }
@@ -139,11 +139,11 @@
     },
     {
       "name": "cedar-policy-formatter",
-      "version": "4.12.0",
+      "version": "4.13.0",
       "declared_license": "Apache-2.0",
       "selected_license": "Apache-2.0",
       "repository": "https://github.com/cedar-policy/cedar",
-      "revision": "fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5",
+      "revision": "324d3c09fc94ab91464ec340eb81e4b167deb6f5",
       "path_in_vcs": "cedar-policy-formatter",
       "published_vcs_dirty": false,
       "copyright_statements": [
@@ -151,14 +151,14 @@
       ],
       "files": [
         {
-          "filename": "cedar-policy-4.12.0-LICENSE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/LICENSE",
+          "filename": "cedar-policy-4.13.0-LICENSE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/LICENSE",
           "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
           "kind": "license"
         },
         {
-          "filename": "cedar-policy-4.12.0-NOTICE",
-          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/fdcbaed32bdb8c8d13e4eaf2b58db5555e9fb8c5/NOTICE",
+          "filename": "cedar-policy-4.13.0-NOTICE",
+          "upstream_url": "https://raw.githubusercontent.com/cedar-policy/cedar/324d3c09fc94ab91464ec340eb81e4b167deb6f5/NOTICE",
           "sha256": "03844ca1749f2008269484548dd96557d19998145eba62c6e2f1a9e5dfa9e0a4",
           "kind": "notice"
         }

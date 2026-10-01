@@ -113,14 +113,18 @@ runtime_compatibility: {{}}
 
     #[test]
     fn a_real_signed_artifact_does_not_parse_as_a_bare_bundle() {
-        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let key = ed25519_dalek::SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+            getrandom::SysRng,
+        ));
         let artifact = yaml_sigil_sign(&good_bundle_yaml(1), &key, "test-key");
         assert!(Bundle::from_payload_bytes(&artifact).is_err());
     }
 
     #[test]
     fn finds_a_real_signed_manifest_among_candidates() {
-        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let key = ed25519_dalek::SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+            getrandom::SysRng,
+        ));
         let artifact = yaml_sigil_sign(&good_bundle_yaml(1), &key, "test-key");
 
         let dir = tempfile::tempdir().expect("create extract dir");
@@ -133,7 +137,9 @@ runtime_compatibility: {{}}
 
     #[test]
     fn rejects_an_unsigned_candidate() {
-        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let key = ed25519_dalek::SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+            getrandom::SysRng,
+        ));
         let dir = tempfile::tempdir().expect("create extract dir");
         std::fs::write(dir.path().join("manifest.yaml"), good_bundle_yaml(1)).expect("write");
 
@@ -143,7 +149,9 @@ runtime_compatibility: {{}}
 
     #[test]
     fn rejects_a_tampered_signature() {
-        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let key = ed25519_dalek::SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+            getrandom::SysRng,
+        ));
         let mut artifact = yaml_sigil_sign(&good_bundle_yaml(1), &key, "test-key");
         let last = artifact.len() - 1;
         artifact[last] ^= 0xFF;

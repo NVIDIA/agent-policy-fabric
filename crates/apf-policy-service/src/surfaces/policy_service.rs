@@ -54,7 +54,7 @@ struct ProvenanceClaims {
 ///
 /// The structure is fixed for Ed25519:
 /// SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING { seed } } }
-/// Total: 48 bytes. `ring` (used internally by `jsonwebtoken`) requires this form.
+/// Total: 48 bytes. `jsonwebtoken`'s Ed25519 signer requires this PKCS#8 form.
 fn ed25519_seed_to_pkcs8_der(seed: &[u8; 32]) -> [u8; 48] {
     let mut der = [0u8; 48];
     der[..16].copy_from_slice(&[

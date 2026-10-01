@@ -11,8 +11,6 @@ apf-audit                = { path = "../apf-audit" }
 apf-openshell-auth = { path = "../apf-openshell-auth" }
 apf-policy-eval     = { path = "../apf-policy-eval" }
 apf-proto           = { path = "../apf-proto" }
-
-anyhow     = "1"
 base64     = "0.22"
 hex        = "0.4"
 sha2       = "0.10"

@@ -53,9 +53,6 @@ exceptions = [
     # MIT-0
     { crate = "borrow-or-share", allow = ["MIT-0"] },
 
-    # MPL-2.0
-    { crate = "option-ext", allow = ["MPL-2.0"] },
-
     # Unicode-3.0 (ICU4X crates and Unicode data)
     { crate = "icu_collections", allow = ["Unicode-3.0"] },
     { crate = "icu_locale_core", allow = ["Unicode-3.0"] },
