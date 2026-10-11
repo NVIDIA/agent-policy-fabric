@@ -1,0 +1,26 @@
+["contracts:lint"]
+description = "Lint the protobuf contracts"
+run = "buf lint contracts/"
+
+["contracts:breaking"]
+description = "Check the protobuf contracts for breaking changes against the base branch (origin/main, or main)"
+run = """
+set -euo pipefail
+base="${APF_BREAKING_BASE:-$(git rev-parse --verify --quiet origin/main >/dev/null && echo origin/main || echo main)}"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+git archive "$base" contracts | tar -x -C "$tmp"
+buf breaking contracts/ --against "$tmp/contracts"
+"""
+
+["contracts:jsonschema"]
+description = "Check that every JSON Schema parses"
+run = 'for s in contracts/jsonschema/*.schema.json; do python3 -m json.tool "$s" >/dev/null; done'
+
+["contracts:vendor:check"]
+description = "Verify the vendored third-party protos match contracts/third_party/pins.toml"
+run = "cargo xtask vendor-protos --check"
+
+["contracts:vendor"]
+description = "Re-export the vendored third-party protos from their pins"
+run = "cargo xtask vendor-protos"

@@ -1,7 +1,8 @@
-# cargo-deny configuration. CI job lint:cargo-deny-licenses runs
-# `cargo-deny --locked check licenses -D no-license-field` in every merge
-# request pipeline; see docs/third-party-licenses.md. Every key below can
-# change which crates pass, so treat any edit as a license decision.
+# cargo-deny configuration. CI runs `cargo-deny --locked check licenses bans
+# sources -D no-license-field` (`mise run rust:deny:policy`) on every pull
+# request and `check advisories` on a schedule; see docs/third-party-licenses.md.
+# Every key below can change which crates pass, so treat any edit as a license
+# decision.
 
 [graph]
 # Resolve optional features the same way the third-party notice generator does.
@@ -87,5 +88,7 @@ multiple-versions = "warn"
 deny = []
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+# crates.io is the only permitted source; a private registry or a git dependency fails the check.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,39 @@
+["rust:fmt:check"]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+["rust:fmt"]
+description = "Format Rust code"
+run = "cargo fmt --all"
+
+["rust:lint"]
+description = "Lint Rust code with Clippy (deny warnings)"
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+["rust:test"]
+description = "Run the Rust test suite"
+run = "cargo nextest run --workspace --locked"
+
+["rust:lockfile:check"]
+description = "Verify Cargo.lock is up to date"
+run = "cargo metadata --locked --format-version 1 > /dev/null"
+
+["rust:dag-guard"]
+description = "Enforce the crate dependency DAG"
+run = "cargo xtask dag-guard"
+
+["rust:deny:licenses"]
+description = "Check dependency licenses"
+run = "cargo-deny --locked check licenses -D no-license-field"
+
+["rust:deny:policy"]
+description = "Check dependency licenses, bans, and sources"
+run = "cargo-deny --locked check licenses bans sources -D no-license-field"
+
+["rust:deny:advisories"]
+description = "Check the RustSec advisory database (scheduled in CI)"
+run = "cargo-deny --locked check advisories"
+
+["rust:deny"]
+description = "Run every cargo-deny check"
+run = "cargo-deny --locked check -D no-license-field"

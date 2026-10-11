@@ -1,0 +1,19 @@
+["license-headers"]
+description = "Verify SPDX copyright headers on tracked source files"
+run = "python3 scripts/verify_copyright.py --check"
+
+["license-headers:fix"]
+description = "Add or update SPDX copyright headers in place"
+run = "python3 scripts/verify_copyright.py --fix"
+
+["third-party-notices"]
+description = "Verify THIRD_PARTY_LICENSES.txt matches Cargo.lock"
+run = "python3 scripts/third_party_licenses.py --check"
+
+["third-party-notices:update"]
+description = "Regenerate THIRD_PARTY_LICENSES.txt from Cargo.lock"
+run = "python3 scripts/third_party_licenses.py"
+
+["python:test"]
+description = "Run the unit tests for the repository scripts"
+run = "python3 -m unittest discover -s scripts -p 'test_*.py'"

@@ -1,0 +1,37 @@
+[lint]
+description = "Format check and Clippy"
+depends = ["rust:fmt:check", "rust:lint"]
+
+[test]
+description = "Rust test suite"
+depends = ["rust:test"]
+
+[dag-guard]
+description = "Enforce the crate dependency DAG"
+depends = ["rust:dag-guard"]
+
+[buf-lint]
+description = "Lint the protobuf contracts"
+depends = ["contracts:lint"]
+
+[ci]
+description = "Run every check CI runs on a pull request"
+depends = [
+  "rust:fmt:check",
+  "rust:lockfile:check",
+  "rust:lint",
+  "rust:test",
+  "rust:dag-guard",
+  "rust:deny:policy",
+  "license-headers",
+  "third-party-notices",
+  "python:test",
+  "contracts:jsonschema",
+  "contracts:lint",
+  "contracts:vendor:check",
+]
+
+[all]
+description = "Alias for ci"
+depends = ["ci"]
+hide = true

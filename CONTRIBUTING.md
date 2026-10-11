@@ -80,26 +80,20 @@ Do not push directly to the default branch.
 Install the basic tools used by the APF repository:
 
 ```bash
-# Install Rust if needed.
-rustup toolchain install stable
-rustup default stable
+# Rust: rustup reads rust-toolchain.toml and installs the pinned toolchain.
+rustup show
 
-# Install Rust helper tools. The cargo-deny version matches CARGO_DENY_VERSION
-# in CI.
-cargo install cargo-nextest
-cargo install --locked cargo-deny@0.20.2
-
-# Install buf if needed on macOS.
-brew install bufbuild/buf/buf
+# Everything else is pinned in mise.toml and mise.lock (https://mise.jdx.dev):
+# buf, protoc, Python, cargo-deny and cargo-nextest.
+mise trust
+mise install --locked
 
 # Build once to verify the local environment.
 cargo build
 ```
 
-On Linux, follow the [buf installation instructions](https://buf.build/docs/installation/).
-If the repository adds a checked-in toolchain file, mise configuration, dev
-container, or setup script, use that repository-local setup as the source of
-truth.
+`mise.toml` and `mise.lock` are the source of truth for tool versions, and
+`tasks/*.toml` defines the repository checks; `mise tasks ls` lists them.
 
 ## Tests and linting
 
@@ -107,13 +101,11 @@ Read [AGENTS.md](AGENTS.md) before changing code or wire contracts. For a
 normal code change, run the applicable repository checks:
 
 ```bash
-cargo build
-cargo nextest run
-cargo xtask dag-guard
-cargo fmt --check
-cargo clippy -- -D warnings
-cargo deny check
-buf lint contracts/
+mise run ci              # every check CI runs on a pull request
+mise run lint            # cargo fmt --check and cargo clippy -D warnings
+mise run test            # cargo nextest run
+mise run dag-guard       # crate dependency DAG
+mise run contracts:lint  # buf lint contracts/
 ```
 
 For documentation-only changes, state that no code tests were required.

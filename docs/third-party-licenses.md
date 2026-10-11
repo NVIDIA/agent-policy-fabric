@@ -12,15 +12,15 @@ The published `AUTHORS` files for [r-efi 5.3.0](https://github.com/r-efi/r-efi/b
 
 ## Regeneration and verification
 
-Run from the repository root with Cargo and Python 3.11 or newer. No Python packages or license-scanner installation are required.
+Run from the repository root; `mise install --locked` provides the pinned Python, and no Python packages or license-scanner installation are required.
 
 ```fish
-uv run --no-project python scripts/third_party_licenses.py
-uv run --no-project python scripts/third_party_licenses.py --check --offline
-uv run --no-project python -B -m unittest discover -s scripts -p 'test_third_party_licenses.py'
+mise run third-party-notices:update
+mise run third-party-notices
+mise run python:test
 ```
 
-The first command lets Cargo download missing locked sources. `--offline` uses already fetched sources. The generator compares Cargo metadata with every external lockfile entry and stops if any are missing. It also stops on an unreviewed license expression, missing license documents, missing attribution, or a changed supplemental source checksum. CI runs the freshness check on each pipeline.
+The first command lets Cargo download missing locked sources. `--offline` uses already fetched sources. The generator compares Cargo metadata with every external lockfile entry and stops if any are missing. It also stops on an unreviewed license expression, missing license documents, missing attribution, or a changed supplemental source checksum. CI runs the freshness check on every pull request.
 
 [`licenses/selections.json`](../licenses/selections.json) records explicit choices for the upstream expressions. It prefers MIT where available and preserves required `AND` terms. A new expression requires review before generation can proceed. Existing dependencies with other licenses retain those licenses; this file does not grant new usage rights or replace open-source review. In particular, `foldhash` remains Zlib. The MIT selection for `r-efi` is checked separately and cannot silently change to LGPL.
 
@@ -30,22 +30,21 @@ Some upstream projects publish license terms without a separate copyright statem
 
 ## Dependency license check
 
-APF allows MIT and Apache-2.0 for every crate it builds. Any other license must be granted to a named crate by an exception in [`deny.toml`](../deny.toml). That covers a crate licensed only under another license (`foldhash` is Zlib) and a crate whose license adds a required term (`ring` is `Apache-2.0 AND ISC`, so its exception grants ISC to `ring` and to no other crate). The `lint:cargo-deny-licenses` CI job enforces this by running `cargo-deny --locked check licenses -D no-license-field` in every pull request pipeline. GitLab requires a successful pipeline before a pull request can merge, so a failed check blocks the merge. Maintainers can still push directly to `main`; the pipeline that runs after such a push reports a violation but does not prevent it.
+APF allows MIT and Apache-2.0 for every crate it builds. Any other license must be granted to a named crate by an exception in [`deny.toml`](../deny.toml). That covers a crate licensed only under another license (`foldhash` is Zlib) and a crate whose license adds a required term (`ring` is `Apache-2.0 AND ISC`, so its exception grants ISC to `ring` and to no other crate). CI enforces this with `mise run rust:deny:policy` (`cargo-deny --locked check licenses bans sources -D no-license-field`) on every pull request, and branch protection on `main` requires the check to pass before a pull request can merge.
 
 The check fails when a new crate needs a license outside MIT and Apache-2.0, when an excepted crate adds a license that its exception does not list, when a crate omits the `license` field, and when an exception is no longer needed. An exception applies to every version and source of the crate name it lists. cargo-deny does not report an exception that lists more licenses than its crate needs, so reviewers must check that each exception names only licenses the crate declares. Other `deny.toml` keys can also admit a crate, including `[graph]` settings, `[[licenses.clarify]]` and `[licenses.private]`; treat any change to that file as a license decision.
 
-The check covers development and build dependencies, every feature of APF's own crates, dependencies for all target platforms, and APF's workspace crates. It reads Cargo metadata only. The OpenShell protobuf sources that the `apf-proto` build script exports with `buf` and the operating-system packages in container images are outside it; review changes to those as dependency changes too.
+The check covers development and build dependencies, every feature of APF's own crates, dependencies for all target platforms, and APF's workspace crates. It reads Cargo metadata only. The vendored protobuf sources under `contracts/third_party/` and the operating-system packages in container images are outside it; review changes to those as dependency changes too.
 
 This check and `licenses/selections.json` review different things. A selection applies to a license expression: once `ISC` has a selection, a later ISC crate gets a notice without another review. A cargo-deny exception names a crate, so each new crate with another license still needs its own decision. To add such a crate, add an exception that names the crate and only its additional license, add a selection if its expression is new, and regenerate `THIRD_PARTY_LICENSES.txt` in the same pull request. An exception records that decision in the repository; it does not replace open-source review.
 
 `Cargo.lock` also lists crates that no APF build compiles. Most are optional dependencies of third-party crates behind features APF does not enable, such as `iana-time-zone` behind the `clock` feature of `chrono`. cargo-deny skips these crates and checks them once a change adds them to a build. The notice lists them regardless.
 
-Run the check locally with the version that CI pins in `CARGO_DENY_VERSION`, currently 0.20.2. Calling `cargo-deny` directly, as CI does, runs the first copy on `PATH`; `cargo deny` can prefer a different copy in `$CARGO_HOME/bin`.
+Run the check locally with the cargo-deny version pinned in `mise.toml`, currently 0.20.2. The tasks call `cargo-deny` directly, which runs the first copy on `PATH`; `cargo deny` can prefer a different copy in `$CARGO_HOME/bin`.
 
 ```fish
-cargo install --locked cargo-deny@0.20.2
-cargo-deny --version
-cargo-deny --locked check licenses -D no-license-field
+mise install --locked
+mise run rust:deny:policy
 ```
 
 ## Vendored protobuf sources
@@ -54,6 +53,4 @@ cargo-deny --locked check licenses -D no-license-field
 
 ## Distribution
 
-The release build includes `LICENSE` and `THIRD_PARTY_LICENSES.txt` in `dist/`. Binary publishing jobs upload both files beside the binaries in the revision-specific and `latest` directories. Container recipes copy both files into `/usr/share/licenses/apf/`; demo and release targets inherit them.
-
-When distributing a binary outside those jobs, include both files alongside it. Release image preparation exports committed `HEAD`, so commit updated notices before preparing that build context. The notice covers the Rust dependency inventory; operating-system packages in container base images retain their separate distribution notices.
+When distributing a build of APF, include `LICENSE` and `THIRD_PARTY_LICENSES.txt` alongside it, and commit updated notices before building. The container recipes under `deploy/docker/` copy both files into `/usr/share/licenses/apf/`. The notice covers the Rust dependency inventory; operating-system packages in container base images retain their separate distribution notices.
