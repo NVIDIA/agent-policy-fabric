@@ -36,6 +36,10 @@
 //! fired forbids accompany the deny. With zero effects and findings the
 //! result is unchanged.
 //!
+//! Provider attributes on the input appear as `context.<namespace>` records
+//! beside the request-derived roots; a namespace that would shadow one of
+//! those roots is rejected before the context is built.
+//!
 //! A `forbid` that fails to evaluate, typically because it reads an attribute
 //! the request does not carry, denies the request. Cedar would otherwise drop
 //! the erroring policy from the decision, turning a missing attribute into a
@@ -47,7 +51,7 @@ use cedar_policy::{
 };
 use serde_json::{Map, Value};
 
-use crate::{EvalError, EvalInput, EvalResult, Evaluator, Finding};
+use crate::{EvalError, EvalInput, EvalResult, Evaluator, Finding, RESERVED_CONTEXT_ROOTS};
 
 mod adapter;
 pub mod annotator;
@@ -158,6 +162,15 @@ impl CedarEvaluator {
 
 impl Evaluator for CedarEvaluator {
     fn evaluate(&self, input: EvalInput) -> Result<EvalResult, EvalError> {
+        if let Some(namespace) = input
+            .context_attributes
+            .keys()
+            .find(|namespace| RESERVED_CONTEXT_ROOTS.contains(&namespace.as_str()))
+        {
+            return Err(EvalError::Engine(format!(
+                "context namespace '{namespace}' shadows a reserved context root"
+            )));
+        }
         let (principal, action, resource, mut base_context_json) = adapter::to_cedar(&input);
         // Annotators derive from the raw input once per request; policies
         // read the results as the `annotations` context record and effects
@@ -1282,6 +1295,135 @@ permit(principal, action, resource) when { context.args.approved == "yes" };
             r.deny_reason,
             "gitlab-grants: conditions not met for gitlab::merge_request_merge"
         );
+    }
+
+    fn with_attributes(mut input: EvalInput, namespace: &str, record: Value) -> EvalInput {
+        input.context_attributes.insert(
+            namespace.to_string(),
+            record.as_object().cloned().expect("record"),
+        );
+        input
+    }
+
+    fn change_gated_grant() -> PolicyRuleDoc {
+        PolicyRuleDoc {
+            name: "change-grants".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action == APF::Action::"gitlab::merge_request_merge", resource)
+when { context.change has approval && context.change.approval == "approved" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        }
+    }
+
+    #[test]
+    fn provider_attributes_drive_a_grant() {
+        let ev = evaluator(&[change_gated_grant()]);
+        let request = || input("gitlab", "merge_request_merge", &[]);
+
+        let approved = with_attributes(
+            request(),
+            "change",
+            serde_json::json!({"approval": "approved", "_meta": {"provider": "cm", "verified": true}}),
+        );
+        let r = ev.evaluate(approved).unwrap();
+        assert!(r.allow, "unexpected deny: {}", r.deny_reason);
+
+        let withdrawn = with_attributes(
+            request(),
+            "change",
+            serde_json::json!({"approval": "rejected", "_meta": {"provider": "cm", "verified": true}}),
+        );
+        let r = ev.evaluate(withdrawn).unwrap();
+        assert!(!r.allow);
+        assert_eq!(r.deny_reason, "no grant for gitlab::merge_request_merge");
+
+        // A degraded provider leaves only provenance behind; the `has` guard
+        // keeps the grant off.
+        let degraded = with_attributes(
+            request(),
+            "change",
+            serde_json::json!({"_meta": {"provider": "cm", "degraded": true, "status": "timeout"}}),
+        );
+        let r = ev.evaluate(degraded).unwrap();
+        assert!(!r.allow);
+
+        // No provider ran at all: same outcome.
+        let r = ev.evaluate(request()).unwrap();
+        assert!(!r.allow);
+    }
+
+    #[test]
+    fn lenient_policy_reads_provenance() {
+        let rule = PolicyRuleDoc {
+            name: "lenient".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action, resource)
+when { context.change._meta.degraded && !(context.change has approval) };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = evaluator(&[rule]);
+        let degraded = with_attributes(
+            input("gitlab", "merge_request_merge", &[]),
+            "change",
+            serde_json::json!({"_meta": {"provider": "cm", "degraded": true}}),
+        );
+        let r = ev.evaluate(degraded).unwrap();
+        assert!(r.allow, "unexpected deny: {}", r.deny_reason);
+    }
+
+    #[test]
+    fn unguarded_forbid_over_a_degraded_provider_denies() {
+        let rule = PolicyRuleDoc {
+            name: "guard".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action, resource);
+
+@id("high-risk")
+forbid(principal, action, resource) when { context.change.risk == "high" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = evaluator(&[rule]);
+        let degraded = with_attributes(
+            input("gitlab", "merge_request_merge", &[]),
+            "change",
+            serde_json::json!({"_meta": {"provider": "cm", "degraded": true}}),
+        );
+        let r = ev.evaluate(degraded).unwrap();
+        assert!(!r.allow);
+        assert!(
+            r.deny_reason
+                .starts_with("guard/high-risk: evaluation error"),
+            "got: {}",
+            r.deny_reason
+        );
+    }
+
+    #[test]
+    fn reserved_namespace_is_an_engine_error() {
+        let ev = evaluator(&[outlook_rule()]);
+        let shadowing = with_attributes(
+            input(
+                "outlook",
+                "message_search",
+                &[("folder", "inbox"), ("limit", "15")],
+            ),
+            "args",
+            serde_json::json!({"folder": "inbox", "limit_num": 1}),
+        );
+        let err = ev.evaluate(shadowing).expect_err("must fail");
+        assert!(err.to_string().contains("reserved"), "got: {err}");
     }
 
     #[test]

@@ -11,6 +11,8 @@
 //!   additionally yields `args_<name>_len` (character count) and, when it
 //!   parses as an integer, `args_<name>_num` — Cedar has no string-length or
 //!   numeric-coercion builtins, so policies constrain these derived fields.
+//!   Provider attributes appear as one record per namespace, e.g.
+//!   `context.identity`, beside the request-derived roots.
 
 use cedar_policy::{EntityId, EntityTypeName, EntityUid};
 use serde_json::{Map, Value};
@@ -21,8 +23,6 @@ const PRINCIPAL_TYPE: &str = "APF::User";
 const ACTION_TYPE: &str = "APF::Action";
 const RESOURCE_TYPE: &str = "APF::Tool";
 
-/// Generic action id when the request carries no tool/capability identity.
-const ACTION_INVOKE: &str = "invoke";
 /// Resource id for requests without a tool identity.
 const RESOURCE_NONE: &str = "__none__";
 
@@ -30,13 +30,7 @@ const RESOURCE_NONE: &str = "__none__";
 /// context as a JSON object ready for `Context::from_json_value`.
 pub fn to_cedar(input: &EvalInput) -> (EntityUid, EntityUid, EntityUid, Value) {
     let principal = entity_uid(PRINCIPAL_TYPE, &input.user_subject);
-
-    let action_id = match (&input.tool, &input.capability) {
-        (Some(tool), Some(capability)) => format!("{tool}::{capability}"),
-        (Some(tool), None) => tool.clone(),
-        _ => ACTION_INVOKE.to_string(),
-    };
-    let action = entity_uid(ACTION_TYPE, &action_id);
+    let action = entity_uid(ACTION_TYPE, &input.action_id());
 
     let resource = entity_uid(
         RESOURCE_TYPE,
@@ -105,6 +99,13 @@ fn context_json(input: &EvalInput) -> Value {
         args_map.insert(name.clone(), value);
     }
     ctx.insert("args".to_string(), Value::Object(args_map));
+
+    // Provider namespaces sit beside the request-derived roots. The
+    // evaluator rejects a namespace that would shadow one of them before
+    // the context is built.
+    for (namespace, record) in &input.context_attributes {
+        ctx.insert(namespace.clone(), Value::Object(record.clone()));
+    }
 
     Value::Object(ctx)
 }
@@ -215,6 +216,37 @@ mod tests {
             Value::String("/v1/messages".to_string())
         );
         assert_eq!(ctx["target_scheme"], Value::String("https".to_string()));
+    }
+
+    #[test]
+    fn provider_namespaces_become_context_records() {
+        let mut input = base_input();
+        let identity = serde_json::json!({
+            "groups": ["eng"],
+            "_meta": {"provider": "idp", "verified": true}
+        });
+        input.context_attributes.insert(
+            "identity".to_string(),
+            identity.as_object().cloned().expect("record"),
+        );
+        let change = serde_json::json!({"approval": "approved"});
+        input.context_attributes.insert(
+            "change".to_string(),
+            change.as_object().cloned().expect("record"),
+        );
+        let (_, _, _, ctx) = to_cedar(&input);
+        assert_eq!(ctx["identity"]["groups"], serde_json::json!(["eng"]));
+        assert_eq!(
+            ctx["identity"]["_meta"]["provider"],
+            Value::String("idp".to_string())
+        );
+        assert_eq!(
+            ctx["change"]["approval"],
+            Value::String("approved".to_string())
+        );
+        // Request-derived roots are untouched.
+        assert!(ctx["args"].is_object());
+        assert_eq!(ctx["has_tool_name"], Value::Bool(true));
     }
 
     #[test]

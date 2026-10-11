@@ -9,11 +9,19 @@
 //!
 //! The [`Evaluator`] trait abstracts the evaluation backend — a new engine is
 //! `impl Evaluator for <NewEngine>` with no other changes required.
+//!
+//! Before the engine runs, the [`pipeline`] enrichment stage may populate
+//! [`EvalInput::context_attributes`] from policy information providers. The
+//! engine adapter exposes those namespaces to policy; the stage itself is
+//! independent of the policy language.
+
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
 pub mod apply;
 pub mod cedar;
+pub mod pipeline;
 
 pub use apply::{AppliedRequest, ApplyError, apply_effects};
 pub use cedar::{
@@ -22,6 +30,27 @@ pub use cedar::{
     PolicyAnnotatorDoc, PolicyEffectDoc, PolicyFindingDoc, PolicyRuleDoc, PolicyRuleRole,
     SetTrueIf, SetValueFrom,
 };
+pub use pipeline::{
+    ContextEnricher, EnrichFuture, EnrichmentError, Evaluation, ProviderOutcome, ProviderStatus,
+    decide, enrich_or_deny,
+};
+
+/// Context roots owned by the request adapters and the engine. A provider
+/// namespace can never use one of these names.
+pub const RESERVED_CONTEXT_ROOTS: &[&str] = &[
+    "args",
+    "annotations",
+    "data",
+    "body_text",
+    "has_tool_name",
+    "target_host",
+    "target_method",
+    "target_path",
+    "target_scheme",
+];
+
+/// Action id for a request that carries neither a tool nor a capability.
+pub const ACTION_INVOKE: &str = "invoke";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -49,6 +78,14 @@ pub struct EvalInput {
     pub target: Option<RequestTarget>,
     /// Derived from `tool.is_some()` by the constructors.
     pub has_tool_name: bool,
+    /// Attributes supplied by policy information providers, keyed by
+    /// namespace domain. Each record holds the provider's claims plus the
+    /// `_meta` provenance record the enrichment stage writes. Only that stage
+    /// populates this map; adapters leave it empty.
+    pub context_attributes: BTreeMap<String, serde_json::Map<String, Value>>,
+    /// Runtime instance the request originates from, when the adapter
+    /// established one.
+    pub runtime: Option<RuntimeIdentity>,
 }
 
 impl EvalInput {
@@ -68,6 +105,51 @@ impl EvalInput {
             user_subject,
             args,
             ..Self::default()
+        }
+    }
+
+    /// Normalized action id: `<tool>::<capability>`, the tool alone when the
+    /// request carries no capability, or [`ACTION_INVOKE`] when it carries
+    /// neither. Engine adapters and provider triggers use the same value.
+    #[must_use]
+    pub fn action_id(&self) -> String {
+        match (&self.tool, &self.capability) {
+            (Some(tool), Some(capability)) => format!("{tool}::{capability}"),
+            (Some(tool), None) => tool.clone(),
+            _ => ACTION_INVOKE.to_string(),
+        }
+    }
+}
+
+/// The workload instance a request originates from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeIdentity {
+    /// Runtime substrate, e.g. `openshell`.
+    pub platform: String,
+    /// Stable instance identifier within the platform, e.g. a sandbox id.
+    pub instance_id: String,
+    /// Agent type running in the instance, when known.
+    pub agent_type: Option<String>,
+    /// How `instance_id` was established.
+    pub attestation: RuntimeAttestation,
+}
+
+/// How a runtime instance identity was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeAttestation {
+    /// Asserted by the calling enforcement point.
+    Caller,
+    /// Bound to the OpenShell supervisor's authenticated token.
+    OpenshellSupervisorJwt,
+}
+
+impl RuntimeAttestation {
+    /// Stable name used on the wire and in audit.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Caller => "caller",
+            Self::OpenshellSupervisorJwt => "openshell-supervisor-jwt",
         }
     }
 }
@@ -248,6 +330,44 @@ mod tests {
         );
         assert!(!input.has_tool_name);
         assert!(input.tool.is_none());
+        assert!(input.context_attributes.is_empty());
+        assert!(input.runtime.is_none());
+    }
+
+    #[test]
+    fn action_id_normalizes_tool_and_capability() {
+        let both = EvalInput::for_tool_call(
+            Some("outlook".to_string()),
+            Some("message_search".to_string()),
+            String::new(),
+            serde_json::Map::new(),
+        );
+        assert_eq!(both.action_id(), "outlook::message_search");
+        let tool_only = EvalInput::for_tool_call(
+            Some("outlook".to_string()),
+            None,
+            String::new(),
+            serde_json::Map::new(),
+        );
+        assert_eq!(tool_only.action_id(), "outlook");
+        let neither = EvalInput::for_tool_call(None, None, String::new(), serde_json::Map::new());
+        assert_eq!(neither.action_id(), ACTION_INVOKE);
+        let capability_only = EvalInput::for_tool_call(
+            None,
+            Some("message_search".to_string()),
+            String::new(),
+            serde_json::Map::new(),
+        );
+        assert_eq!(capability_only.action_id(), ACTION_INVOKE);
+    }
+
+    #[test]
+    fn attestation_names_are_stable() {
+        assert_eq!(RuntimeAttestation::Caller.as_str(), "caller");
+        assert_eq!(
+            RuntimeAttestation::OpenshellSupervisorJwt.as_str(),
+            "openshell-supervisor-jwt"
+        );
     }
 
     #[test]

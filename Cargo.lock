@@ -279,6 +279,7 @@ dependencies = [
  "regex",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
