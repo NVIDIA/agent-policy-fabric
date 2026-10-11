@@ -4,5 +4,6 @@ pub mod audit;
 pub mod digest_watcher;
 pub mod engine;
 pub mod events;
+pub mod pip;
 pub mod surfaces;
 pub mod trust;
