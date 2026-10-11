@@ -1,0 +1,24 @@
+# The PolicyInformationService contract over HTTPS with mutual TLS.
+#
+# The provider runs anywhere the gateway can reach. The gateway pins the
+# provider's CA and presents its own client certificate. Start the gateway with
+#
+#   apf-policy-gateway --pip-config examples/pips/grpc-https-mtls.yaml ...
+#
+# The TLS files must exist on the host. ca_file and client_cert_file must not be
+# group or world writable; client_key_file must be readable by its owner only.
+providers:
+  - name: agent-registry           # 1-64 of [A-Za-z0-9._-]; shows up in audit records and deny reasons
+    context: agent                 # policy reads context.agent.*; one provider per context
+    type: grpc                     # the system implements PolicyInformationService
+    applies_to: [github_merge_pull_request]   # consulted for this tool only; absent means every request
+    endpoint:
+      url: https://registry.agents.example.com:8443
+      tls:
+        ca_file: /etc/apf/providers/registry-ca.pem        # CA that signs the provider's certificate
+        client_cert_file: /etc/apf/providers/gateway.pem   # the gateway's identity toward the provider
+        client_key_file: /etc/apf/providers/gateway.key    # owner-only
+    on_failure: fail_closed        # deny with pip_<status>:agent-registry when the provider cannot answer
+    # No timeout_ms: the lookup may use the whole stage budget (--pip-stage-budget-ms, default 250).
+    # The provider receives identity and action only
+    # (user_subject, tool, capability, action, runtime); never arguments or target.

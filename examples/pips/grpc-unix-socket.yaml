@@ -1,0 +1,23 @@
+# The PolicyInformationService contract over a Unix domain socket.
+#
+# For a provider process on the same host. Both sides verify the peer: the
+# gateway connects only to a socket owned by peer_uid that other users cannot
+# access and that the gateway's user can write (0600 when peer_uid is the
+# gateway's UID, otherwise 0660 with a shared group), reached through
+# directories that others cannot write (or root-owned sticky directories such
+# as /tmp), and the provider accepts only connections from the gateway's UID.
+# The socket must exist before the gateway starts: the gateway checks it and
+# refuses to start otherwise. The path must not be the gateway's own
+# evaluation socket.
+providers:
+  - name: identity
+    context: identity              # policy reads context.identity.*
+    type: grpc
+    endpoint:
+      url: unix:///run/apf/providers/identity.sock   # absolute, no traversal, no query or fragment
+      peer_uid: 1201               # UID the provider runs as; defaults to the gateway's own UID
+    on_failure: fail_closed        # deny with pip_<status>:identity when the provider cannot answer
+    timeout_ms: 20
+    # No applies_to: consulted on every evaluation.
+    # The provider receives identity and action only
+    # (user_subject, tool, capability, action, runtime); never arguments or target.

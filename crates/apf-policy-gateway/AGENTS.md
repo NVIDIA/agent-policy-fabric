@@ -17,6 +17,12 @@ Host-side enforcement binary. Two distinct roles:
 | `trust.rs` | `verify_jwt`, `fetch_ed25519_key_from_jwks`, `spawn_jwks_watcher` |
 | `audit.rs` | `PolicyGatewayAudit` — audit records for policy activation and decisions |
 | `surfaces/evaluation.rs` | `EvaluationServiceImpl` — tonic handler for `EvaluationService/Evaluate` |
+| `pip/config.rs` | `RegistryConfig`/`ProviderRegistration` — the `--pip-config` file model (`providers:` root) and every validation rule |
+| `pip/subject.rs` | `SubjectPath`, `project`, `default_subject` — subject projection onto the paths a provider type receives |
+| `pip/provider.rs` | `ProviderTransport`, `Lookup`/`LookupResult`, `ProviderError`, `validate_response`, `authorize_peer` |
+| `pip/enricher.rs` | `ProviderContextEnricher` — implements `apf_policy_eval::ContextEnricher`: `applies_to` matching, fan-out, provenance, failure mode |
+| `pip/grpc.rs` | `GrpcTransport` — the `PolicyInformationService` contract over HTTPS with mTLS or a Unix socket |
+| `pip/http.rs` | `HttpTransport` — the `type: http` provider: one GET against a JSON API, record selection, `must_match`, `keep` |
 
 ## The two enforcement seams
 
@@ -32,6 +38,8 @@ Host-side enforcement binary. Two distinct roles:
 - OpenShell supervisor calls `SupervisorMiddlewareServer` → `EvaluationService/Evaluate`
 - Gateway evaluates locally via Cedar against the current bundle
 - Returns: allow/deny, body patches, header mutations, findings
+- Before the engine runs, the Enrichment stage (`pip/`) consults registered providers through
+  `apf_policy_eval::decide` (gRPC surface) or `enrich_or_deny` (middleware, on its blocking thread)
 - No cloud round-trip on the hot path
 
 ## Invariants
@@ -41,6 +49,9 @@ Host-side enforcement binary. Two distinct roles:
   evaluates every request locally. Do not add a gRPC or HTTP call to
   policy-service on the per-request path — that defeats the purpose of the local
   PDP and reintroduces the latency the gateway was designed to eliminate.
+  The one sanctioned per-request I/O is the Enrichment stage: budgeted calls to the
+  providers registered with `--pip-config`, bounded by `--pip-stage-budget-ms`, with
+  the failure mode each registration declares.
 - `EvaluatorReceiver` (watch channel) is cloned, not moved, into each handler.
   Readers call `.borrow().clone()` to get the current evaluator Arc.
 - On bundle refresh: `bundle_cache::refresh()` → `engine::build_evaluator()` →

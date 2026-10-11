@@ -1,0 +1,33 @@
+# A change-management table API as a provider, by configuration alone.
+#
+# The gateway calls the API itself: one GET per applicable request. It selects
+# the record that answers the lookup, checks that it is the record asked for,
+# and exposes the kept fields to policy as context.change.*.
+#
+# The bearer token is read from its file on every call, so rotation needs no
+# restart. The file must be readable by its owner only.
+providers:
+  - name: change-management        # label in audit records and deny reasons
+    context: change                # policy reads context.change.*; one provider per context
+    type: http                     # the gateway calls a JSON API itself
+    applies_to: [github_merge_pull_request]   # tool name or action id; absent means every request
+    endpoint:
+      url: https://itsm.example.com/api/now/table/change_request   # https anywhere; http for loopback only
+      auth:
+        bearer_token_file: /etc/apf/providers/itsm.token   # or basic_auth_file; exactly one
+    request:
+      query:                       # a literal, or exactly one {key} token
+        cmdb_ci.name: "{repository}"
+        state: scheduled
+      keys:                        # 1 to 8; every key is used in the url or the query
+        repository:
+          from: args.repository    # the only subject field this provider receives
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,63}$"   # anchored; no match means no_data
+    response:
+      record_path: result          # where the record is; a list there must hold exactly one
+      must_match:                  # the record must be the one asked for, or the lookup is no_data
+        cmdb_ci.name: "{repository}"
+      keep: [number, state, approval, risk]   # fields that become claims; number is also the evidence_ref
+    on_failure: degrade            # degrade: evaluation continues with only context.change._meta
+                                   # fail_closed: deny with pip_<status>:change-management
+    timeout_ms: 200                # 1 to --pip-stage-budget-ms; absent means the stage budget

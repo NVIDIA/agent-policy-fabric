@@ -14,12 +14,12 @@ out of scope for this repository and belong to the network egress gateway.
 | `apf-types` | lib | `BundleSigner`/`BundleVerifier` traits, `Decision`, `Obligation`, shared vocabulary |
 | `apf-audit` | lib | `apf.audit.event.v1` schema, typed event builders, redaction, sanitization, JSONL emitter |
 | `apf-bundle` | lib | `Bundle`, `verify_bundle`, `TrustStore`, `CounterStore`, Ed25519 default signing impl |
-| `apf-policy-eval` | lib | `Evaluator` trait, `EvalInput`/`EvalResult`, Cedar engine |
+| `apf-policy-eval` | lib | `Evaluator` trait, `EvalInput`/`EvalResult`, Cedar engine, enrichment stage contract (`ContextEnricher`, `EvalInput::context_attributes`) |
 | `apf-compiler` | lib | Bundle compilation: frontend, passes, merge, `Projector` trait |
 | `apf-proto` | lib | Generated gRPC bindings from `contracts/proto/` |
 | `apf-policy-client` | lib | gRPC client for `PolicyService` |
 | `apf-policy-service` | **service** | PAP — verify, project, store, serve signed bundles. Never evaluates requests; does not author or sign (that is `apf-compile`, run offline). |
-| `apf-policy-gateway` | **service** | Host-side policy agent — sandbox policy projection and local PDP. |
+| `apf-policy-gateway` | **service** | Host-side policy agent — sandbox policy projection, local PDP, and provider enrichment (`pip/`, registered with `--pip-config`). |
 | `apf-openshell-projector` | **adapter** | Compiles APF policy IR into OpenShell-native projections; registered in `apf-policy-service`. |
 | `apf-openshell-interceptor` | **adapter** | OpenShell gateway interceptor; runs inside `apf-policy-gateway` at sandbox admission. |
 | `apf-openshell-middleware` | **adapter** | OpenShell supervisor middleware; runs inside `apf-policy-gateway` per egress request. |
