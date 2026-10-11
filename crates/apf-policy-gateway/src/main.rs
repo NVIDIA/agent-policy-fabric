@@ -37,10 +37,13 @@ use tracing_subscriber::EnvFilter;
 use apf_openshell_interceptor::audit::InterceptorAudit;
 use apf_openshell_middleware::audit::MiddlewareAudit;
 use apf_policy_client::PolicyClientHandle;
-use apf_policy_eval::ActivePolicy;
+use apf_policy_eval::{ActivePolicy, ContextEnricher};
 use apf_policy_gateway::audit::PolicyGatewayAudit;
 use apf_policy_gateway::digest_watcher::{DigestWatcherConfig, spawn_digest_watcher};
 use apf_policy_gateway::engine::{build_evaluator, new_evaluator_channel};
+use apf_policy_gateway::pip::{
+    Limits as ProviderLimits, ProviderContextEnricher, RegistryConfig, config::MAX_CONFIG_BYTES,
+};
 use apf_policy_gateway::surfaces::evaluation::EvaluationServiceImpl;
 use apf_policy_gateway::trust::{
     JwksWatcherConfig, fetch_ed25519_key_from_jwks, spawn_jwks_watcher,
@@ -302,6 +305,18 @@ struct Cli {
     /// component, so a later process split is not a log-path migration.
     #[arg(long, env = "APF_AUDIT_LOG_DIR")]
     audit_log_dir: PathBuf,
+
+    /// YAML file registering the policy information providers the gateway
+    /// consults before evaluating. Loaded and validated before any listener
+    /// binds; absent means no enrichment.
+    #[arg(long, env = "APF_PIP_CONFIG")]
+    pip_config: Option<PathBuf>,
+
+    /// Hard cap in milliseconds on the whole enrichment stage. No provider
+    /// budget may exceed it, and it must stay below the OpenShell middleware
+    /// timeout.
+    #[arg(long, env = "APF_PIP_STAGE_BUDGET_MS", default_value_t = 250)]
+    pip_stage_budget_ms: u64,
 
     // ── OpenShell adapter flags ────────────────────────────────────────────────
     /// URL of the OpenShell gateway gRPC server to connect to
@@ -597,6 +612,39 @@ async fn prepare_secured_server(
     }
 }
 
+/// Load and validate the provider registration, if configured. Runs before
+/// any listener binds: a gateway that cannot build its enrichment stage must
+/// not start and evaluate without it.
+async fn load_enricher(args: &Cli) -> anyhow::Result<Option<Arc<dyn ContextEnricher>>> {
+    let Some(path) = &args.pip_config else {
+        return Ok(None);
+    };
+    let bytes = read_bounded_regular_file(
+        path,
+        MAX_CONFIG_BYTES,
+        "provider registration",
+        StartupFilePolicy::Trust,
+    )
+    .await?;
+    let config = RegistryConfig::from_yaml(&bytes)
+        .with_context(|| format!("parse provider registration at {}", path.display()))?;
+    let limits = ProviderLimits {
+        stage_budget: Duration::from_millis(args.pip_stage_budget_ms),
+        gateway_socket: Some(args.socket.clone()),
+    };
+    let enricher = ProviderContextEnricher::from_config(&config, &limits)
+        .with_context(|| format!("load provider registration at {}", path.display()))?;
+    let contexts: Vec<&str> = enricher.contexts().collect();
+    info!(
+        path = %path.display(),
+        providers = config.providers.len(),
+        contexts = %contexts.join(","),
+        stage_budget_ms = args.pip_stage_budget_ms,
+        "policy information providers registered"
+    );
+    Ok(Some(Arc::new(enricher)))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -618,6 +666,8 @@ async fn main() -> anyhow::Result<()> {
         "OpenShell middleware",
     )
     .await?;
+
+    let enricher = load_enricher(&args).await?;
 
     let mut policy_client = PolicyClientHandle::connect(&args.policy_service_socket)
         .await
@@ -776,6 +826,7 @@ async fn main() -> anyhow::Result<()> {
     let eval_svc = EvaluationServiceServer::new(EvaluationServiceImpl {
         audit: audit.clone(),
         evaluator: eval_rx.clone(),
+        enricher: enricher.clone(),
     });
 
     if args.socket.exists() {
@@ -917,6 +968,7 @@ async fn main() -> anyhow::Result<()> {
                     eval_rx.clone(),
                     verifier,
                     middleware_audit()?,
+                    enricher.clone(),
                 );
                 info!(%addr, %audience, "authenticated OpenShell supervisor middleware enabled");
                 tasks.spawn(async move {
@@ -935,6 +987,7 @@ async fn main() -> anyhow::Result<()> {
                 let service = SupervisorMiddlewareService::insecure_server(
                     eval_rx.clone(),
                     middleware_audit()?,
+                    enricher.clone(),
                 );
                 tasks.spawn(async move {
                     tonic::transport::Server::builder()

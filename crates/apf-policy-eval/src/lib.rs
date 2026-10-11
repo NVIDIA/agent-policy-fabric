@@ -32,7 +32,7 @@ pub use cedar::{
 };
 pub use pipeline::{
     ContextEnricher, EnrichFuture, EnrichmentError, Evaluation, ProviderOutcome, ProviderStatus,
-    decide, enrich_or_deny,
+    decide, enrich_or_deny, provenance_record,
 };
 
 /// Context roots owned by the request adapters and the engine. A provider

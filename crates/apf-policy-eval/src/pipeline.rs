@@ -122,6 +122,42 @@ impl ProviderStatus {
     }
 }
 
+/// Render provider outcomes as the `x_apf_pip` audit extension object:
+/// `{ "providers": [ { domain, provider, status, degraded, cached,
+/// age_seconds, evidence_ref?, latency_ms } ] }`. Domains and provider names
+/// are values, never keys, so audit key rules cannot reject the record. An
+/// evidence reference the caller's predicate rejects is omitted.
+#[must_use]
+pub fn provenance_record(
+    outcomes: &[ProviderOutcome],
+    accept_evidence: impl Fn(&str) -> bool,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let providers: Vec<serde_json::Value> = outcomes
+        .iter()
+        .map(|outcome| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("domain".to_owned(), outcome.domain.clone().into());
+            entry.insert("provider".to_owned(), outcome.provider.clone().into());
+            entry.insert("status".to_owned(), outcome.status.as_str().into());
+            entry.insert("degraded".to_owned(), outcome.degraded.into());
+            entry.insert("cached".to_owned(), outcome.cached.into());
+            entry.insert("age_seconds".to_owned(), outcome.age_seconds.into());
+            if let Some(evidence) = outcome
+                .evidence_ref
+                .as_deref()
+                .filter(|evidence| accept_evidence(evidence))
+            {
+                entry.insert("evidence_ref".to_owned(), evidence.into());
+            }
+            entry.insert("latency_ms".to_owned(), outcome.latency_ms.into());
+            serde_json::Value::Object(entry)
+        })
+        .collect();
+    let mut record = std::collections::BTreeMap::new();
+    record.insert("providers".to_owned(), serde_json::Value::Array(providers));
+    record
+}
+
 /// A provider could not answer and the evaluation must not continue.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("provider '{provider}' failed closed: {}", status.as_str())]
@@ -346,6 +382,39 @@ mod tests {
             .await
             .expect("no enricher is a no-op");
         assert!(providers.is_empty());
+    }
+
+    #[test]
+    fn provenance_record_keeps_names_as_values_and_filters_evidence() {
+        let outcomes = vec![
+            ProviderOutcome {
+                provider: "cm".to_string(),
+                domain: "change".to_string(),
+                status: ProviderStatus::Found,
+                degraded: false,
+                cached: true,
+                age_seconds: 41,
+                evidence_ref: Some("CHG0012".to_string()),
+                latency_ms: 0,
+            },
+            ProviderOutcome {
+                provider: "idp".to_string(),
+                domain: "identity".to_string(),
+                status: ProviderStatus::Timeout,
+                degraded: true,
+                cached: false,
+                age_seconds: 0,
+                evidence_ref: Some("sk-looks-like-a-key".to_string()),
+                latency_ms: 20,
+            },
+        ];
+        let record = provenance_record(&outcomes, |evidence| !evidence.starts_with("sk-"));
+        let providers = record["providers"].as_array().expect("array");
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0]["domain"], json!("change"));
+        assert_eq!(providers[0]["evidence_ref"], json!("CHG0012"));
+        assert_eq!(providers[1]["status"], json!("timeout"));
+        assert!(providers[1].get("evidence_ref").is_none());
     }
 
     #[test]

@@ -16,8 +16,9 @@ use apf_audit::SanitizationGuard;
 use tracing::{debug, info, warn};
 
 use apf_policy_eval::{
-    ActivePolicy, EvalInput, EvalResult, Finding as EvalFinding, HeaderAction,
-    HeaderMutation as EvalHeaderMutation, RequestTarget, Severity, Verdict, apply_effects,
+    ActivePolicy, ContextEnricher, EvalInput, EvalResult, Evaluation, Finding as EvalFinding,
+    HeaderAction, HeaderMutation as EvalHeaderMutation, ProviderOutcome, RequestTarget,
+    RuntimeAttestation, RuntimeIdentity, Severity, Verdict, apply_effects, enrich_or_deny,
 };
 use prost::Message;
 use serde::Deserialize;
@@ -83,6 +84,36 @@ pub struct SupervisorMiddlewareService {
     evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
     authentication: AuthenticationMode,
     audit: MiddlewareAudit,
+    /// The enrichment stage, when the gateway registered providers.
+    enricher: Option<Arc<dyn ContextEnricher>>,
+}
+
+/// Everything one request produced: the wire result, the evaluator's
+/// advisory verdict, what was applied in flight, the tool the decision was
+/// about, and what each provider contributed.
+struct Decided {
+    response: wire::HttpRequestResult,
+    verdict: Option<Verdict>,
+    effects: apf_audit::Effects,
+    tool: Option<String>,
+    providers: Vec<ProviderOutcome>,
+}
+
+impl Decided {
+    fn denied(response: wire::HttpRequestResult, tool: Option<String>) -> Self {
+        Self {
+            response,
+            verdict: None,
+            effects: apf_audit::Effects::default(),
+            tool,
+            providers: Vec::new(),
+        }
+    }
+
+    fn with_providers(mut self, providers: Vec<ProviderOutcome>) -> Self {
+        self.providers = providers;
+        self
+    }
 }
 
 /// Schema cap on `advisory_signals.findings`.
@@ -99,6 +130,7 @@ impl SupervisorMiddlewareService {
         evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
         verifier: ExtensionAuthVerifier,
         audit: MiddlewareAudit,
+        enricher: Option<Arc<dyn ContextEnricher>>,
     ) -> AuthenticatedSupervisorMiddlewareServer {
         // See the interceptor's constructor: wiring the verifier's sink here
         // makes an authenticated listener that records nothing unrepresentable.
@@ -109,6 +141,7 @@ impl SupervisorMiddlewareService {
                 expected_audience: verifier.audience().to_string(),
             },
             audit,
+            enricher,
         };
         Authenticated::new(service.into_size_limited_server(), verifier)
     }
@@ -121,11 +154,13 @@ impl SupervisorMiddlewareService {
     pub fn insecure_server(
         evaluator: tokio::sync::watch::Receiver<Arc<ActivePolicy>>,
         audit: MiddlewareAudit,
+        enricher: Option<Arc<dyn ContextEnricher>>,
     ) -> SupervisorMiddlewareServer<Self> {
         Self {
             evaluator,
             authentication: AuthenticationMode::Insecure,
             audit,
+            enricher,
         }
         .into_size_limited_server()
     }
@@ -169,6 +204,7 @@ impl SupervisorMiddlewareService {
         response: &wire::HttpRequestResult,
         verdict: Option<Verdict>,
         effects: apf_audit::Effects,
+        providers: &[ProviderOutcome],
         request: &RequestFacts<'_>,
         active: &ActivePolicy,
     ) {
@@ -252,6 +288,7 @@ impl SupervisorMiddlewareService {
             verdict,
             findings: &findings,
             effects,
+            providers,
             policy_digest: &active.bundle_digest,
             policy_revision: Some(active.policy_revision).filter(|v| *v != 0),
         }) {
@@ -406,35 +443,47 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
 
         let service = self.clone();
         let deciding = Arc::clone(&active);
-        let (response, verdict, effects, tool) =
-            tokio::task::spawn_blocking(move || service.evaluate(&evaluation, &deciding))
-                .await
-                .unwrap_or_else(|_| {
-                    // A panic or runtime shutdown in the blocking task must not
-                    // escape as a gRPC failure that OpenShell could fail open.
-                    (
-                        deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
-                        None,
-                        apf_audit::Effects::default(),
-                        None,
-                    )
-                });
+        // Decided and recorded on a detached task: OpenShell's deadline can
+        // drop this handler while enrichment waits on a provider, and a
+        // dropped future must not skip the record of a decision the blocking
+        // task still completes.
+        let response = tokio::spawn(async move {
+            let decided = tokio::task::spawn_blocking({
+                let service = service.clone();
+                let deciding = Arc::clone(&deciding);
+                move || service.decide_request(&evaluation, &deciding)
+            })
+            .await
+            .unwrap_or_else(|_| {
+                // A panic or runtime shutdown in the blocking task must not
+                // escape as a gRPC failure that OpenShell could fail open.
+                Decided::denied(
+                    deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
+                    None,
+                )
+            });
 
-        // One emit at the single exit, reading the result rather than each
-        // branch that built it: a refusal added later cannot skip the record.
-        self.record_egress(
-            &response,
-            verdict,
-            effects,
-            &RequestFacts {
-                host: &host,
-                method: &method,
-                sandbox_id: &sandbox_id,
-                correlation_id: &correlation_id,
-                tool: tool.as_deref(),
-            },
-            &active,
-        );
+            // One emit at the single exit, reading the result rather than
+            // each branch that built it: a refusal added later cannot skip
+            // the record.
+            service.record_egress(
+                &decided.response,
+                decided.verdict,
+                decided.effects,
+                &decided.providers,
+                &RequestFacts {
+                    host: &host,
+                    method: &method,
+                    sandbox_id: &sandbox_id,
+                    correlation_id: &correlation_id,
+                    tool: decided.tool.as_deref(),
+                },
+                &deciding,
+            );
+            decided.response
+        })
+        .await
+        .unwrap_or_else(|_| deny(CODE_EVALUATION_FAILED, "policy evaluation failed"));
 
         Ok(Response::new(response))
     }
@@ -464,21 +513,17 @@ impl SupervisorMiddleware for SupervisorMiddlewareService {
 }
 
 impl SupervisorMiddlewareService {
-    /// Returns the wire result and the verdict the evaluator produced.
+    /// Decide one request on the calling thread: validate, parse, enrich,
+    /// evaluate and apply effects.
     ///
     /// The verdict is returned rather than read back off the wire: the wire
     /// carries it as a `policy_verdict` finding, and nothing distinguishes that
     /// stand-in from a real finding a policy defines with the same kind.
-    fn evaluate(
+    fn decide_request(
         &self,
         evaluation: &wire::HttpRequestEvaluation,
         active: &ActivePolicy,
-    ) -> (
-        wire::HttpRequestResult,
-        Option<Verdict>,
-        apf_audit::Effects,
-        Option<String>,
-    ) {
+    ) -> Decided {
         let sandbox_id = evaluation
             .context
             .as_ref()
@@ -492,10 +537,8 @@ impl SupervisorMiddlewareService {
         );
 
         if evaluation.phase != wire::SupervisorMiddlewarePhase::PreCredentials as i32 {
-            return (
+            return Decided::denied(
                 deny(CODE_INVALID_PHASE, "unsupported middleware phase"),
-                None,
-                apf_audit::Effects::default(),
                 None,
             );
         }
@@ -504,21 +547,17 @@ impl SupervisorMiddlewareService {
             .as_ref()
             .is_some_and(|config| !config.fields.is_empty())
         {
-            return (
+            return Decided::denied(
                 deny(
                     CODE_INVALID_CONFIG,
                     "middleware configuration must be empty",
                 ),
                 None,
-                apf_audit::Effects::default(),
-                None,
             );
         }
         if evaluation.body.len() > MAX_BODY_BYTES {
-            return (
+            return Decided::denied(
                 deny(CODE_BODY_TOO_LARGE, "request body exceeds middleware limit"),
-                None,
-                apf_audit::Effects::default(),
                 None,
             );
         }
@@ -528,24 +567,17 @@ impl SupervisorMiddlewareService {
             Err(_) if contains_mcp_tool_call_intent(&evaluation.body) => {
                 // A malformed body that still identifies tools/call cannot
                 // shed its tool identity and fall through to generic policy.
-                return (
+                return Decided::denied(
                     deny(CODE_INVALID_MCP_REQUEST, "invalid MCP tools/call request"),
-                    None,
-                    apf_audit::Effects::default(),
                     None,
                 );
             }
             Err(_) => None,
         };
-        let input = match build_eval_input(evaluation, body_json.as_ref()) {
+        let mut input = match build_eval_input(evaluation, body_json.as_ref()) {
             Ok(input) => input,
             Err(error) => {
-                return (
-                    deny(error.reason_code(), error.reason()),
-                    None,
-                    apf_audit::Effects::default(),
-                    None,
-                );
+                return Decided::denied(deny(error.reason_code(), error.reason()), None);
             }
         };
 
@@ -553,18 +585,37 @@ impl SupervisorMiddlewareService {
         // record must name the tool the decision was actually about.
         let tool = input.tool.clone();
 
+        input.runtime = runtime_identity(evaluation, &self.authentication);
+        let correlation_id = evaluation
+            .context
+            .as_ref()
+            .map(|context| context.request_id.as_str())
+            .filter(|request_id| !request_id.is_empty());
+        let providers = match self.enrich(&mut input, correlation_id) {
+            Ok(providers) => providers,
+            Err(denied) => {
+                let denied = *denied;
+                return Decided {
+                    response: policy_deny(&denied.result),
+                    verdict: Some(denied.result.verdict),
+                    effects: apf_audit::Effects::default(),
+                    tool,
+                    providers: denied.providers,
+                };
+            }
+        };
+
         // One read: the evaluator and the digest of the policy it came from
         // travel together, so a hot-swap cannot pair a decision with another
         // policy's identity.
         let Ok(result) = active.evaluator.evaluate(input) else {
             // Evaluator errors are intentionally not reflected: backend error
             // text is not a stable or audit-safe wire contract.
-            return (
+            return Decided::denied(
                 deny(CODE_EVALUATION_FAILED, "policy evaluation failed"),
-                None,
-                apf_audit::Effects::default(),
                 tool,
-            );
+            )
+            .with_providers(providers);
         };
 
         if !result.allow {
@@ -576,24 +627,23 @@ impl SupervisorMiddlewareService {
                 reason = %result.deny_reason,
                 "middleware: DENY"
             );
-            return (
-                policy_deny(&result),
-                Some(result.verdict),
-                apf_audit::Effects::default(),
+            return Decided {
+                response: policy_deny(&result),
+                verdict: Some(result.verdict),
+                effects: apf_audit::Effects::default(),
                 tool,
-            );
+                providers,
+            };
         }
 
         let Ok(applied) = apply_effects(&evaluation.body, body_json.as_ref(), &result) else {
             // Forwarding an unmodified request would drop a mandated effect,
             // so every application error is a hard deny.
-            return (
+            return Decided::denied(
                 deny(
                     CODE_EFFECT_APPLICATION_FAILED,
                     "policy effects could not be applied",
                 ),
-                None,
-                apf_audit::Effects::default(),
                 tool,
             );
         };
@@ -602,33 +652,27 @@ impl SupervisorMiddlewareService {
             .as_ref()
             .is_some_and(|body| body.len() > MAX_BODY_BYTES)
         {
-            return (
+            return Decided::denied(
                 deny(
                     CODE_REPLACEMENT_BODY_TOO_LARGE,
                     "policy replacement body exceeds middleware limit",
                 ),
-                None,
-                apf_audit::Effects::default(),
                 tool,
             );
         }
 
         let Ok(header_mutations) = map_header_mutations(&applied.headers) else {
-            return (
+            return Decided::denied(
                 deny(
                     CODE_INVALID_HEADER_MUTATION,
                     "policy produced an invalid header mutation",
                 ),
-                None,
-                apf_audit::Effects::default(),
                 tool,
             );
         };
         let Ok(findings) = map_findings(&result, true) else {
-            return (
+            return Decided::denied(
                 deny(CODE_INVALID_FINDINGS, "policy produced invalid findings"),
-                None,
-                apf_audit::Effects::default(),
                 tool,
             );
         };
@@ -657,8 +701,8 @@ impl SupervisorMiddlewareService {
             );
         }
 
-        (
-            wire::HttpRequestResult {
+        Decided {
+            response: wire::HttpRequestResult {
                 decision: wire::Decision::Allow as i32,
                 body,
                 has_body,
@@ -666,11 +710,90 @@ impl SupervisorMiddlewareService {
                 findings,
                 ..Default::default()
             },
-            Some(result.verdict),
+            verdict: Some(result.verdict),
             effects,
             tool,
+            providers,
+        }
+    }
+
+    /// Run the enrichment stage for this request on the calling thread.
+    ///
+    /// The handler decides on a blocking thread so a panic cannot fail open;
+    /// the runtime's workers keep driving provider I/O while this thread
+    /// waits. Without registered providers the stage is a no-op.
+    fn enrich(
+        &self,
+        input: &mut EvalInput,
+        correlation_id: Option<&str>,
+    ) -> Result<Vec<ProviderOutcome>, Box<Evaluation>> {
+        let Some(enricher) = &self.enricher else {
+            input.context_attributes.clear();
+            return Ok(Vec::new());
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle
+                .block_on(enrich_or_deny(
+                    Some(enricher.as_ref()),
+                    input,
+                    correlation_id,
+                ))
+                .map_err(Box::new),
+            Err(_) => Err(Box::new(Evaluation {
+                result: EvalResult {
+                    allow: false,
+                    deny_reason: "pip_internal:enrichment".to_string(),
+                    ..EvalResult::default()
+                },
+                providers: Vec::new(),
+            })),
+        }
+    }
+
+    /// Wire result, verdict, effects and tool of one request, for tests that
+    /// call the decision directly.
+    #[cfg(test)]
+    fn evaluate(
+        &self,
+        evaluation: &wire::HttpRequestEvaluation,
+        active: &ActivePolicy,
+    ) -> (
+        wire::HttpRequestResult,
+        Option<Verdict>,
+        apf_audit::Effects,
+        Option<String>,
+    ) {
+        let decided = self.decide_request(evaluation, active);
+        (
+            decided.response,
+            decided.verdict,
+            decided.effects,
+            decided.tool,
         )
     }
+}
+
+/// The runtime identity of the request: the sandbox named in the request
+/// context, attested when the supervisor's token bound it.
+fn runtime_identity(
+    evaluation: &wire::HttpRequestEvaluation,
+    authentication: &AuthenticationMode,
+) -> Option<RuntimeIdentity> {
+    let sandbox_id = evaluation
+        .context
+        .as_ref()
+        .map(|context| context.sandbox_id.as_str())
+        .filter(|sandbox_id| !sandbox_id.is_empty())?;
+    let attestation = match authentication {
+        AuthenticationMode::Required { .. } => RuntimeAttestation::OpenshellSupervisorJwt,
+        AuthenticationMode::Insecure => RuntimeAttestation::Caller,
+    };
+    Some(RuntimeIdentity {
+        platform: "openshell".to_string(),
+        instance_id: sandbox_id.to_string(),
+        agent_type: None,
+        attestation,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1200,6 +1323,7 @@ mod tests {
             evaluator: rx,
             authentication: AuthenticationMode::Insecure,
             audit: MiddlewareAudit::disabled(),
+            enricher: None,
         }
     }
 
@@ -1218,6 +1342,7 @@ mod tests {
             evaluator: rx,
             authentication: AuthenticationMode::Insecure,
             audit: MiddlewareAudit::to_jsonl_in(dir).expect("build emitter"),
+            enricher: None,
         }
     }
 
@@ -1250,6 +1375,7 @@ mod tests {
                 expected_audience: "urn:openshell:extension:middleware:test".to_string(),
             },
             audit: MiddlewareAudit::disabled(),
+            enricher: None,
         }
     }
 
@@ -1268,6 +1394,7 @@ mod tests {
                 expected_audience: "urn:openshell:extension:middleware:test".to_string(),
             },
             audit: MiddlewareAudit::to_jsonl_in(dir).expect("build emitter"),
+            enricher: None,
         }
     }
 
@@ -2106,6 +2233,173 @@ mod tests {
             assert_eq!(result.reason_code, CODE_INVALID_HEADER_MUTATION);
             assert!(!result.reason.contains("fixture-secret"));
         }
+    }
+
+    /// Writes one namespace and reports it found.
+    struct StaticEnricher;
+
+    impl ContextEnricher for StaticEnricher {
+        fn enrich<'a>(
+            &'a self,
+            input: &'a mut EvalInput,
+            correlation_id: Option<&'a str>,
+        ) -> apf_policy_eval::EnrichFuture<'a> {
+            Box::pin(async move {
+                assert_eq!(correlation_id, Some("request-017"));
+                let record = serde_json::json!({
+                    "approval": "approved",
+                    "_meta": {"provider": "cm", "verified": true}
+                });
+                input.context_attributes.insert(
+                    "change".to_string(),
+                    record.as_object().cloned().expect("record"),
+                );
+                Ok(vec![ProviderOutcome {
+                    provider: "cm".to_string(),
+                    domain: "change".to_string(),
+                    status: apf_policy_eval::ProviderStatus::Found,
+                    degraded: false,
+                    cached: false,
+                    age_seconds: 0,
+                    evidence_ref: Some("CHG0012".to_string()),
+                    latency_ms: 2,
+                }])
+            })
+        }
+    }
+
+    /// A fail-closed provider that never answers.
+    struct FailingEnricher;
+
+    impl ContextEnricher for FailingEnricher {
+        fn enrich<'a>(
+            &'a self,
+            _input: &'a mut EvalInput,
+            _correlation_id: Option<&'a str>,
+        ) -> apf_policy_eval::EnrichFuture<'a> {
+            Box::pin(async move {
+                Err(apf_policy_eval::EnrichmentError {
+                    provider: "cm".to_string(),
+                    status: apf_policy_eval::ProviderStatus::Timeout,
+                    outcomes: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn make_enriched_service(
+        evaluator: Arc<dyn Evaluator>,
+        enricher: Arc<dyn ContextEnricher>,
+        authentication: AuthenticationMode,
+        audit: MiddlewareAudit,
+    ) -> SupervisorMiddlewareService {
+        let (_, rx) = tokio::sync::watch::channel(Arc::new(ActivePolicy {
+            evaluator,
+            bundle_digest: "a".repeat(64),
+            policy_revision: 1,
+        }));
+        SupervisorMiddlewareService {
+            evaluator: rx,
+            authentication,
+            audit,
+            enricher: Some(enricher),
+        }
+    }
+
+    /// Provider attributes reach the evaluator with an attested runtime
+    /// identity, and the egress record names the provider.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enrichment_runs_on_the_decision_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = Arc::new(StubEvaluator::returning(EvalResult::default()));
+        let service = make_enriched_service(
+            evaluator.clone(),
+            Arc::new(StaticEnricher),
+            AuthenticationMode::Required {
+                expected_audience: "urn:openshell:extension:middleware:test".to_string(),
+            },
+            MiddlewareAudit::to_jsonl_in(dir.path()).expect("build emitter"),
+        );
+
+        let response = service
+            .evaluate_http_request(authenticated_request(
+                evaluation(MCP_FIXTURE),
+                ExtensionCallerKind::Supervisor,
+                Some("sandbox-042"),
+            ))
+            .await
+            .expect("decision")
+            .into_inner();
+        assert_eq!(response.decision, wire::Decision::Allow as i32);
+
+        let inputs = evaluator.inputs();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(
+            inputs[0].context_attributes["change"]["approval"],
+            "approved"
+        );
+        let runtime = inputs[0].runtime.clone().expect("runtime identity");
+        assert_eq!(runtime.instance_id, "sandbox-042");
+        assert_eq!(
+            runtime.attestation,
+            RuntimeAttestation::OpenshellSupervisorJwt
+        );
+
+        let records = audit_records(dir.path());
+        assert_eq!(records.len(), 1);
+        let extensions = records[0].extensions.as_ref().expect("provenance recorded");
+        let providers = extensions["x_apf_pip"]["providers"]
+            .as_array()
+            .expect("providers array");
+        assert_eq!(providers[0]["provider"], "cm");
+        assert_eq!(providers[0]["evidence_ref"], "CHG0012");
+    }
+
+    /// Without caller authentication the runtime identity is only asserted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn insecure_mode_leaves_the_runtime_identity_unattested() {
+        let evaluator = Arc::new(StubEvaluator::returning(EvalResult::default()));
+        let service = make_enriched_service(
+            evaluator.clone(),
+            Arc::new(StaticEnricher),
+            AuthenticationMode::Insecure,
+            MiddlewareAudit::disabled(),
+        );
+        service
+            .evaluate_http_request(Request::new(evaluation(MCP_FIXTURE)))
+            .await
+            .expect("decision");
+        let inputs = evaluator.inputs();
+        assert_eq!(
+            inputs[0]
+                .runtime
+                .clone()
+                .expect("runtime identity")
+                .attestation,
+            RuntimeAttestation::Caller
+        );
+    }
+
+    /// A fail-closed provider denies as a policy decision before the engine
+    /// runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fail_closed_provider_denies_before_the_engine() {
+        let evaluator = Arc::new(StubEvaluator::returning(EvalResult::default()));
+        let service = make_enriched_service(
+            evaluator.clone(),
+            Arc::new(FailingEnricher),
+            AuthenticationMode::Insecure,
+            MiddlewareAudit::disabled(),
+        );
+        let response = service
+            .evaluate_http_request(Request::new(evaluation(MCP_FIXTURE)))
+            .await
+            .expect("deny is a response")
+            .into_inner();
+        assert_eq!(response.decision, wire::Decision::Deny as i32);
+        assert_eq!(response.reason_code, CODE_POLICY_DENIED);
+        assert_eq!(response.reason, "pip_timeout:cm");
+        assert!(evaluator.inputs().is_empty());
     }
 }
 

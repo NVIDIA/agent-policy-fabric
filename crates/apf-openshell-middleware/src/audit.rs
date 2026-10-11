@@ -13,6 +13,7 @@ use apf_audit::{
     UNSPECIFIED, Verdict, coerce_digest, coerce_id, coerce_lower_dotted, coerce_name,
     generate_correlation_id, generate_decision_id, join_rejection_detail,
 };
+use apf_policy_eval::{ProviderOutcome, provenance_record};
 
 /// Runs inside the gateway process, so it is named for that process.
 const IDENTITY: AuditIdentity = AuditIdentity {
@@ -22,6 +23,9 @@ const IDENTITY: AuditIdentity = AuditIdentity {
     trust_root_id: "apf-policy-service:signing",
     version: env!("CARGO_PKG_VERSION"),
 };
+
+/// Extension key carrying what each provider contributed to a decision.
+const PROVENANCE_EXTENSION: &str = "x_apf_pip";
 
 /// Stands in for a digest that cannot be recorded as given. Coercion fixes the
 /// charset only, so a credential-shaped digest still trips sanitizing and would
@@ -117,6 +121,12 @@ impl MiddlewareAudit {
             AuthorizationEvent::new(resource, verb, decision, decision_id, reason_code.clone())
                 .with_findings(record.findings.to_vec())
                 .with_effects(record.effects.clone());
+        if !record.providers.is_empty() {
+            event = event.with_extension(
+                PROVENANCE_EXTENSION,
+                provenance_record(record.providers, SanitizationGuard::accepts_string),
+            );
+        }
         if !record.allowed {
             event = event.with_error(AuditErrorInfo {
                 code: reason_code.clone(),
@@ -334,6 +344,8 @@ pub struct EgressRecord<'a> {
     /// reached; `Allow` means no signal was raised and is not recorded.
     pub verdict: Option<Verdict>,
     pub findings: &'a [Finding],
+    /// What each registered provider contributed to the decision.
+    pub providers: &'a [ProviderOutcome],
     /// What was applied to the request in flight. A redaction that rewrote the
     /// body is the difference between "allowed it" and "allowed a sanitised
     /// copy of it" — without this the record understates the control.

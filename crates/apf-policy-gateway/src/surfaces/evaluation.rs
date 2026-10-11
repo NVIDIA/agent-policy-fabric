@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use tonic::{Request, Response, Status};
 
-use apf_policy_eval::EvalInput;
+use apf_policy_eval::{
+    ContextEnricher, EvalInput, Evaluation, RuntimeAttestation, RuntimeIdentity, decide,
+};
 use apf_proto::pdp_v1alpha1::{
     Decision, EvaluateRequest, EvaluateResponse, evaluation_service_server::EvaluationService,
 };
@@ -11,9 +15,12 @@ use apf_proto::pdp_v1alpha1::{
 use crate::audit::{DecisionRecord, PolicyGatewayAudit, findings_for_audit, verdict_for_audit};
 use crate::engine::EvaluatorReceiver;
 
+#[derive(Clone)]
 pub struct EvaluationServiceImpl {
     pub evaluator: EvaluatorReceiver,
     pub audit: PolicyGatewayAudit,
+    /// The enrichment stage, when the gateway registered providers.
+    pub enricher: Option<Arc<dyn ContextEnricher>>,
 }
 
 #[tonic::async_trait]
@@ -22,7 +29,22 @@ impl EvaluationService for EvaluationServiceImpl {
         &self,
         request: Request<EvaluateRequest>,
     ) -> Result<Response<EvaluateResponse>, Status> {
+        let service = self.clone();
         let req = request.into_inner();
+        // Decided on its own task: enrichment awaits providers, and a caller
+        // that disconnects meanwhile must not cancel the decision before its
+        // record is written.
+        tokio::spawn(async move { service.decide_and_record(req).await })
+            .await
+            .map_err(|_| Status::internal("evaluation task failed"))?
+    }
+}
+
+impl EvaluationServiceImpl {
+    async fn decide_and_record(
+        &self,
+        req: EvaluateRequest,
+    ) -> Result<Response<EvaluateResponse>, Status> {
         // One read: the evaluator and the digest of the bundle it came from
         // travel together, so a hot-swap cannot pair a decision with another
         // bundle's identity.
@@ -55,17 +77,31 @@ impl EvaluationService for EvaluationServiceImpl {
         // Cloned before `user_subject` is moved into the evaluator input.
         let subject_for_audit = user_subject.clone();
 
-        let input = EvalInput::for_tool_call(
+        let mut input = EvalInput::for_tool_call(
             req.resource.as_ref().map(|r| r.class.clone()),
             Some(req.verb.clone()),
             user_subject,
             args,
         );
+        // Every field on this surface is asserted by the caller behind the
+        // socket's peer-UID check, so the runtime identity is never attested.
+        input.runtime = openshell
+            .filter(|o| !o.sandbox_id.is_empty())
+            .map(|o| RuntimeIdentity {
+                platform: "openshell".to_string(),
+                instance_id: o.sandbox_id.clone(),
+                agent_type: Some(o.agent_type.clone()).filter(|agent| !agent.is_empty()),
+                attestation: RuntimeAttestation::Caller,
+            });
 
-        let result = active
-            .evaluator
-            .evaluate(input)
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let Evaluation { result, providers } = decide(
+            self.enricher.as_deref(),
+            active.evaluator.as_ref(),
+            input,
+            caller_correlation_id,
+        )
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
 
         let decision = if result.allow {
             Decision::Allow
@@ -87,6 +123,7 @@ impl EvaluationService for EvaluationServiceImpl {
             deny_reason: &result.deny_reason,
             verdict: verdict_for_audit(result.verdict),
             findings: &findings_for_audit(&result.findings),
+            providers: &providers,
             // Both read from the same `active`, never re-read: a hot-swap
             // between two reads would name a policy other than the one that
             // decided.
@@ -111,8 +148,11 @@ mod tests {
     use super::*;
     use crate::engine::new_evaluator_channel;
     use apf_audit::AuditEvent;
+    use std::sync::Mutex;
+
     use apf_policy_eval::{
-        ActivePolicy, EvalError, EvalResult, Evaluator, Finding, Severity, Verdict,
+        ActivePolicy, EnrichFuture, EnrichmentError, EvalError, EvalResult, Evaluator, Finding,
+        ProviderOutcome, ProviderStatus, Severity, Verdict,
     };
     use apf_proto::pdp_v1alpha1::Resource as ResourceRef;
     use apf_proto::runtime_v1alpha1::{OpenShellContext, runtime_context};
@@ -143,7 +183,150 @@ mod tests {
         EvaluationServiceImpl {
             evaluator: rx,
             audit: PolicyGatewayAudit::to_jsonl_in(dir).expect("build emitter"),
+            enricher: None,
         }
+    }
+
+    /// Records the input it saw and returns a fixed result.
+    struct RecordingEvaluator(Mutex<Option<EvalInput>>, EvalResult);
+
+    impl Evaluator for RecordingEvaluator {
+        fn evaluate(&self, input: EvalInput) -> Result<EvalResult, EvalError> {
+            *self.0.lock().expect("lock") = Some(input);
+            Ok(self.1.clone())
+        }
+    }
+
+    /// Writes one namespace and reports it found.
+    struct StaticEnricher;
+
+    impl apf_policy_eval::ContextEnricher for StaticEnricher {
+        fn enrich<'a>(
+            &'a self,
+            input: &'a mut EvalInput,
+            _correlation_id: Option<&'a str>,
+        ) -> EnrichFuture<'a> {
+            Box::pin(async move {
+                let record = serde_json::json!({
+                    "approval": "approved",
+                    "_meta": {"provider": "cm", "verified": true}
+                });
+                input.context_attributes.insert(
+                    "change".to_owned(),
+                    record.as_object().cloned().expect("record"),
+                );
+                Ok(vec![ProviderOutcome {
+                    provider: "cm".to_owned(),
+                    domain: "change".to_owned(),
+                    status: ProviderStatus::Found,
+                    degraded: false,
+                    cached: false,
+                    age_seconds: 0,
+                    evidence_ref: Some("CHG0012".to_owned()),
+                    latency_ms: 2,
+                }])
+            })
+        }
+    }
+
+    /// A fail-closed provider that never answers.
+    struct FailingEnricher;
+
+    impl apf_policy_eval::ContextEnricher for FailingEnricher {
+        fn enrich<'a>(
+            &'a self,
+            _input: &'a mut EvalInput,
+            _correlation_id: Option<&'a str>,
+        ) -> EnrichFuture<'a> {
+            Box::pin(async move {
+                Err(EnrichmentError {
+                    provider: "cm".to_owned(),
+                    status: ProviderStatus::Timeout,
+                    outcomes: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn enriched_service(
+        evaluator: Arc<dyn Evaluator>,
+        enricher: Arc<dyn apf_policy_eval::ContextEnricher>,
+        dir: &std::path::Path,
+    ) -> EvaluationServiceImpl {
+        let (_tx, rx) = new_evaluator_channel(ActivePolicy {
+            evaluator,
+            bundle_digest: DIGEST.to_owned(),
+            policy_revision: REVISION,
+        });
+        drop(_tx);
+        EvaluationServiceImpl {
+            evaluator: rx,
+            audit: PolicyGatewayAudit::to_jsonl_in(dir).expect("build emitter"),
+            enricher: Some(enricher),
+        }
+    }
+
+    /// Provider attributes reach the evaluator and the record names the
+    /// provider that supplied them.
+    #[tokio::test]
+    async fn provider_outcomes_reach_the_evaluator_and_the_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = Arc::new(RecordingEvaluator(Mutex::new(None), EvalResult::default()));
+        let svc = enriched_service(evaluator.clone(), Arc::new(StaticEnricher), dir.path());
+
+        let response = svc.evaluate(request()).await.expect("allow").into_inner();
+        assert_eq!(response.decision, Decision::Allow as i32);
+
+        let seen = evaluator.0.lock().unwrap().clone().expect("evaluated");
+        assert_eq!(seen.context_attributes["change"]["approval"], "approved");
+        let runtime = seen.runtime.expect("runtime identity projected");
+        assert_eq!(runtime.instance_id, "sbx-9");
+        assert_eq!(
+            runtime.attestation,
+            apf_policy_eval::RuntimeAttestation::Caller,
+            "this surface never attests caller-asserted identities"
+        );
+
+        let records = records(dir.path());
+        assert_eq!(records.len(), 1);
+        let extensions = records[0].extensions.as_ref().expect("provenance recorded");
+        let providers = extensions["x_apf_pip"]["providers"]
+            .as_array()
+            .expect("providers array");
+        assert_eq!(providers[0]["provider"], "cm");
+        assert_eq!(providers[0]["status"], "found");
+        assert_eq!(providers[0]["evidence_ref"], "CHG0012");
+    }
+
+    /// A fail-closed provider denies before the engine runs, and the denial
+    /// is recorded with the provider named in the reason.
+    #[tokio::test]
+    async fn a_fail_closed_provider_denies_and_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = Arc::new(RecordingEvaluator(Mutex::new(None), EvalResult::default()));
+        let svc = enriched_service(evaluator.clone(), Arc::new(FailingEnricher), dir.path());
+
+        let response = svc
+            .evaluate(request())
+            .await
+            .expect("deny is a response")
+            .into_inner();
+        assert_eq!(response.decision, Decision::Deny as i32);
+        assert_eq!(response.reason, "pip_timeout:cm");
+        assert!(
+            evaluator.0.lock().unwrap().is_none(),
+            "the engine must not see a request a fail-closed provider blocked"
+        );
+
+        let records = records(dir.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].decision, Some(apf_audit::Decision::Deny));
+        let detail = records[0]
+            .error_info
+            .as_ref()
+            .map(|error| error.message.clone())
+            .unwrap_or_default();
+        assert!(detail.contains("pip_timeout:cm"), "got: {detail}");
     }
 
     fn records(dir: &std::path::Path) -> Vec<AuditEvent> {

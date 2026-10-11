@@ -14,7 +14,10 @@ use apf_audit::{
     TypedAuditEvent, UNSPECIFIED, Verdict, coerce_digest, coerce_id, coerce_lower_dotted,
     coerce_name, generate_correlation_id, generate_decision_id, join_rejection_detail,
 };
-use apf_policy_eval::{Finding as EvalFinding, Severity as EvalSeverity, Verdict as EvalVerdict};
+use apf_policy_eval::{
+    Finding as EvalFinding, ProviderOutcome, Severity as EvalSeverity, Verdict as EvalVerdict,
+    provenance_record,
+};
 
 /// The PDP's own identity. The interceptor and middleware run in this process
 /// but are separate components and own theirs, so each writes its own file.
@@ -35,6 +38,9 @@ const TRUST_ROOT_ID: &str = "apf-policy-service:signing";
 /// Stands in for a digest that cannot be recorded as given. Distinct from a
 /// missing bundle: the policy is known, its identity just is not writable.
 const UNRECORDABLE_DIGEST: &str = "unrecordable";
+
+/// Extension key carrying what each provider contributed to a decision.
+const PROVENANCE_EXTENSION: &str = "x_apf_pip";
 
 const ALLOW_REASON_CODE: &str = "policy.request_allowed";
 const DENY_REASON_CODE: &str = "policy.request_denied";
@@ -125,7 +131,7 @@ impl PolicyGatewayAudit {
         let verb = coerce_lower_dotted(decision.verb);
         let decision_id = generate_decision_id();
 
-        let event = if decision.allow {
+        let mut event = if decision.allow {
             AuthorizationEvent::new(
                 resource,
                 verb,
@@ -138,7 +144,6 @@ impl PolicyGatewayAudit {
             // rejects it beside a verdict, so a policy that defines that kind
             // loses the finding rather than the whole record.
             .with_verdict(decision.verdict)
-            .into_audit_event(&common)
         } else {
             AuthorizationEvent::new(
                 resource,
@@ -156,8 +161,14 @@ impl PolicyGatewayAudit {
             })
             .with_findings(decision.findings.to_vec())
             .with_verdict(decision.verdict)
-            .into_audit_event(&common)
         };
+        if !decision.providers.is_empty() {
+            event = event.with_extension(
+                PROVENANCE_EXTENSION,
+                provenance_record(decision.providers, SanitizationGuard::accepts_string),
+            );
+        }
+        let event = event.into_audit_event(&common);
 
         // Both checks happen before writing, and both must fall through to the
         // fallback rather than return, or hostile input erases the record.
@@ -292,6 +303,8 @@ pub struct DecisionRecord<'a> {
     pub deny_reason: &'a str,
     pub verdict: Verdict,
     pub findings: &'a [Finding],
+    /// What each registered provider contributed to the decision.
+    pub providers: &'a [ProviderOutcome],
     /// Read atomically with the evaluator that decided, never separately.
     pub bundle_digest: &'a str,
     pub policy_revision: u64,
