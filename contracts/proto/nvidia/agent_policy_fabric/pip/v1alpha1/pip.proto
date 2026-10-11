@@ -1,0 +1,125 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Policy Information Provider contract.
+//
+// A provider supplies trusted attributes about the world around a request:
+// who the subject is, what the resource is, what risk signals are active. The
+// policy gateway calls registered providers before the policy engine runs and
+// exposes their attributes to policy under the provider's domain.
+//
+// Providers return facts. They never return decisions, effects, obligations or
+// provenance; the gateway stamps provenance itself. Transport is a Unix domain
+// socket and both peers verify the peer UID.
+//
+// Failures travel as gRPC status codes, which the gateway records as:
+// DEADLINE_EXCEEDED = timeout, UNAVAILABLE = unavailable, RESOURCE_EXHAUSTED =
+// capacity, INVALID_ARGUMENT = invalid_input, UNAUTHENTICATED and
+// PERMISSION_DENIED = unauthorized, UNIMPLEMENTED and FAILED_PRECONDITION =
+// misconfigured. A response that fails validation is invalid_output.
+//
+// Evolution is additive: new fields and new enum values only. A gateway
+// rejects an AttributeStatus value it does not know, so adding a status value
+// is a breaking change until providers can negotiate the contract version.
+
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.pip.v1alpha1;
+
+import "google/protobuf/struct.proto";
+
+// PolicyInformationService answers attribute lookups for one evaluation.
+service PolicyInformationService {
+  // GetAttributes returns the attributes this provider holds for the subject,
+  // limited to the domains the caller names.
+  rpc GetAttributes(GetAttributesRequest) returns (GetAttributesResponse);
+}
+
+message GetAttributesRequest {
+  // What the gateway already knows about the request, projected to the fields
+  // the provider is registered to receive.
+  EvaluationSubject subject = 1;
+  // Domains the provider is registered for, e.g. "identity". Policy reads a
+  // domain's attributes under the engine's context path for that domain.
+  repeated string domains = 2;
+  // Caller-supplied correlation id for audit joins. Never a cache key.
+  string correlation_id = 3;
+}
+
+// EvaluationSubject is the request as normalized by the runtime adapter. It
+// carries no request body and no policy-language syntax. Fields the provider
+// is not registered to receive are left empty.
+message EvaluationSubject {
+  // Authenticated subject the request is made on behalf of. Empty when the
+  // runtime does not carry one.
+  string user_subject = 1;
+  // Tool name, or empty for traffic without a tool identity.
+  string tool = 2;
+  // Capability within the tool, when the request carries one.
+  string capability = 3;
+  // Normalized action id the policy engine evaluates: "<tool>::<capability>",
+  // the tool alone when no capability is present, or "invoke" when neither is.
+  string action = 4;
+  // Call arguments from the request, limited to the registered argument names.
+  google.protobuf.Struct args = 5;
+  // HTTP target of a proxied request, when present.
+  RequestTarget target = 6;
+  // Runtime instance making the request, when the adapter established one.
+  RuntimeIdentity runtime = 7;
+  // How user_subject was established: "none" when it is empty, "caller" when
+  // the calling enforcement point asserted it. Later values name stronger
+  // sources.
+  string user_subject_attestation = 8;
+}
+
+message RequestTarget {
+  string host = 1;
+  string method = 2;
+  string path = 3;
+  string scheme = 4;
+}
+
+// RuntimeIdentity names the workload instance a request originates from.
+message RuntimeIdentity {
+  // Runtime substrate, e.g. "openshell".
+  string platform = 1;
+  // Stable instance identifier within the platform, e.g. a sandbox id.
+  string instance_id = 2;
+  // Agent type running in the instance, when known.
+  string agent_type = 3;
+  // How instance_id was established: "caller" when asserted by the calling
+  // enforcement point, "openshell-supervisor-jwt" when bound to the
+  // supervisor's authenticated token. Later values name stronger sources.
+  string attestation = 4;
+}
+
+message GetAttributesResponse {
+  // Exactly one root per requested domain that has attributes, holding a
+  // record of claims: {"identity": {"groups": ["engineering"]}}. An omitted
+  // root means no data for that domain. No "_meta" key.
+  google.protobuf.Struct context_attributes = 1;
+  // Entity enrichment is a later addition to this contract.
+  reserved 2;
+  reserved "entity_attributes";
+  // Remaining freshness: how long the gateway may cache this response. A
+  // provider serving cached or pre-fetched data subtracts the time it has
+  // already held it. The registration clamps it; zero disables caching.
+  uint32 ttl_seconds = 3;
+  // Opaque pointer to the evidence behind the attributes, for audit. Never a
+  // secret or observation content.
+  string evidence_ref = 4;
+  // Outcome of the lookup. Must be set.
+  AttributeStatus status = 5;
+  // Age of the underlying facts when this response was produced, in seconds;
+  // zero when fetched live. The gateway adds its own cache age.
+  uint32 age_seconds = 6;
+}
+
+enum AttributeStatus {
+  ATTRIBUTE_STATUS_UNSPECIFIED = 0;
+  // Attributes were found and are present in context_attributes.
+  ATTRIBUTE_STATUS_FOUND = 1;
+  // The lookup succeeded and the provider holds no attributes for the subject.
+  // Distinct from a timeout, an unavailable provider or invalid output.
+  ATTRIBUTE_STATUS_NO_DATA = 2;
+}

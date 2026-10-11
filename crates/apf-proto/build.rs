@@ -54,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_protos: Vec<PathBuf> = [
         "nvidia/agent_policy_fabric/runtime/v1alpha1/runtime.proto",
         "nvidia/agent_policy_fabric/pdp/v1alpha1/pdp.proto",
+        "nvidia/agent_policy_fabric/pip/v1alpha1/pip.proto",
         "nvidia/agent_policy_fabric/policy_service/v1alpha1/policy_service.proto",
     ]
     .iter()

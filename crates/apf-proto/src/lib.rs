@@ -27,6 +27,11 @@ pub mod nvidia {
                 tonic::include_proto!("nvidia.agent_policy_fabric.pdp.v1alpha1");
             }
         }
+        pub mod pip {
+            pub mod v1alpha1 {
+                tonic::include_proto!("nvidia.agent_policy_fabric.pip.v1alpha1");
+            }
+        }
         pub mod policy_service {
             pub mod v1alpha1 {
                 tonic::include_proto!("nvidia.agent_policy_fabric.policy_service.v1alpha1");
@@ -88,6 +93,7 @@ pub use openshell::gateway_interceptor::v1 as gateway_interceptor_v1;
 pub use openshell::middleware::v1 as supervisor_middleware_v1;
 
 pub use nvidia::agent_policy_fabric::pdp::v1alpha1 as pdp_v1alpha1;
+pub use nvidia::agent_policy_fabric::pip::v1alpha1 as pip_v1alpha1;
 pub use nvidia::agent_policy_fabric::policy::v1alpha1 as ir;
 pub use nvidia::agent_policy_fabric::policy_service::v1alpha1 as policy_service_v1alpha1;
 pub use nvidia::agent_policy_fabric::runtime::v1alpha1 as runtime_v1alpha1;
@@ -101,5 +107,7 @@ pub use ir::PolicySet;
 pub use ir::ProviderProfileSet;
 pub use pdp_v1alpha1::evaluation_service_client;
 pub use pdp_v1alpha1::evaluation_service_server;
+pub use pip_v1alpha1::policy_information_service_client;
+pub use pip_v1alpha1::policy_information_service_server;
 pub use policy_service_v1alpha1::policy_service_client;
 pub use policy_service_v1alpha1::policy_service_server;
