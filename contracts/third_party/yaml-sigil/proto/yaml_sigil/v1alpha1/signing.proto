@@ -1,0 +1,105 @@
+// SPDX-FileCopyrightText: Copyright 2026 NVIDIA CORPORATION & AFFILIATES
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package yaml_sigil.v1alpha1;
+
+import "yaml_sigil/v1alpha1/yaml_sigil.proto";
+
+// Signing API IDL. The Markdown companion defines processing semantics; this
+// file defines the service, messages, enums, fields, and field numbers.
+service SigningService {
+  // Return the typed values this signer accepts on subsequent Sign calls.
+  rpc SignerCapabilities(SignerCapabilitiesRequest) returns (SignerCapabilitiesResponse);
+
+  // Produce one signed artifact in the requested output form.
+  rpc Sign(SignRequest) returns (SignResponse);
+}
+
+message SignerCapabilitiesRequest {}
+
+message SignerCapabilitiesResponse {
+  // Supported output forms. MUST NOT include OUTPUT_FORM_UNSPECIFIED.
+  repeated OutputForm supported_output_forms = 1;
+
+  // Implemented algorithms. MUST NOT include ALGORITHM_UNSPECIFIED.
+  repeated Algorithm supported_algorithms = 2;
+
+  // True only when the signer may return YAML_VALIDATION_FAILURE.
+  bool best_effort_yaml_validation = 3;
+
+  // Free-form implementation diagnostics. Not a conformance input.
+  string implementation_name = 4;
+  string implementation_version = 5;
+}
+
+message SignRequest {
+  // Opaque deployment-defined private-key reference or handle.
+  bytes private_key_handle = 1;
+
+  // Payload stream bytes to sign.
+  bytes payload = 2;
+
+  // Caller-selected algorithm.
+  Algorithm alg = 3;
+
+  // Optional lookup hint copied into the signature document when present.
+  // It MUST satisfy the keyid constraints in README.md.
+  optional string keyid = 4;
+
+  // Caller-selected output form.
+  OutputForm output_form = 5;
+
+  // Algorithm-specific parameters. Required exactly when the selected
+  // algorithm defines parameters.
+  bytes algorithm_parameters = 6;
+}
+
+message SignResponse {
+  oneof result {
+    SignSuccess success = 1;
+    SignerInvocationError invocation_error = 2;
+    SignerError signer_error = 3;
+  }
+}
+
+message SignSuccess {
+  // Serialized artifact in the requested output form.
+  bytes artifact = 1;
+
+  // Populated only when the signer appended one LF byte before signing.
+  bytes modified_payload = 2;
+}
+
+message SignerInvocationError {
+  SignerInvocationErrorCategory category = 1;
+  string detail = 2;
+}
+
+message SignerError {
+  SignerErrorCategory category = 1;
+  string detail = 2;
+}
+
+enum OutputForm {
+  OUTPUT_FORM_UNSPECIFIED = 0;
+  OUTPUT_FORM_YAML = 1;
+  OUTPUT_FORM_PROTOBUF = 2;
+}
+
+enum SignerInvocationErrorCategory {
+  SIGNER_INVOCATION_ERROR_CATEGORY_UNSPECIFIED = 0;
+  SIGNER_INVOCATION_ERROR_CATEGORY_INVALID_OR_UNSUPPORTED_ALGORITHM = 1;
+  SIGNER_INVOCATION_ERROR_CATEGORY_INVALID_ALGORITHM_PARAMETERS = 2;
+  SIGNER_INVOCATION_ERROR_CATEGORY_INVALID_OR_UNSUPPORTED_OUTPUT_FORM = 3;
+  SIGNER_INVOCATION_ERROR_CATEGORY_INVALID_KEYID = 4;
+}
+
+enum SignerErrorCategory {
+  SIGNER_ERROR_CATEGORY_UNSPECIFIED = 0;
+  SIGNER_ERROR_CATEGORY_INVALID_PAYLOAD_BYTES = 1;
+  SIGNER_ERROR_CATEGORY_PAYLOAD_LINE_TERMINATOR_REFUSAL = 2;
+  SIGNER_ERROR_CATEGORY_KEY_OPERATION_FAILURE = 3;
+  SIGNER_ERROR_CATEGORY_YAML_VALIDATION_FAILURE = 4;
+}

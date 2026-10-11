@@ -1,0 +1,48 @@
+// SPDX-FileCopyrightText: Copyright 2026 NVIDIA CORPORATION & AFFILIATES
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package yaml_sigil.v1alpha1;
+
+// Artifact wire schema for the protobuf form. Markdown specifications define
+// the cross-form behavior; this file defines message, enum, field, and wire
+// identity.
+
+message SignedYamlArtifact {
+  // Payload stream bytes covered by the signature. In protobuf form these are
+  // arbitrary octets; YAML-envelope UTF-8, BOM, and line-terminator rules do
+  // not apply to this field.
+  bytes payload = 1;
+
+  // Structured signature metadata. The protobuf message type is the schema
+  // identity; the YAML form carries that identity in its `schema` scalar.
+  YamlSigilSignature signature = 2;
+}
+
+// Signature algorithm identifier. YAML form uses the canonical names without
+// the `ALGORITHM_` prefix; see README.md for the mapping table.
+enum Algorithm {
+  // Invalid runtime value. Signers reject it; verifiers map it to
+  // MalformedAttemptedSigned.
+  ALGORITHM_UNSPECIFIED = 0;
+
+  ALGORITHM_ED25519_PUREEDDSA_RAW_RS64_CANONICAL = 1;
+  ALGORITHM_ECDSA_SECP256R1_SHA256_RAW_RS64 = 2;
+}
+
+message YamlSigilSignature {
+  // Required algorithm identifier. Schema-unknown values are invalid;
+  // schema-defined but unsupported values map to
+  // SignedButAlgorithmUnsupported during verification.
+  Algorithm alg = 1;
+
+  // Optional lookup hint. When present, it MUST be non-empty, at most 1024
+  // UTF-8 octets, and contain no U+000A or U+000D. It is never proof of signer
+  // identity.
+  optional string keyid = 2;
+
+  // Raw signature octets. YAML form base64-encodes the same bytes. The value
+  // MUST be non-empty before cryptographic verification.
+  bytes signature = 3;
+}

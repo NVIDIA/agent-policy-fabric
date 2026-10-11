@@ -66,6 +66,9 @@ def tracked_files(root: Path) -> list[Path]:
     files = []
     for line in out.stdout.splitlines():
         p = root / line
+        # Vendored third-party sources keep their upstream headers.
+        if line.startswith("contracts/third_party/"):
+            continue
         if p.suffix in COMMENT_STYLES and "/target/" not in line:
             files.append(p)
     return files

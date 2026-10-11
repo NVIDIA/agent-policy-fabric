@@ -1,0 +1,489 @@
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package openshell.compute.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "extension.proto";
+import "options.proto";
+import "sandbox.proto";
+
+// Gateway/compute-driver extension contract.
+//
+// Conventions:
+// - This file owns driver-native request, response, and observation types.
+// - Compute drivers must not import or return the public `openshell.v1.Sandbox`
+//   resource model.
+// - The gateway translates between these driver-native messages and
+//   the public OpenShell API resource model.
+// - Capability fields are additive. Drivers and gateways must ignore unknown
+//   fields so independently versioned external drivers remain
+//   forward-compatible.
+service ComputeDriver {
+  // Report driver capabilities and defaults.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // Authenticate a driver-native bootstrap credential and return the stable
+  // sandbox identity it represents. The gateway remains responsible for
+  // checking that the sandbox exists and minting gateway credentials.
+  rpc AuthenticateSandbox(AuthenticateSandboxRequest)
+      returns (AuthenticateSandboxResponse);
+
+  // Validate a sandbox before create-time provisioning.
+  rpc ValidateSandboxCreate(ValidateSandboxCreateRequest)
+      returns (ValidateSandboxCreateResponse);
+
+  // Fetch the platform-observed sandbox state for one sandbox.
+  rpc GetSandbox(GetSandboxRequest) returns (GetSandboxResponse);
+
+  // List platform-observed sandbox state for all sandboxes.
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse);
+
+  // Provision platform resources for a sandbox.
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+
+  // Idempotently stop platform resources without deleting persistent state.
+  rpc StopSandbox(StopSandboxRequest) returns (StopSandboxResponse);
+
+  // Idempotently start platform resources for a stopped sandbox.
+  rpc StartSandbox(StartSandboxRequest) returns (StartSandboxResponse);
+
+  // Tear down platform resources for a sandbox.
+  rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+
+  // Stream sandbox observations from the platform.
+  rpc WatchSandboxes(WatchSandboxesRequest) returns (stream WatchSandboxesEvent);
+
+  // Ensure platform resources for a workspace exist (e.g. namespace).
+  // Idempotent: succeeds if resources already exist.
+  rpc EnsureWorkspace(EnsureWorkspaceRequest) returns (EnsureWorkspaceResponse);
+
+  // Tear down platform resources for a workspace.
+  rpc DeleteWorkspace(DeleteWorkspaceRequest) returns (DeleteWorkspaceResponse);
+}
+
+message GetCapabilitiesRequest {
+  // Gateway protocol metadata. Drivers must reject unmet requirements.
+  openshell.extension.v1.PeerMetadata gateway = 1;
+}
+
+message GetCapabilitiesResponse {
+  reserved 4, 5;
+  reserved "supports_gpu", "gpu_count";
+
+  // Human-readable driver name.
+  string driver_name = 1;
+  // Deprecated diagnostic compatibility field. Use extension.implementation_version.
+  string driver_version = 2;
+  // Default sandbox image recommended by the driver.
+  string default_image = 3;
+  // Whether the gateway should stop running sandbox compute during graceful
+  // shutdown and restart the retained running intent on startup.
+  bool gateway_manages_lifecycle = 6;
+  // Whether AuthenticateSandbox is implemented by this driver. Drivers that
+  // enable this capability must return a stable runtime identity from create,
+  // start, and authentication responses for gateway-side binding checks.
+  bool supports_sandbox_authentication = 7;
+  // Whether the driver reports runtime readiness itself. When false, the
+  // gateway waits for the standard OpenShell supervisor session in addition
+  // to the driver's platform-ready observation.
+  bool driver_reports_runtime_readiness = 8;
+  // Static portable resource request forms supported by this configured driver.
+  ResourceCapabilities resource_capabilities = 9;
+  // Absolute path to the directory where rootfs tar files must be staged
+  // before being referenced in a CreateSandbox request. The driver rejects
+  // paths outside this directory.
+  string rootfs_tar_staging_dir = 10;
+  // Maximum rootfs tar file size in bytes accepted by the driver. Zero means
+  // the driver does not support rootfs tar sources.
+  uint64 rootfs_tar_max_bytes = 11;
+  // Compute extension protocol metadata. Required for protocol negotiation.
+  openshell.extension.v1.PeerMetadata extension = 12;
+  // Versioned effective operator admission policy (v1: followed by JSON).
+  // Gateways require an exact policy match before activating the driver.
+  // Empty denotes a legacy driver and requires explicit admission opt-out.
+  string resource_admission_policy = 13;
+}
+
+message AuthenticateSandboxRequest {
+  // Opaque credential whose format and verification are owned by the driver.
+  string credential = 1 [(openshell.options.v1.secret) = true];
+}
+
+message AuthenticateSandboxResponse {
+  // Stable gateway-assigned sandbox ID authenticated by the driver.
+  string sandbox_id = 1;
+  // Opaque, stable identity of the compute resource presenting the credential.
+  // The gateway compares this with the identity recorded when the sandbox was
+  // created to authorize the bootstrap exchange.
+  string runtime_identity = 2;
+}
+
+// Static portable resource request forms supported by a compute driver.
+// An omitted domain means the driver does not report that domain.
+message ResourceCapabilities {
+  CpuResourceCapabilities cpu = 1;
+  MemoryResourceCapabilities memory = 2;
+  GpuResourceCapabilities gpu = 3;
+}
+
+message CpuResourceCapabilities {
+  // The driver accepts and enforces a portable CPU limit.
+  bool limit_supported = 1;
+}
+
+message MemoryResourceCapabilities {
+  // The driver accepts and enforces a portable memory limit.
+  bool limit_supported = 1;
+}
+
+message GpuResourceCapabilities {
+  // The driver accepts a GPU request with no explicit count.
+  bool default_selection_supported = 1;
+  // The driver accepts an explicit `gpu.count` request.
+  bool count_selection_supported = 2;
+}
+
+// Driver-owned sandbox model used for create requests and platform observations.
+//
+// This intentionally omits gateway-owned lifecycle fields such as the public
+// `openshell.v1.SandboxPhase` and persisted metadata. The gateway derives and
+// stores those fields after translating driver observations.
+message DriverSandbox {
+  // Stable sandbox ID assigned by the gateway.
+  string id = 1;
+  // Compute-runtime sandbox name.
+  string name = 2;
+  // Compute-platform namespace or equivalent tenancy boundary.
+  string namespace = 3;
+  // Provisioning input supplied by the gateway. Drivers may omit this in
+  // observed snapshots returned by Get/List/Watch.
+  DriverSandboxSpec spec = 4;
+  // Raw platform-observed status.
+  DriverSandboxStatus status = 5;
+  // Workspace the sandbox belongs to. Used by drivers to construct
+  // collision-safe resource names and labels in shared-namespace mode.
+  string workspace = 6;
+}
+
+// Driver-owned provisioning inputs required to create a sandbox.
+message DriverSandboxSpec {
+  // Log level exposed to processes running inside the sandbox.
+  string log_level = 1;
+  // Environment variables injected into the sandbox runtime.
+  map<string, string> environment = 5;
+  // Runtime template consumed by the driver during provisioning.
+  DriverSandboxTemplate template = 6;
+  // Canonical effective policy supplied to the driver for validation and
+  // provisioning. Drivers that enforce policy outside the standard supervisor
+  // use GetSandboxConfig to fetch later revisions.
+  openshell.sandbox.v1.SandboxPolicy policy = 7;
+  // Portable resource requirements used by the gateway for driver selection
+  // and by drivers for provisioning.
+  ResourceRequirements resource_requirements = 9;
+  reserved 10;
+  reserved "gpu_device";
+  // Gateway-minted JWT identifying this sandbox to the gateway. Set by
+  // the gateway on create; the driver materialises it via its native
+  // secret mechanism (Docker/Podman/VM bind-mount a per-sandbox file;
+  // the Kubernetes driver ignores this field and relies on its projected
+  // ServiceAccount token bootstrap instead). Never echoed to the public
+  // Sandbox proto.
+  string sandbox_token = 11 [(openshell.options.v1.secret) = true];
+  // Exact canonical command forwarded to the supervisor without shell parsing.
+  repeated string command = 12;
+  // Allocate a retained pseudo-terminal for the canonical process.
+  bool tty = 13;
+  // One-shot launch hint forwarded by the gateway when the creating client
+  // will attach to the canonical main process.
+  bool await_main_process_attachment = 14;
+  // Admitted identity selectors that the driver must resolve before creating
+  // an immutable workload. Empty selectors mean the pinned image/rootfs
+  // defaults. Resolution is mandatory for supported isolation backends.
+  WorkloadIdentityRequest workload_identity = 15;
+  // Opaque, gateway-created launch credentials. The driver must split this
+  // material between the host supervisor and workload-side sandbox runtime;
+  // it must never expose the supervisor bearer tokens to the workload.
+  bytes launch_authentication = 16 [(openshell.options.v1.secret) = true];
+}
+
+// Identity inputs admitted by the gateway before workload provisioning.
+message WorkloadIdentityRequest {
+  // User selector from policy or driver configuration (numeric or symbolic).
+  string user = 1;
+  // Group selector from policy or driver configuration (numeric or symbolic).
+  string group = 2;
+}
+
+// Exact immutable identity selected by the driver from pinned runtime
+// metadata. UID/GID zero are invalid for the capability-free sandbox.
+message ResolvedWorkloadIdentity {
+  uint32 uid = 1;
+  uint32 gid = 2;
+  // Sorted, unique supplementary groups. GID zero is invalid.
+  repeated uint32 supplementary_gids = 3;
+  // Driver-defined resolution source such as policy, template, or image.
+  string source = 4;
+  // Immutable image/rootfs/config digest used during resolution.
+  string resource_digest = 5;
+}
+
+// Driver-owned proof that the immutable workload and its outer network fence
+// match the sandbox generation. The gateway joins this with sandbox and
+// supervisor evidence before permitting the first untrusted instruction.
+message DriverFenceEvidence {
+  string generation = 1;
+  string evidence_digest = 2;
+  map<string, string> resource_claims = 3;
+}
+
+message ResourceRequirements {
+  // GPU requirements for the sandbox. Presence indicates a GPU request.
+  GpuResourceRequirements gpu = 1;
+}
+
+// Driver GPU resource requirements.
+message GpuResourceRequirements {
+  // Optional number of GPUs requested. When omitted, the request is for one
+  // GPU using the selected driver's default assignment behavior.
+  optional uint32 count = 1;
+}
+
+// Driver-owned runtime template consumed by the compute platform.
+//
+// This message describes the sandbox workload in backend-neutral terms.
+// Platform-specific knobs (Kubernetes runtimeClassName, annotations,
+// volumeClaimTemplates, etc.) belong in `platform_config`.
+message DriverSandboxTemplate {
+  // Fully-qualified OCI image reference used to boot the sandbox.
+  string image = 1;
+  // Socket path inside the sandbox where the agent service listens.
+  string agent_socket_path = 3;
+  // Metadata labels applied to compute-platform resources.
+  // Drivers map these to the platform's native tagging mechanism
+  // (Kubernetes labels, cloud instance tags, etc.).
+  map<string, string> labels = 4;
+  // Additional environment variables injected into the sandbox runtime.
+  map<string, string> environment = 6;
+  // Typed compute-resource requirements for the sandbox workload.
+  DriverResourceRequirements resources = 10;
+  // Opaque, platform-specific configuration passed through to the driver.
+  // The gateway does not inspect this; each driver defines its own schema.
+  // For the Kubernetes driver this carries fields such as runtimeClassName,
+  // annotations, and volumeClaimTemplates.
+  google.protobuf.Struct platform_config = 11;
+  // Caller-provided config for the selected driver only.
+  // This is the inner block selected from public SandboxTemplate.driver_config.
+  // The selected driver owns nested schema validation.
+  google.protobuf.Struct driver_config = 12;
+  // Enable Linux user namespace isolation for the sandbox workload. Drivers
+  // map this portable intent to their compute platform; when unset, the
+  // driver's configured default applies.
+  optional bool user_namespaces = 13;
+}
+
+// Typed compute-resource requirements.
+//
+// Values use Kubernetes-style quantity strings (e.g. "500m", "2", "4Gi")
+// because they are a well-known, widely-adopted notation. Drivers for
+// non-Kubernetes platforms must parse these strings into their native units.
+message DriverResourceRequirements {
+  // Minimum CPU cores requested (e.g. "500m", "2").
+  string cpu_request = 1;
+  // Maximum CPU cores allowed (e.g. "500m", "4").
+  string cpu_limit = 2;
+  // Minimum memory requested (e.g. "256Mi", "4Gi").
+  string memory_request = 3;
+  // Maximum memory allowed (e.g. "512Mi", "8Gi").
+  string memory_limit = 4;
+}
+
+// Raw status observed directly from the compute platform.
+//
+// The gateway derives the public `openshell.v1.SandboxPhase` from these
+// conditions plus `deleting`.
+message DriverSandboxStatus {
+  // Compute-platform sandbox object name.
+  string name = 1;
+  // Platform-assigned instance identifier for the compute unit running the
+  // sandbox agent (e.g. Kubernetes pod name, VM instance ID, hostname).
+  // The gateway uses this to correlate incoming connections back to a sandbox.
+  string instance_id = 2;
+  // File descriptor or address for reaching the agent service inside the
+  // sandbox, when available.
+  string agent_fd = 3;
+  // File descriptor or address for reaching the sandbox supervisor service,
+  // when available.
+  string sandbox_fd = 4;
+  // Raw readiness and lifecycle conditions reported by the platform.
+  repeated DriverCondition conditions = 5;
+  // True when the compute platform has begun deleting this sandbox.
+  bool deleting = 6;
+  // Exact process identity used to create the workload.
+  ResolvedWorkloadIdentity resolved_identity = 7;
+  // Immutable backend and outer-fence evidence for this generation.
+  DriverFenceEvidence fence_evidence = 8;
+}
+
+// Raw compute-platform condition.
+message DriverCondition {
+  reserved 5;
+  reserved "last_transition_time";
+  // Condition class reported by the compute platform.
+  string type = 1;
+  // Condition status value such as `True`, `False`, or `Unknown`.
+  string status = 2;
+  // Short machine-readable reason associated with the condition.
+  string reason = 3;
+  // Human-readable condition message.
+  string message = 4;
+  // Time reported by the platform for the last transition.
+  google.protobuf.Timestamp transition_time = 105;
+}
+
+// Raw compute-platform event correlated to a sandbox.
+message DriverPlatformEvent {
+  reserved 1;
+  reserved "timestamp_ms";
+  // Time when the event occurred.
+  google.protobuf.Timestamp event_time = 101;
+  // Event source (for example `kubernetes`).
+  string source = 2;
+  // Event type or severity (for example `Normal` or `Warning`).
+  string type = 3;
+  // Short machine-readable reason code.
+  string reason = 4;
+  // Human-readable event message.
+  string message = 5;
+  // Optional platform-specific metadata attached to the event.
+  map<string, string> metadata = 6;
+}
+
+message ValidateSandboxCreateRequest {
+  // Proposed sandbox configuration to validate before provisioning.
+  DriverSandbox sandbox = 1;
+}
+
+message ValidateSandboxCreateResponse {}
+
+message GetSandboxRequest {
+  // Stable sandbox ID stored by the gateway.
+  string sandbox_id = 1;
+  // Compute-runtime name used by the driver.
+  string name = 2;
+}
+
+message GetSandboxResponse {
+  // Platform-observed sandbox snapshot returned by the driver.
+  DriverSandbox sandbox = 1;
+}
+
+message ListSandboxesRequest {}
+
+message ListSandboxesResponse {
+  // Platform-observed sandbox snapshots returned by the driver.
+  repeated DriverSandbox sandboxes = 1;
+}
+
+message CreateSandboxRequest {
+  // Sandbox configuration to provision on the compute platform.
+  DriverSandbox sandbox = 1;
+}
+
+message CreateSandboxResponse {
+  // Opaque, stable identity of the compute resource created for the sandbox.
+  // Required when the driver advertises sandbox authentication support.
+  string runtime_identity = 1;
+}
+
+message StopSandboxRequest {
+  // Stable sandbox ID stored by the gateway.
+  string sandbox_id = 1;
+  // Compute-runtime name used by the driver.
+  string name = 2;
+}
+
+message StopSandboxResponse {}
+
+message StartSandboxRequest {
+  // Stable sandbox ID stored by the gateway.
+  string sandbox_id = 1;
+  // Compute-runtime name used by the driver.
+  string name = 2;
+  // Fresh launch credentials for start-from-stopped. Empty only for drivers
+  // that do not implement the OpenShell Sandbox Protocol.
+  bytes launch_authentication = 3 [(openshell.options.v1.secret) = true];
+  // Stable identity of this gateway start transition. Retries of the same
+  // transition carry the same generation ID; a later start uses a new ID.
+  string generation_id = 4;
+  // Opaque runtime identity persisted from the prior successful create or
+  // start. Drivers that advertise runtime identity binding must preserve the
+  // stable resource represented by this identity while replacing only the
+  // generation-specific runtime component.
+  string expected_runtime_identity = 5;
+}
+
+message StartSandboxResponse {
+  // Updated opaque runtime identity after a successful start. Required when
+  // the driver advertises sandbox authentication support.
+  string runtime_identity = 1;
+}
+
+message DeleteSandboxRequest {
+  // Stable sandbox ID stored by the gateway.
+  string sandbox_id = 1;
+  // Compute-runtime name used by the driver.
+  string name = 2;
+}
+
+message DeleteSandboxResponse {
+  // True when a platform resource was deleted by this request.
+  bool deleted = 1;
+}
+
+message WatchSandboxesRequest {}
+
+message WatchSandboxesSandboxEvent {
+  // Updated driver-native snapshot for one sandbox.
+  DriverSandbox sandbox = 1;
+}
+
+message WatchSandboxesDeletedEvent {
+  // Sandbox ID removed from the compute platform.
+  string sandbox_id = 1;
+}
+
+message WatchSandboxesPlatformEvent {
+  // Sandbox ID correlated to the platform event.
+  string sandbox_id = 1;
+  // Raw platform event emitted for the sandbox.
+  DriverPlatformEvent event = 2;
+}
+
+message WatchSandboxesEvent {
+  oneof payload {
+    // Updated or newly observed sandbox snapshot.
+    WatchSandboxesSandboxEvent sandbox = 1;
+    // Sandbox deletion observation.
+    WatchSandboxesDeletedEvent deleted = 2;
+    // Raw platform event correlated to a sandbox.
+    WatchSandboxesPlatformEvent platform_event = 3;
+  }
+}
+
+message EnsureWorkspaceRequest {
+  // Workspace identifier used by the gateway.
+  string workspace = 1;
+}
+
+message EnsureWorkspaceResponse {}
+
+message DeleteWorkspaceRequest {
+  // Workspace identifier used by the gateway.
+  string workspace = 1;
+}
+
+message DeleteWorkspaceResponse {}

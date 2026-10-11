@@ -48,6 +48,7 @@ out of scope for this repository and belong to the network egress gateway.
 cargo build                  # open-source build, no private features
 cargo nextest run            # full test suite
 cargo xtask dag-guard        # verify DAG invariants
+cargo xtask vendor-protos --check   # vendored protos match contracts/third_party/pins.toml
 cargo fmt --check && cargo clippy -- -D warnings && cargo deny check
 buf lint contracts/          # proto contracts
 ```
@@ -86,6 +87,7 @@ no changes to shared library or service crates are needed.
 ## Change rules
 
 - Wire contract change (`contracts/proto/`) — new proto package or `$id` if breaking; `buf breaking` must pass.
+- Third-party proto pin change (`contracts/third_party/pins.toml`) — run `cargo xtask vendor-protos`, build, and commit the exported files together with the pin; CI runs `cargo xtask vendor-protos --check`.
 - New crate — add to `[workspace] members`; run `cargo xtask dag-guard` before opening a pull request.
 - New or updated dependency — `cargo-deny --locked check licenses -D no-license-field` must pass (CI job `lint:cargo-deny-licenses`; version pinned by `CARGO_DENY_VERSION` in the CI configuration). Only MIT and Apache-2.0 are allowed globally. Any other license needs a per-crate exception in `deny.toml` that lists only the licenses the crate declares, a `licenses/selections.json` entry if its expression is new, and a regenerated `THIRD_PARTY_LICENSES.txt` (see `docs/third-party-licenses.md`). Never widen the global `allow` list to admit one crate; treat any `deny.toml` edit as a license decision.
 

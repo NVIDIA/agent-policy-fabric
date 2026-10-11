@@ -1,0 +1,18 @@
+# Third-party protobuf sources vendored under contracts/third_party/<name>/proto.
+# Each entry is exported with `buf export "<repository>#ref=<ref>,subdir=<subdir>"`.
+# Edit a ref here, then run `cargo xtask vendor-protos` and commit the result;
+# `cargo xtask vendor-protos --check` verifies the tree matches these pins.
+
+[[pin]]
+name = "openshell"
+repository = "https://github.com/NVIDIA/OpenShell.git"
+ref = "6648bd0c290efbc41ba131ee9831ee45cd431f94" # v0.1.2
+subdir = "proto"
+license = "Apache-2.0"
+
+[[pin]]
+name = "yaml-sigil"
+repository = "https://github.com/NVIDIA/yaml-sigil-spec.git"
+ref = "2d2cc300d4f716c9e18a8600c84907ba8107bf7e"
+subdir = "proto"
+license = "Apache-2.0"

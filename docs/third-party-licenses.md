@@ -48,6 +48,10 @@ cargo-deny --version
 cargo-deny --locked check licenses -D no-license-field
 ```
 
+## Vendored protobuf sources
+
+`contracts/third_party/` holds protobuf sources exported from other NVIDIA open-source projects at the revisions pinned in `contracts/third_party/pins.toml` (see its README). They are not Cargo packages, so they do not appear in `THIRD_PARTY_LICENSES.txt`; each file keeps its upstream Apache-2.0 header, and `cargo xtask vendor-protos --check` keeps the tree in step with the pins.
+
 ## Distribution
 
 The release build includes `LICENSE` and `THIRD_PARTY_LICENSES.txt` in `dist/`. Binary publishing jobs upload both files beside the binaries in the revision-specific and `latest` directories. Container recipes copy both files into `/usr/share/licenses/apf/`; demo and release targets inherit them.

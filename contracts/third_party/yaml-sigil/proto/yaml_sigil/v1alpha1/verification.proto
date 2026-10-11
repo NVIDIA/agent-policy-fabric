@@ -1,0 +1,209 @@
+// SPDX-FileCopyrightText: Copyright 2026 NVIDIA CORPORATION & AFFILIATES
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package yaml_sigil.v1alpha1;
+
+import "yaml_sigil/v1alpha1/yaml_sigil.proto";
+
+// Verification API IDL. The Markdown companion defines verifier semantics;
+// this file defines the service, messages, enums, fields, and field numbers.
+service VerificationService {
+  // Return this verifier's advertised profile and supported values.
+  rpc VerifierCapabilities(VerifierCapabilitiesRequest) returns (VerifierCapabilitiesResponse);
+
+  // Run the complete verification pipeline.
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+
+  // Return a boolean summary of PreVerify.
+  rpc CanPreVerify(CanPreVerifyRequest) returns (CanPreVerifyResponse);
+
+  // Run structural processing plus unauthenticated metadata extraction.
+  rpc PreVerify(PreVerifyRequest) returns (PreVerifyResponse);
+
+  // In-process and same-instance verification from a successful PreVerify
+  // result. This is not a public RPC deployment surface.
+  rpc VerifyFromPreVerify(VerifyFromPreVerifyRequest) returns (VerifyFromPreVerifyResponse);
+}
+
+message VerifierCapabilitiesRequest {}
+
+message VerifierCapabilitiesResponse {
+  // Inner-signature-document conformance profile.
+  ConformanceProfile conformance_profile = 1;
+
+  // Supported artifact forms. MUST NOT include FORM_UNSPECIFIED.
+  repeated Form supported_forms = 2;
+
+  // Implemented algorithms. MUST NOT include ALGORITHM_UNSPECIFIED.
+  repeated Algorithm supported_algorithms = 3;
+
+  bool supports_can_pre_verify = 4;
+  bool supports_pre_verify = 5;
+
+  // Free-form implementation diagnostics. Not a conformance input.
+  string implementation_name = 6;
+  string implementation_version = 7;
+}
+
+message VerifyRequest {
+  // Artifact bytes in the declared form.
+  bytes input_bytes = 1;
+
+  // Declared artifact form.
+  Form form = 2;
+
+  // Caller-supplied verifier configuration.
+  VerifierConfig config = 3;
+
+  // Opt in to implementation-specific decode observations.
+  bool include_parser_observations = 4;
+}
+
+message VerifyResponse {
+  oneof result {
+    VerifierStateResult state_result = 1;
+    InvocationError invocation_error = 2;
+  }
+}
+
+message VerifierStateResult {
+  VerifierState state = 1;
+
+  // Populated only when state is VERIFIER_STATE_VERIFIED.
+  bytes verified_payload_bytes = 2;
+
+  VerificationMetadata metadata = 3;
+}
+
+message VerifierConfig {
+  // Opaque deployment-defined public-key reference or material.
+  bytes public_key_handle = 1;
+
+  // Algorithm-specific verification parameters.
+  bytes algorithm_parameters = 2;
+
+  // Opaque deployment-defined trust-policy reference or material.
+  bytes trust_policy = 3;
+}
+
+message VerificationMetadata {
+  // Algorithm classified or attempted by the verifier, when available.
+  optional Algorithm algorithm_attempted = 1;
+
+  // Identity selected by local trust policy.
+  string trusted_key_identity = 2;
+
+  // Optional verifier-assigned diagnostic code.
+  string failure_code = 3;
+
+  // Artifact-derived values. These are unauthenticated diagnostics.
+  UntrustedDiagnostics untrusted_diagnostics = 4;
+
+  // Verifier-derived parser observations, populated only on request.
+  repeated string parser_observations = 5;
+}
+
+message UntrustedDiagnostics {
+  string raw_yaml_alg_text = 1;
+  string raw_keyid = 2;
+  bytes raw_signature_octets = 3;
+}
+
+message CanPreVerifyRequest {
+  bytes input_bytes = 1;
+  Form form = 2;
+  bool allow_unsigned = 3;
+}
+
+message CanPreVerifyResponse {
+  bool result = 1;
+}
+
+message PreVerifyRequest {
+  bytes input_bytes = 1;
+  Form form = 2;
+  bool include_parser_observations = 3;
+}
+
+message PreVerifyResponse {
+  PreVerifyOutcome outcome = 1;
+
+  // Populated only when outcome is PRE_VERIFY_OUTCOME_OK.
+  bytes unverified_payload_bytes = 2;
+
+  // Populated only when outcome is PRE_VERIFY_OUTCOME_OK.
+  UnverifiedSignature unverified_signature = 3;
+
+  // Verifier-derived parser observations, populated only on request.
+  repeated string parser_observations = 4;
+}
+
+message UnverifiedSignature {
+  Algorithm alg = 1;
+  optional string keyid = 2;
+  bytes signature_octets = 3;
+}
+
+message VerifyFromPreVerifyRequest {
+  // Successful PreVerify result produced by the same verifier instance/profile.
+  PreVerifyResponse pre_verify_result = 1;
+
+  VerifierConfig config = 2;
+}
+
+message VerifyFromPreVerifyResponse {
+  oneof result {
+    VerifierStateResult state_result = 1;
+    InvocationError invocation_error = 2;
+  }
+}
+
+message InvocationError {
+  InvocationErrorCategory category = 1;
+  string detail = 2;
+}
+
+enum Form {
+  FORM_UNSPECIFIED = 0;
+  FORM_YAML = 1;
+  FORM_PROTOBUF = 2;
+}
+
+enum ConformanceProfile {
+  CONFORMANCE_PROFILE_UNSPECIFIED = 0;
+  CONFORMANCE_PROFILE_STRICT = 1;
+  CONFORMANCE_PROFILE_PERMISSIVE = 2;
+  CONFORMANCE_PROFILE_SIGNATURE_STRICT = 3;
+}
+
+enum VerifierState {
+  VERIFIER_STATE_UNSPECIFIED = 0;
+  VERIFIER_STATE_VERIFIED = 1;
+  VERIFIER_STATE_UNSIGNED = 2;
+  VERIFIER_STATE_MALFORMED_ATTEMPTED_SIGNED = 3;
+  VERIFIER_STATE_SIGNED_BUT_ALGORITHM_UNSUPPORTED = 4;
+  VERIFIER_STATE_SIGNED_BUT_FAILED_VERIFICATION = 5;
+}
+
+enum PreVerifyOutcome {
+  PRE_VERIFY_OUTCOME_UNSPECIFIED = 0;
+  PRE_VERIFY_OUTCOME_OK = 1;
+  PRE_VERIFY_OUTCOME_UNSIGNED = 2;
+  PRE_VERIFY_OUTCOME_STRUCTURAL_FAILURE = 3;
+  PRE_VERIFY_OUTCOME_METADATA_PARSE_FAILURE = 4;
+}
+
+enum InvocationErrorCategory {
+  INVOCATION_ERROR_CATEGORY_UNSPECIFIED = 0;
+  INVOCATION_ERROR_CATEGORY_INVALID_ALGORITHM_PARAMETERS = 1;
+  INVOCATION_ERROR_CATEGORY_KEY_RESOLUTION_FAILURE = 2;
+  INVOCATION_ERROR_CATEGORY_TRUST_POLICY_CONFIGURATION_ERROR = 3;
+  INVOCATION_ERROR_CATEGORY_INVALID_PRE_VERIFY_RESULT = 4;
+
+  // IDL request-shape failure for FORM_UNSPECIFIED or unsupported artifact
+  // form. In gRPC, this is INVALID_ARGUMENT. This is not an artifact state, a
+  // PreVerifyOutcome, or a CanPreVerify false result.
+  INVOCATION_ERROR_CATEGORY_INVALID_OR_UNSUPPORTED_FORM = 5;
+}

@@ -1,0 +1,143 @@
+// SPDX-FileCopyrightText: Copyright 2026 NVIDIA CORPORATION & AFFILIATES
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package yaml_sigil.v1alpha1;
+
+// Transcription API IDL. Transcription composes and decomposes the outer YAML
+// or protobuf envelope while treating the signature carrier as opaque bytes.
+service TranscriptionService {
+  // Return the typed values this transcriber accepts.
+  rpc TranscriberCapabilities(TranscriberCapabilitiesRequest) returns (TranscriberCapabilitiesResponse);
+
+  // Assemble an envelope-form artifact from payload and signature-carrier
+  // bytes.
+  rpc Compose(ComposeRequest) returns (ComposeResponse);
+
+  // Recover payload and signature-carrier bytes from an envelope-form artifact.
+  rpc Decompose(DecomposeRequest) returns (DecomposeResponse);
+}
+
+message TranscriberCapabilitiesRequest {}
+
+message TranscriberCapabilitiesResponse {
+  // Supported envelope forms. MUST NOT include TRANSCRIPTION_FORM_UNSPECIFIED.
+  repeated TranscriptionForm supported_forms = 1;
+
+  // Supported protobuf outer-envelope conformance modes. YAML-only
+  // transcribers MAY leave this empty.
+  repeated OuterConformance supported_outer_conformances = 2;
+
+  // True only when YAML Compose emits the LF marker form.
+  bool emits_canonical_yaml_envelope = 3;
+
+  // Free-form implementation diagnostics. Not a conformance input.
+  string implementation_name = 4;
+  string implementation_version = 5;
+}
+
+message ComposeRequest {
+  // Opaque payload bytes. Compose carries them verbatim.
+  bytes payload = 1;
+
+  // Opaque signature-carrier bytes. Compose carries them verbatim at the
+  // form-specific location.
+  bytes signature_carrier = 2;
+
+  // Caller-selected envelope form.
+  TranscriptionForm form = 3;
+}
+
+message ComposeResponse {
+  oneof result {
+    ComposeSuccess success = 1;
+    TranscriberInvocationError invocation_error = 2;
+    TranscriberError error = 3;
+  }
+}
+
+message ComposeSuccess {
+  // Serialized envelope bytes in the requested form.
+  bytes artifact = 1;
+
+  // Echoes the requested envelope form.
+  TranscriptionForm form = 2;
+}
+
+message DecomposeRequest {
+  // Envelope-form artifact bytes.
+  bytes artifact = 1;
+
+  // Declared envelope form.
+  TranscriptionForm form = 2;
+
+  // Protobuf outer-envelope conformance mode. For non-protobuf forms this MUST
+  // be OUTER_CONFORMANCE_UNSPECIFIED.
+  OuterConformance outer_conformance = 3;
+}
+
+message DecomposeResponse {
+  oneof result {
+    DecomposeStructuralResult structural_result = 1;
+    TranscriberInvocationError invocation_error = 2;
+  }
+}
+
+message DecomposeStructuralResult {
+  DecomposeOutcome outcome = 1;
+
+  // Populated only when outcome is DECOMPOSE_OUTCOME_OK.
+  bytes payload = 2;
+
+  // Populated only when outcome is DECOMPOSE_OUTCOME_OK.
+  bytes signature_carrier = 3;
+
+  // Optional implementation-specific diagnostic. Not normative.
+  string detail = 4;
+}
+
+message TranscriberInvocationError {
+  TranscriberInvocationErrorCategory category = 1;
+  string detail = 2;
+}
+
+message TranscriberError {
+  TranscriberErrorCategory category = 1;
+  string detail = 2;
+}
+
+enum TranscriptionForm {
+  TRANSCRIPTION_FORM_UNSPECIFIED = 0;
+  TRANSCRIPTION_FORM_YAML = 1;
+  TRANSCRIPTION_FORM_PROTOBUF = 2;
+}
+
+// Protobuf outer-envelope conformance mode for Decompose.
+enum OuterConformance {
+  OUTER_CONFORMANCE_UNSPECIFIED = 0;
+  OUTER_CONFORMANCE_STRICT = 1;
+  OUTER_CONFORMANCE_SIGNATURE_STRICT = 2;
+}
+
+enum DecomposeOutcome {
+  DECOMPOSE_OUTCOME_UNSPECIFIED = 0;
+  DECOMPOSE_OUTCOME_OK = 1;
+  DECOMPOSE_OUTCOME_UNSIGNED = 2;
+  DECOMPOSE_OUTCOME_MALFORMED_ATTEMPTED_SIGNED = 3;
+}
+
+enum TranscriberInvocationErrorCategory {
+  TRANSCRIBER_INVOCATION_ERROR_CATEGORY_UNSPECIFIED = 0;
+  TRANSCRIBER_INVOCATION_ERROR_CATEGORY_INVALID_OR_UNSUPPORTED_FORM = 1;
+  TRANSCRIBER_INVOCATION_ERROR_CATEGORY_INVALID_OR_UNSUPPORTED_OUTER_CONFORMANCE = 2;
+}
+
+enum TranscriberErrorCategory {
+  TRANSCRIBER_ERROR_CATEGORY_UNSPECIFIED = 0;
+  TRANSCRIBER_ERROR_CATEGORY_INVALID_PAYLOAD_BYTES = 1;
+
+  // YAML Compose received a carrier containing a constrained marker at a
+  // line-start position.
+  TRANSCRIBER_ERROR_CATEGORY_INVALID_SIGNATURE_CARRIER = 2;
+}
