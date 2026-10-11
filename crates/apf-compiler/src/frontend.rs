@@ -1469,8 +1469,7 @@ spec:
 
     #[test]
     fn policy_rule_role_control_parsed() {
-        let yaml = POLICY_RULE.replace("language: cedar", "language: cedar");
-        let mut rule = parse_policy_rule(yaml.as_bytes()).expect("must parse");
+        let mut rule = parse_policy_rule(POLICY_RULE.as_bytes()).expect("must parse");
         if let Some(spec) = rule.spec.as_mut() {
             spec.role = apf_policy_eval::PolicyRuleRole::Control as i32;
         }
