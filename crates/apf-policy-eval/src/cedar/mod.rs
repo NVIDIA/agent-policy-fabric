@@ -35,8 +35,16 @@
 //! the result's mutations, verdict, and findings; on deny, findings from the
 //! fired forbids accompany the deny. With zero effects and findings the
 //! result is unchanged.
+//!
+//! A `forbid` that fails to evaluate, typically because it reads an attribute
+//! the request does not carry, denies the request. Cedar would otherwise drop
+//! the erroring policy from the decision, turning a missing attribute into a
+//! grant. A `permit` that fails to evaluate grants nothing, as in plain Cedar.
 
-use cedar_policy::{Authorizer, Context, Decision, Entities, Request, Response};
+use cedar_policy::{
+    AuthorizationError, Authorizer, Context, Decision, Effect, Entities, PolicyId, Request,
+    Response,
+};
 use serde_json::{Map, Value};
 
 use crate::{EvalError, EvalInput, EvalResult, Evaluator, Finding};
@@ -200,6 +208,16 @@ impl Evaluator for CedarEvaluator {
             )
             .map_err(|e| EvalError::Engine(format!("cedar request: {e}")))?;
             let response = authorizer.is_authorized(&request, &rule.policies, &Entities::empty());
+            if let Some((policy_id, error)) = failed_forbid(rule, &response) {
+                return Ok(EvalResult {
+                    allow: false,
+                    deny_reason: format!(
+                        "{}: evaluation error: {error}",
+                        policy_label(rule, policy_id)
+                    ),
+                    ..EvalResult::default()
+                });
+            }
             if response.decision() == Decision::Deny {
                 // Explicit forbid: stop immediately regardless of rule role.
                 // Default-deny (reason() empty) means this rule is not
@@ -299,23 +317,46 @@ fn missing_source_deny(missing: &MissingSource) -> EvalResult {
     }
 }
 
-/// Deny reason: `<rule>/<@id or policy id>` of the first determining `forbid`,
-/// or `<rule>/no permit matched` when the deny came from Cedar's default.
-/// If the `@id` annotation already contains `/` it is used verbatim (the author
-/// embedded the rule name prefix in the id, e.g. `@id("security-content-gate/deny-secret")`).
+/// The first `forbid` in the rule that failed to evaluate for this request,
+/// with the evaluation error behind it.
+fn failed_forbid<'a>(
+    rule: &CompiledRule,
+    response: &'a Response,
+) -> Option<(&'a PolicyId, &'a cedar_policy::EvaluationError)> {
+    response
+        .diagnostics()
+        .errors()
+        .map(|error| {
+            let AuthorizationError::PolicyEvaluationError(error) = error;
+            (error.policy_id(), error.inner())
+        })
+        .find(|(policy_id, _)| {
+            rule.policies
+                .policy(policy_id)
+                .is_some_and(|policy| policy.effect() == Effect::Forbid)
+        })
+}
+
+/// Policy label `<rule>/<@id or policy id>`. If the `@id` annotation already
+/// contains `/` it is used verbatim (the author embedded the rule name prefix
+/// in the id, e.g. `@id("security-content-gate/deny-secret")`).
+fn policy_label(rule: &CompiledRule, policy_id: &PolicyId) -> String {
+    let label = rule
+        .policies
+        .annotation(policy_id, "id")
+        .map_or_else(|| policy_id.to_string(), str::to_string);
+    if label.contains('/') {
+        label
+    } else {
+        format!("{}/{label}", rule.name)
+    }
+}
+
+/// Deny reason: the label of the first determining `forbid`, or
+/// `<rule>/no permit matched` when the deny came from Cedar's default.
 fn deny_reason(rule: &CompiledRule, response: &Response) -> String {
     match response.diagnostics().reason().next() {
-        Some(policy_id) => {
-            let label = rule
-                .policies
-                .annotation(policy_id, "id")
-                .map_or_else(|| policy_id.to_string(), str::to_string);
-            if label.contains('/') {
-                label.to_string()
-            } else {
-                format!("{}/{label}", rule.name)
-            }
-        }
+        Some(policy_id) => policy_label(rule, policy_id),
         None => format!("{}/no permit matched", rule.name),
     }
 }
@@ -1111,6 +1152,136 @@ forbid(principal, action, resource) when { context.args.folder == "archive" };
         );
         assert_eq!(deny.verdict, crate::Verdict::Allow);
         assert!(deny.findings.is_empty());
+    }
+
+    #[test]
+    fn forbid_that_fails_to_evaluate_denies() {
+        let rule = PolicyRuleDoc {
+            name: "guard".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action, resource);
+
+@id("needs-approval")
+forbid(principal, action, resource) when { context.args.approved == "no" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = evaluator(&[rule]);
+
+        // The argument is absent: the forbid cannot evaluate, so the request
+        // is denied rather than the forbid being dropped.
+        let r = ev
+            .evaluate(input("gitlab", "merge_request_merge", &[]))
+            .unwrap();
+        assert!(!r.allow);
+        assert!(
+            r.deny_reason
+                .starts_with("guard/needs-approval: evaluation error: "),
+            "got: {}",
+            r.deny_reason
+        );
+        assert!(r.deny_reason.contains("approved"), "got: {}", r.deny_reason);
+
+        // With the argument present the forbid evaluates normally.
+        let r = ev
+            .evaluate(input(
+                "gitlab",
+                "merge_request_merge",
+                &[("approved", "yes")],
+            ))
+            .unwrap();
+        assert!(r.allow, "unexpected deny: {}", r.deny_reason);
+        let r = ev
+            .evaluate(input(
+                "gitlab",
+                "merge_request_merge",
+                &[("approved", "no")],
+            ))
+            .unwrap();
+        assert!(!r.allow);
+        assert_eq!(r.deny_reason, "guard/needs-approval");
+    }
+
+    #[test]
+    fn forbid_error_denies_even_after_an_earlier_rule_allowed() {
+        let allow_all = PolicyRuleDoc {
+            name: "open".to_string(),
+            schema: None,
+            definition: "permit(principal, action, resource);".to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let guard = PolicyRuleDoc {
+            name: "guard".to_string(),
+            schema: None,
+            definition: r#"
+@id("needs-approval")
+forbid(principal, action, resource) when { context.args.approved == "no" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Control,
+        };
+        let ev = evaluator(&[allow_all, guard]);
+        let r = ev
+            .evaluate(input("gitlab", "merge_request_merge", &[]))
+            .unwrap();
+        assert!(!r.allow);
+        assert!(
+            r.deny_reason
+                .starts_with("guard/needs-approval: evaluation error"),
+            "got: {}",
+            r.deny_reason
+        );
+    }
+
+    #[test]
+    fn guarded_forbid_is_unaffected_by_a_missing_attribute() {
+        let rule = PolicyRuleDoc {
+            name: "guard".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action, resource);
+
+@id("needs-approval")
+forbid(principal, action, resource)
+when { context.args has approved && context.args.approved == "no" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = evaluator(&[rule]);
+        let r = ev
+            .evaluate(input("gitlab", "merge_request_merge", &[]))
+            .unwrap();
+        assert!(r.allow, "unexpected deny: {}", r.deny_reason);
+    }
+
+    #[test]
+    fn permit_that_fails_to_evaluate_grants_nothing() {
+        let rule = PolicyRuleDoc {
+            name: "gitlab-grants".to_string(),
+            schema: None,
+            definition: r#"
+permit(principal, action, resource) when { context.args.approved == "yes" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = evaluator(&[rule]);
+        let r = ev
+            .evaluate(input("gitlab", "merge_request_merge", &[]))
+            .unwrap();
+        assert!(!r.allow);
+        assert_eq!(
+            r.deny_reason,
+            "gitlab-grants: conditions not met for gitlab::merge_request_merge"
+        );
     }
 
     #[test]
