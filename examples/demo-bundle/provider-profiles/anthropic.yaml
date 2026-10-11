@@ -5,7 +5,7 @@ kind: Provider
 metadata:
   name: anthropic
   title: Anthropic
-  description: Anthropic Messages API.
+  description: Anthropic Messages API via the NVIDIA API Catalog (integrate.api.nvidia.com).
 spec:
   type: anthropic
   endpoints:

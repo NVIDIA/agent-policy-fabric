@@ -710,7 +710,7 @@ spec:
       style: header
       header: x-api-key
   endpoints:
-    - { host: api.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+    - { host: integrate.api.nvidia.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
     - { host: statsig.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
     - { host: sentry.io, port: 443, protocol: rest, access: read-write, enforcement: enforce }
   binaries: [/usr/bin/claude, /usr/local/bin/claude]
@@ -730,7 +730,7 @@ credentials:
 discovery:
   credentials: [api_key]
 endpoints:
-  - { host: api.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+  - { host: integrate.api.nvidia.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
   - { host: statsig.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
   - { host: sentry.io, port: 443, protocol: rest, access: read-write, enforcement: enforce }
 binaries: [/usr/bin/claude, /usr/local/bin/claude]

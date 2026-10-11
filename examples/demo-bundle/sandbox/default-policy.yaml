@@ -34,7 +34,7 @@ spec:
     anthropic:
       name: anthropic
       endpoints:
-        - host: api.anthropic.com
+        - host: integrate.api.nvidia.com
           port: 443
           protocol: rest
           access: read-write

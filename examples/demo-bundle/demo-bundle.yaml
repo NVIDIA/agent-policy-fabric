@@ -2,14 +2,10 @@
 #
 # Cedar demo bundle — PolicyBundle envelope.
 #
-# Regenerate signed artifact:
-#   cargo run -p policy-service --bin rpv-genfixture -- \
-#     --template examples/cedar-demo-bundle/cedar-demo-bundle.template.yaml \
-#     --out examples/cedar-demo-bundle/cedar-demo-bundle.yaml \
-#     --key examples/dev-keys/apf-dev.seed \
-#     --base-dir examples/cedar-demo-bundle
-#
-# Run from the runtime-policy-verifier/ directory.
+# Regenerate the signed artifact after editing any document in this directory:
+#   mise run sign-bundle
+# which runs `apf-compile genfixture` with the in-tree development key
+# (examples/dev-keys/apf-dev.seed).
 
 apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyBundle
@@ -24,17 +20,17 @@ expires_at: "2099-12-31T00:00:00Z"
 manifest:
   # Network and provider governance
   - path: sandbox/default-policy.yaml
-    sha256: f4b9bb6abcc89c2e0800b71f29fd961f793ab152653e958a661da72827b71c5e
+    sha256: ad711ac66e6731c0461e828ce338a4f7f163331611ee2dfe8a01714626945f09
   - path: provider-profiles/github.yaml
     sha256: 622e83a44b8038069d4d6c27cf411fcd33a50a2755dd3dc3de97224f9a2ac394
   - path: provider-profiles/slack.yaml
     sha256: 9475f90b37806a1e9c753fe472a671b046377169c54120acf9588d0bde185af0
   - path: provider-profiles/nvidia-inference.yaml
-    sha256: 96edff37bcc4913b769cd69e1d55bfb20c7af1345b478c6975728c555986f74e
+    sha256: d00fc82ec7c7da1569f9e63449be68b61faff404aa7b6377163094e47bcd0683
   - path: provider-profiles/claude-code.yaml
-    sha256: c8f4de625132c6524caebdaf47f781b2d220a11884ff1a6fe2fd1bacd27f4768
+    sha256: c5039056afe6d034ef29fc3101cb2191a90c77488f1cc124b2c6b8ccd0b805e5
   - path: provider-profiles/anthropic.yaml
-    sha256: 72689879b93f322eeb6db39c9a28053cea6d3d31436f65c338f12bd561e655a6
+    sha256: d8549dd66f16ca8f2f3d225b2e7937c57b5b37804f8e24763aef3f39b145ab87
 
   # Stage 1 — detection annotators
   - path: annotators/secret-detector.yaml
@@ -56,14 +52,14 @@ manifest:
   - path: rules/github-grants.yaml
     sha256: c6abdb3a3b4225b505973759eb7765c18268ef8581c08be2e086f050b65bc320
   - path: rules/slack-grants.yaml
-    sha256: a91dcc79efab5a543b8ae367b7417c9fa44ed9b703e36057cda68f0d700894aa
+    sha256: 977c8bf7b6168cb8c7ec7621b7a9a6b6c8347eab476374d68b00e4c69aeff6e3
   - path: rules/linear-grants.yaml
-    sha256: 1c9f58f54f3402375303a50b964ce58aa68aa47d7dc547c646e1542ea2467136
+    sha256: 126af20103febf2ec60c244646f4d63a94b67023624953ae482a4e2558b9f69d
 
   - path: rules/security-content-gate.yaml
     sha256: 8e852fe5680e9344adce75dde8f942336cf03e4a2b1bbf4cb1fe263182513ef1
 ---
 schema: YamlSigilSignature.v1alpha1
 alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
-keyid: apf-dev
-signature: WKcrHb_rkSIy_lXV_oiNhZ71Lj1r-XM0sBq0Qa9-Osmd3eAW-2A60rH7JjR2w0Y977nMnXxF0oor5edQXbhkBg
+keyid: "apf-dev"
+signature: 8jykFYf1K3U0meGjX4BBw28szBQ6bY9vVtikaIUvpENgz8DoPfUdRBTW4rS0lX4vw-QsPSoyf21Pja26T5mnCg

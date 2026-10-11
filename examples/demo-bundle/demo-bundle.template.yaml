@@ -2,14 +2,10 @@
 #
 # Cedar demo bundle — PolicyBundle envelope.
 #
-# Regenerate signed artifact:
-#   cargo run -p policy-service --bin rpv-genfixture -- \
-#     --template examples/cedar-demo-bundle/cedar-demo-bundle.template.yaml \
-#     --out examples/cedar-demo-bundle/cedar-demo-bundle.yaml \
-#     --key examples/dev-keys/apf-dev.seed \
-#     --base-dir examples/cedar-demo-bundle
-#
-# Run from the runtime-policy-verifier/ directory.
+# Regenerate the signed artifact after editing any document in this directory:
+#   mise run sign-bundle
+# which runs `apf-compile genfixture` with the in-tree development key
+# (examples/dev-keys/apf-dev.seed).
 
 apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
 kind: PolicyBundle
