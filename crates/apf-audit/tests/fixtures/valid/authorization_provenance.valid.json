@@ -1,0 +1,51 @@
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "evt_authz_provenance",
+  "timestamp": "2026-10-10T18:04:11.204Z",
+  "event_type": "authorization",
+  "correlation_id": "corr_01HY7AM70ST8TKR7X6JGEDW5Q9",
+  "enforcement_point_id": "apf-policy-gateway:pdp",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-policy-gateway",
+    "version": "0.1.0",
+    "instance_id": "apf-policy-gateway:local"
+  },
+  "session_id": "sb-7f2e",
+  "bundle_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "policy_revision": 3,
+  "trust_root_id": "apf-policy-service:signing",
+  "resource": {
+    "type": "openshell.egress",
+    "id": "gitlab.example.com"
+  },
+  "verb": "tool.gitlab_merge_request_merge",
+  "decision": "allow",
+  "decision_id": "dec_01HY7AM70ST8TKR7X6JGEDW5R1",
+  "reason_code": "middleware.allowed",
+  "extensions": {
+    "x_apf_pip": {
+      "providers": [
+        {
+          "domain": "change",
+          "provider": "change-management",
+          "status": "found",
+          "degraded": false,
+          "cached": true,
+          "age_seconds": 41,
+          "evidence_ref": "CHG0012",
+          "latency_ms": 0
+        },
+        {
+          "domain": "identity",
+          "provider": "identity",
+          "status": "timeout",
+          "degraded": true,
+          "cached": false,
+          "age_seconds": 0,
+          "latency_ms": 20
+        }
+      ]
+    }
+  }
+}

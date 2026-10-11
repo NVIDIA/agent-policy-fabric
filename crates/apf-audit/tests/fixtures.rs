@@ -18,6 +18,7 @@ const EXPECTED_VALID_FIXTURES: &[&str] = &[
     "authorization_allow.valid.json",
     "authorization_deny.valid.json",
     "authorization_findings.valid.json",
+    "authorization_provenance.valid.json",
     "config_governance.valid.json",
     "credential_issuance.valid.json",
     "credential_issuance_refused.valid.json",

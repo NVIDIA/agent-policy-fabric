@@ -42,4 +42,4 @@ pub use model::{
 pub use redaction::{RedactionError, RedactionProfile, redact};
 pub use sanitization::{SanitizationError, SanitizationGuard};
 pub use subscriber::{ApfObservation, ApfObservationKind, ApfObservationSink, ApfTracingLayer};
-pub use validation::{ValidationError, ValidationResult};
+pub use validation::{ValidationError, ValidationResult, has_forbidden_key_name};

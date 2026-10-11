@@ -197,7 +197,7 @@ fn require(errors: &mut Vec<String>, condition: bool, message: &str) {
     }
 }
 
-pub(crate) fn has_forbidden_key_name(key: &str) -> bool {
+pub fn has_forbidden_key_name(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
     [
         "token",

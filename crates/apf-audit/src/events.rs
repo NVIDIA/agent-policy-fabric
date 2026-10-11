@@ -46,6 +46,8 @@ pub struct AuthorizationEvent {
     pub findings: Vec<Finding>,
     pub verdict: Option<Verdict>,
     pub effects: Option<Effects>,
+    /// Deployment-specific `x_` extensions, such as provider provenance.
+    pub extensions: Option<std::collections::BTreeMap<String, RedactedObject>>,
 }
 
 impl AuthorizationEvent {
@@ -69,6 +71,7 @@ impl AuthorizationEvent {
             findings: Vec::new(),
             verdict: None,
             effects: None,
+            extensions: None,
         }
     }
 
@@ -125,6 +128,17 @@ impl AuthorizationEvent {
         self.effects = (!effects.is_empty()).then_some(effects);
         self
     }
+
+    /// Attach one `x_` extension object. The key must match the schema's
+    /// extension namespace and the value follows the redacted-object rules;
+    /// both are checked when the event is built.
+    #[must_use]
+    pub fn with_extension(mut self, key: impl Into<String>, value: RedactedObject) -> Self {
+        self.extensions
+            .get_or_insert_with(Default::default)
+            .insert(key.into(), value);
+        self
+    }
 }
 
 impl TypedAuditEvent for AuthorizationEvent {
@@ -147,6 +161,7 @@ impl TypedAuditEvent for AuthorizationEvent {
         }
         event.verdict = self.verdict;
         event.effects = self.effects;
+        event.extensions = self.extensions;
         validate(event)
     }
 }
