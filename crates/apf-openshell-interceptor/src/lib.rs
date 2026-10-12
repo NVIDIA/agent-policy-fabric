@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod bindings;
 pub mod context;
+pub mod driver_config;
 pub mod proto;
 pub mod reconciler;
 pub mod refresher;

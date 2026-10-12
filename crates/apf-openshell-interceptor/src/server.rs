@@ -27,6 +27,7 @@ struct PolicyIdentity<'a> {
 }
 use crate::bindings;
 use crate::context;
+use crate::driver_config;
 use crate::patches::{self, PatchError};
 use crate::proto::{
     DescribeRequest, GatewayInterceptor, GatewayInterceptorServer, InterceptorEvaluation,
@@ -953,6 +954,53 @@ impl GatewayInterceptorService {
                     &eval.binding_id,
                 )));
             }
+        }
+
+        // Driver-config admission (harness mounts). Evaluated here on the final,
+        // post-injection request, so a mount slipped in after inject is still
+        // caught. Deny-by-default: until the signed SandboxPolicy carries a
+        // driverConfig allowlist, any present driver config is refused.
+        let driver_cfg = context::driver_config(&op_json)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let driver_decision = driver_config::evaluate(
+            // TODO(driver-config): source the allowlist and the gateway's
+            // compute driver from the signed SandboxPolicy once policy-service
+            // vends them. `None` holds the deny-by-default contract until then.
+            None,
+            &driver_cfg,
+            context::is_template_based(&op_json),
+            &context::principal_roles(&eval),
+            "",
+        );
+        if !driver_decision.allowed {
+            warn!(
+                correlation_id,
+                sandbox_id,
+                reason = driver_decision.reason_code,
+                "CreateSandbox VALIDATE denied: {}",
+                driver_decision.detail
+            );
+            self.record_validation(
+                &eval,
+                sandbox_id,
+                agent_type,
+                correlation_id,
+                PolicyIdentity {
+                    digest: &claims.apf_document_digest,
+                    revision: Some(claims.apf_version).filter(|v| *v != 0),
+                },
+                driver_decision.reason_code,
+                Outcome::Refused {
+                    detail: &driver_decision.detail,
+                },
+            );
+            return Ok(Response::new(deny_with_context(
+                &driver_decision.detail,
+                correlation_id,
+                policy_digest,
+                &eval.binding_id,
+            )));
         }
 
         info!(correlation_id, sandbox_id, "CreateSandbox VALIDATE allowed");

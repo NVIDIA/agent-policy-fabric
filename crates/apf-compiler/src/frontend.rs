@@ -1132,6 +1132,9 @@ fn to_spec(raw: SpecDef) -> ir::SandboxPolicySpec {
                 (key, ir_rule)
             })
             .collect(),
+        // Authoring-side lowering of the driver-config allowlist is a
+        // follow-up; the IR field exists so the interceptor can enforce it.
+        driver_config: None,
     }
 }
 
