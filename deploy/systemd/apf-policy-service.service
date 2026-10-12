@@ -1,6 +1,6 @@
 [Unit]
 Description=APF Policy Service (PAP)
-Documentation=https://github.com/NVIDIA/APF
+Documentation=https://github.com/NVIDIA/agent-policy-fabric
 After=network.target
 StartLimitIntervalSec=60s
 StartLimitBurst=5

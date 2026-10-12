@@ -1,6 +1,6 @@
 [Unit]
 Description=APF Policy Gateway (host-side PDP)
-Documentation=https://github.com/NVIDIA/APF
+Documentation=https://github.com/NVIDIA/agent-policy-fabric
 After=network.target apf-policy-service.service
 Wants=apf-policy-service.service
 StartLimitIntervalSec=60s

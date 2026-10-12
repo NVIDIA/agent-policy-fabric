@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/NVIDIA/APF/contracts/jsonschema/policy-bundle.v1alpha1.schema.json",
+  "$id": "https://github.com/NVIDIA/agent-policy-fabric/contracts/jsonschema/policy-bundle.v1alpha1.schema.json",
   "title": "APF PolicyBundle v1alpha1",
   "type": "object",
   "additionalProperties": false,
