@@ -101,6 +101,18 @@ pub fn driver_config(op: &JsonValue) -> Option<&JsonValue> {
         .or_else(|| template.get("driverConfig"))
 }
 
+/// The driver-config envelope on a `CreateSandboxTemplate` request, if present.
+///
+/// Lives at `template.spec.driver_config` on a `CreateSandboxTemplateRequest`.
+/// Governing it here closes the gap where a `CreateSandbox` references a
+/// template by name and the template's driver_config is otherwise invisible.
+#[must_use]
+pub fn driver_config_template(op: &JsonValue) -> Option<&JsonValue> {
+    let spec = op.pointer("/template/spec")?;
+    spec.get("driver_config")
+        .or_else(|| spec.get("driverConfig"))
+}
+
 /// Whether the create resolves a workload template (by name).
 ///
 /// A template's driver config cannot be inspected before it is resolved, so a

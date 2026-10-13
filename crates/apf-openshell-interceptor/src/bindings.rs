@@ -25,6 +25,7 @@ pub fn manifest() -> InterceptorManifest {
         bindings: vec![
             sandbox_policy_inject(),
             sandbox_policy_verify(),
+            sandbox_template_verify(),
             sandbox_policy_refresh(),
             config_policy_verify(),
             provider_instance_create_verify(),
@@ -82,6 +83,18 @@ fn sandbox_policy_verify() -> InterceptorBinding {
         id: "sandbox-policy-verify".to_string(),
         selector: Some(InterceptorSelector {
             rpc: "openshell.v1.OpenShell/CreateSandbox".to_string(),
+            ..Default::default()
+        }),
+        phases: vec![GatewayInterceptorPhase::Validate as i32],
+        failure_policy: "fail_closed".to_string(),
+    }
+}
+
+fn sandbox_template_verify() -> InterceptorBinding {
+    InterceptorBinding {
+        id: "sandbox-template-verify".to_string(),
+        selector: Some(InterceptorSelector {
+            rpc: "openshell.v1.OpenShell/CreateSandboxTemplate".to_string(),
             ..Default::default()
         }),
         phases: vec![GatewayInterceptorPhase::Validate as i32],
@@ -214,8 +227,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_fourteen_bindings() {
-        assert_eq!(manifest().bindings.len(), 14);
+    fn manifest_has_fifteen_bindings() {
+        assert_eq!(manifest().bindings.len(), 15);
+    }
+
+    #[test]
+    fn sandbox_template_verify_is_validate_fail_closed() {
+        let m = manifest();
+        let b = m
+            .bindings
+            .iter()
+            .find(|b| b.id == "sandbox-template-verify")
+            .expect("CreateSandboxTemplate binding present");
+        assert_eq!(
+            b.selector.as_ref().unwrap().rpc,
+            "openshell.v1.OpenShell/CreateSandboxTemplate"
+        );
+        assert_eq!(b.phases, vec![GatewayInterceptorPhase::Validate as i32]);
+        assert_eq!(b.failure_policy, "fail_closed");
     }
 
     #[test]

@@ -1035,6 +1035,111 @@ impl GatewayInterceptorService {
         Ok(Response::new(allow()))
     }
 
+    /// Handle `VALIDATE` for `CreateSandboxTemplate`.
+    ///
+    /// A `CreateSandbox` may reference a workload template by name, in which case
+    /// the template's `driver_config` is invisible to the CreateSandbox check.
+    /// Governing it here — where the template's driver config IS visible — closes
+    /// that gap: the same signed allowlist admits only the sanctioned mount.
+    async fn handle_sandbox_template_verify(
+        &self,
+        eval: InterceptorEvaluation,
+    ) -> Result<Response<InterceptorResult>, Status> {
+        let op_json =
+            context::operation_struct(&eval).map_or(serde_json::Value::Null, util::struct_to_json);
+        let correlation_id = uuid::Uuid::new_v4().to_string();
+        let user_subject = eval.principal.get("subject").cloned().unwrap_or_default();
+
+        let driver_cfg = context::driver_config_template(&op_json)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        // Nothing to govern: a template with no driver config is unaffected.
+        if !driver_config::is_present(&driver_cfg) {
+            return Ok(Response::new(allow()));
+        }
+
+        // The template-create path carries no injected provenance, so fetch the
+        // signed policy and recover the (signed) driver-config rule from its
+        // verified provenance JWT. Absent/invalid ⇒ deny-by-default.
+        let rule = match self
+            .policy_service
+            .clone()
+            .get_document(
+                self.config.document_kind.clone(),
+                self.config.document_name.clone(),
+                None,
+            )
+            .await
+        {
+            Ok(doc) if !doc.provenance_token.is_empty() => {
+                match verify_jwt_internal(
+                    &self.config.verifying_key.read().unwrap().clone(),
+                    &doc.provenance_token,
+                ) {
+                    Ok(claims) => driver_config::decode_rule(claims.apf_driver_config.as_deref()),
+                    Err(()) => None,
+                }
+            }
+            _ => None,
+        };
+
+        // `false`: this IS the template's creation, not a template-referencing
+        // sandbox create — so `deny_templates` does not apply here; we check the
+        // mount shape, role, and gateway driver directly.
+        let decision = driver_config::evaluate(
+            rule.as_ref(),
+            &driver_cfg,
+            false,
+            &context::principal_roles(&eval),
+            &self.config.gateway_compute_driver,
+        );
+
+        let (reason_code, outcome) = if decision.allowed {
+            (
+                "interceptor.validate_sandbox_template_allowed",
+                Outcome::Allowed,
+            )
+        } else {
+            warn!(
+                correlation_id,
+                reason = decision.reason_code,
+                "CreateSandboxTemplate VALIDATE denied: {}",
+                decision.detail
+            );
+            (
+                decision.reason_code,
+                Outcome::Refused {
+                    detail: &decision.detail,
+                },
+            )
+        };
+        self.record_governance_event(
+            "interceptor.validate_sandbox_template",
+            "openshell.sandbox-template.v1",
+            "",
+            &user_subject,
+            &correlation_id,
+            PolicyIdentity {
+                digest: UNVERIFIED_POLICY,
+                revision: None,
+            },
+            reason_code,
+            outcome,
+        );
+
+        if decision.allowed {
+            Ok(Response::new(allow()))
+        } else {
+            Ok(Response::new(deny_with_context(
+                &decision.detail,
+                &correlation_id,
+                "",
+                &eval.binding_id,
+            )))
+        }
+    }
+
     /// Record a governance outcome for the UpdateConfig path.
     ///
     /// The resource is the policy document, not a sandbox — these operations
@@ -2290,6 +2395,9 @@ impl GatewayInterceptor for GatewayInterceptorService {
                 self.handle_sandbox_inject(r).await
             }
             ("CreateSandbox", Some(Phase::Validate(_))) => self.handle_sandbox_verify(r).await,
+            ("CreateSandboxTemplate", Some(Phase::Validate(_))) => {
+                self.handle_sandbox_template_verify(r).await
+            }
             ("UpdateConfig", Some(Phase::ModifyOperation(_))) => {
                 self.handle_config_refresh(r).await
             }
@@ -2745,6 +2853,68 @@ mod tests {
         assert!(
             !result.allowed,
             "deny-by-default: present mount, no signed rule"
+        );
+    }
+
+    fn template_eval(op: ProstStruct, principal: Vec<(&str, &str)>) -> InterceptorEvaluation {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        InterceptorEvaluation {
+            method: "CreateSandboxTemplate".to_string(),
+            phase: Some(Phase::Validate(ValidateEvaluation {
+                proposed_operation: Some(op),
+                ..Default::default()
+            })),
+            principal: principal
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    // CreateSandboxTemplate with no driver config is unaffected.
+    #[tokio::test]
+    async fn template_without_driver_config_is_allowed() {
+        let (_, vk) = test_keypair();
+        let service = service_with_key(vk, "podman");
+        let op = json_to_struct(serde_json::json!({ "template": { "spec": {} } }));
+        let eval = template_eval(
+            op,
+            vec![("subject", "installer@saw"), ("roles", "openshell-admin")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.allowed, "template with no driver config is allowed");
+    }
+
+    // Deny-by-default: a template carrying driver config is refused when the
+    // signed rule cannot be fetched (the lazy policy-service never connects).
+    #[tokio::test]
+    async fn template_with_driver_config_denied_when_rule_unavailable() {
+        let (_, vk) = test_keypair();
+        let service = service_with_key(vk, "podman");
+        let op = json_to_struct(
+            serde_json::json!({ "template": { "spec": { "driver_config": {
+            "podman": { "mounts": [
+                { "type": "volume", "source": "saw-harness-x", "target": "/sandbox/harness", "read_only": true }
+            ] }
+        } } } }),
+        );
+        let eval = template_eval(
+            op,
+            vec![("subject", "installer@saw"), ("roles", "openshell-admin")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            !result.allowed,
+            "deny-by-default when the signed rule can't be fetched"
         );
     }
 
