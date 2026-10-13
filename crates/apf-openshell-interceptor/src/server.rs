@@ -2400,6 +2400,8 @@ mod tests {
         apf_spec_digest: String,
         #[serde(rename = "apf/bundle-id")]
         apf_bundle_id: String,
+        #[serde(rename = "apf/driver-config", skip_serializing_if = "Option::is_none")]
+        apf_driver_config: Option<String>,
     }
 
     pub(super) fn mint_test_jwt(
@@ -2448,6 +2450,37 @@ mod tests {
             apf_version: version,
             apf_spec_digest: spec_digest.to_string(),
             apf_bundle_id: "test-bundle".to_string(),
+            apf_driver_config: None,
+        };
+        jsonwebtoken::encode(&header, &claims, &encoding_key).expect("encode")
+    }
+
+    /// Mint a signed token carrying an `apf/driver-config` claim (hex-encoded
+    /// `DriverConfigPolicy` protobuf), as the policy-service does when the
+    /// signed SandboxPolicy carries a driver-config allowlist.
+    pub(super) fn mint_test_jwt_with_driver_config(
+        signing_key: &SigningKey,
+        key_id: &str,
+        jti: &str,
+        policy_digest: &str,
+        driver_config_hex: &str,
+    ) -> String {
+        use jsonwebtoken::{Algorithm, EncodingKey, Header};
+        let seed = signing_key.to_bytes();
+        let der = ed25519_seed_to_pkcs8_der(&seed);
+        let encoding_key = EncodingKey::from_ed_der(&der);
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(key_id.to_string());
+        let claims = TestClaims {
+            jti: jti.to_string(),
+            sub: key_id.to_string(),
+            iat: 1_000_000,
+            exp: None,
+            apf_document_digest: policy_digest.to_string(),
+            apf_version: 1,
+            apf_spec_digest: String::new(),
+            apf_bundle_id: "test-bundle".to_string(),
+            apf_driver_config: Some(driver_config_hex.to_string()),
         };
         jsonwebtoken::encode(&header, &claims, &encoding_key).expect("encode")
     }
@@ -2511,6 +2544,208 @@ mod tests {
             },
             authentication: AuthenticationMode::Insecure,
         }
+    }
+
+    fn json_to_prost(v: &serde_json::Value) -> ProstValue {
+        let kind = match v {
+            serde_json::Value::Null => Kind::NullValue(0),
+            serde_json::Value::Bool(b) => Kind::BoolValue(*b),
+            serde_json::Value::Number(n) => Kind::NumberValue(n.as_f64().unwrap_or(0.0)),
+            serde_json::Value::String(s) => Kind::StringValue(s.clone()),
+            serde_json::Value::Array(a) => Kind::ListValue(prost_types::ListValue {
+                values: a.iter().map(json_to_prost).collect(),
+            }),
+            serde_json::Value::Object(o) => Kind::StructValue(ProstStruct {
+                fields: o
+                    .iter()
+                    .map(|(k, val)| (k.clone(), json_to_prost(val)))
+                    .collect(),
+            }),
+        };
+        ProstValue { kind: Some(kind) }
+    }
+
+    fn json_to_struct(v: serde_json::Value) -> ProstStruct {
+        match json_to_prost(&v).kind {
+            Some(Kind::StructValue(s)) => s,
+            _ => panic!("expected a JSON object"),
+        }
+    }
+
+    fn service_with_key(
+        verifying_key: VerifyingKey,
+        compute_driver: &str,
+    ) -> GatewayInterceptorService {
+        let channel = Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        GatewayInterceptorService {
+            policy_service: PolicyClientHandle::from_channel(channel),
+            config: InterceptorConfig {
+                document_kind: "openshell.sandbox.v1".to_string(),
+                document_name: "default".to_string(),
+                gateway_compute_driver: compute_driver.to_string(),
+                signing_key_id: "test-kid".to_string(),
+                verifying_key: Arc::new(std::sync::RwLock::new(verifying_key)),
+                audit: InterceptorAudit::disabled(),
+            },
+            authentication: AuthenticationMode::Insecure,
+        }
+    }
+
+    fn validate_eval_with_principal(
+        op: ProstStruct,
+        principal: Vec<(&str, &str)>,
+    ) -> InterceptorEvaluation {
+        use crate::proto::{ValidateEvaluation, interceptor_evaluation::Phase};
+        InterceptorEvaluation {
+            method: "CreateSandbox".to_string(),
+            phase: Some(Phase::Validate(ValidateEvaluation {
+                proposed_operation: Some(op),
+                ..Default::default()
+            })),
+            principal: principal
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Hex-encoded `DriverConfigPolicy` for the SAW harness rule, as the
+    /// policy-service mints into the provenance JWT.
+    fn harness_rule_hex() -> String {
+        use prost::Message;
+        let rule = apf_proto::ir::DriverConfigPolicy {
+            deny_templates: true,
+            allowed: vec![apf_proto::ir::DriverConfigAllow {
+                require_role: "openshell-admin".to_string(),
+                drivers: vec!["podman".to_string(), "docker".to_string()],
+                max_mounts: 1,
+                mounts: vec![apf_proto::ir::DriverConfigMount {
+                    r#type: "volume".to_string(),
+                    source_prefix: "saw-harness-".to_string(),
+                    target: "/sandbox/harness".to_string(),
+                    read_only: true,
+                }],
+            }],
+        };
+        hex::encode(rule.encode_to_vec())
+    }
+
+    fn harness_op(token: &str, source: &str, target: &str, read_only: bool) -> ProstStruct {
+        json_to_struct(serde_json::json!({
+            "name": "sb-harness",
+            "annotations": {
+                "apf.nvidia.com/correlation-id": "corr-dc",
+                "apf.nvidia.com/document-digest": "sha256-dc",
+                "apf.nvidia.com/provenance-token": token,
+            },
+            "spec": { "template": { "driver_config": {
+                "podman": { "mounts": [
+                    { "type": "volume", "source": source, "target": target, "read_only": read_only }
+                ] }
+            } } }
+        }))
+    }
+
+    // End-to-end admit path: a signed token carrying the driver-config rule is
+    // verified, decoded, and enforced in CreateSandbox VALIDATE.
+    #[tokio::test]
+    async fn driver_config_admits_exact_harness_mount_for_admin() {
+        let (sk, vk) = test_keypair();
+        let jwt = mint_test_jwt_with_driver_config(
+            &sk,
+            "test-kid",
+            "corr-dc",
+            "sha256-dc",
+            &harness_rule_hex(),
+        );
+        let service = service_with_key(vk, "podman");
+        let op = harness_op(&jwt, "saw-harness-abc", "/sandbox/harness", true);
+        let eval = validate_eval_with_principal(
+            op,
+            vec![("subject", "installer@saw"), ("roles", "openshell-admin")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            result.allowed,
+            "admin + exact harness mount should be ADMITTED: {}",
+            result.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn driver_config_denies_harness_mount_for_non_admin() {
+        let (sk, vk) = test_keypair();
+        let jwt = mint_test_jwt_with_driver_config(
+            &sk,
+            "test-kid",
+            "corr-dc",
+            "sha256-dc",
+            &harness_rule_hex(),
+        );
+        let service = service_with_key(vk, "podman");
+        let op = harness_op(&jwt, "saw-harness-abc", "/sandbox/harness", true);
+        let eval = validate_eval_with_principal(
+            op,
+            vec![("subject", "user@corp"), ("roles", "developer")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed, "non-admin caller must be denied");
+    }
+
+    #[tokio::test]
+    async fn driver_config_denies_wrong_target_even_for_admin() {
+        let (sk, vk) = test_keypair();
+        let jwt = mint_test_jwt_with_driver_config(
+            &sk,
+            "test-kid",
+            "corr-dc",
+            "sha256-dc",
+            &harness_rule_hex(),
+        );
+        let service = service_with_key(vk, "podman");
+        let op = harness_op(&jwt, "saw-harness-abc", "/etc", true);
+        let eval = validate_eval_with_principal(
+            op,
+            vec![("subject", "installer@saw"), ("roles", "openshell-admin")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!result.allowed, "wrong target must be denied");
+    }
+
+    #[tokio::test]
+    async fn driver_config_denies_present_mount_when_token_has_no_rule() {
+        // deny-by-default: a request carrying driver_config but a token with no
+        // apf/driver-config claim is refused.
+        let (sk, vk) = test_keypair();
+        let jwt = mint_test_jwt(&sk, "test-kid", "corr-dc", "sha256-dc", None);
+        let service = service_with_key(vk, "podman");
+        let op = harness_op(&jwt, "saw-harness-abc", "/sandbox/harness", true);
+        let eval = validate_eval_with_principal(
+            op,
+            vec![("subject", "installer@saw"), ("roles", "openshell-admin")],
+        );
+        let result = service
+            .evaluate(Request::new(eval))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            !result.allowed,
+            "deny-by-default: present mount, no signed rule"
+        );
     }
 
     fn describe_request() -> DescribeRequest {
