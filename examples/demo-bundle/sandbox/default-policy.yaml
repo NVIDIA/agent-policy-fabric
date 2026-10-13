@@ -124,7 +124,7 @@ spec:
     deny_templates: true
     allowed:
       - require_role: openshell-admin
-        drivers: [podman, docker]
+        drivers: [podman, docker, kubernetes]
         max_mounts: 1
         mounts:
           - type: volume
