@@ -276,6 +276,12 @@ struct Cli {
     #[arg(long, default_value = "openshell.sandbox.v1")]
     document_kind: String,
 
+    /// The OpenShell gateway's configured compute driver (e.g. "podman",
+    /// "kubernetes"). A caller-supplied driver-config mount is admitted only
+    /// when its single driver key equals this value. Empty denies all.
+    #[arg(long, env = "APF_OPENSHELL_COMPUTE_DRIVER", default_value = "")]
+    openshell_compute_driver: String,
+
     /// Document name passed to GetDocument for sandbox policy.
     #[arg(long, default_value = "default")]
     document_name: String,
@@ -845,6 +851,7 @@ async fn main() -> anyhow::Result<()> {
             document_kind: args.document_kind.clone(),
             document_name: args.document_name.clone(),
             signing_key_id: args.document_key_id.clone(),
+            gateway_compute_driver: args.openshell_compute_driver.clone(),
             verifying_key: Arc::clone(&verifying_key),
             // Its own file: the interceptor is a separate component that
             // happens to share this process today.

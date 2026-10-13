@@ -27,7 +27,18 @@
 //! records every decision to the audit trail.)
 
 use apf_proto::ir::{DriverConfigAllow, DriverConfigPolicy};
+use prost::Message;
 use serde_json::Value as JsonValue;
+
+/// Decode the signed driver-config rule carried in the provenance JWT
+/// `apf/driver-config` claim (hex-encoded `DriverConfigPolicy` protobuf).
+/// Returns `None` when the claim is absent or unparsable — which the engine
+/// treats as deny-by-default for any present driver config.
+#[must_use]
+pub fn decode_rule(claim: Option<&str>) -> Option<DriverConfigPolicy> {
+    let bytes = hex::decode(claim?).ok()?;
+    DriverConfigPolicy::decode(bytes.as_slice()).ok()
+}
 
 /// The outcome of a driver-config admission check.
 #[derive(Debug, Clone, PartialEq, Eq)]

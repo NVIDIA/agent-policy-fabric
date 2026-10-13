@@ -57,6 +57,11 @@ pub struct InterceptorConfig {
     pub verifying_key: Arc<RwLock<VerifyingKey>>,
     /// Where admission decisions are recorded.
     pub audit: InterceptorAudit,
+    /// The OpenShell gateway's configured compute driver (e.g. `"podman"`,
+    /// `"kubernetes"`). A caller-supplied driver-config mount is admitted only
+    /// when its single driver key equals this value. Empty ⇒ no driver config
+    /// can be admitted (every present driver config is denied).
+    pub gateway_compute_driver: String,
 }
 
 /// The tonic service that implements `GatewayInterceptor`.
@@ -179,6 +184,9 @@ struct ProvJwtClaims {
     pub apf_spec_digest: String,
     #[allow(dead_code)]
     pub apf_bundle_id: String,
+    /// Hex-encoded `DriverConfigPolicy` protobuf — the signed driver-config
+    /// allowlist for this sandbox policy. `None` when the policy carries none.
+    pub apf_driver_config: Option<String>,
 }
 
 /// Verify the provenance JWT stored in operation annotations using the cached Ed25519 key.
@@ -266,6 +274,7 @@ fn verify_jwt_internal(key: &VerifyingKey, jwt: &str) -> Result<ProvJwtClaims, (
             .unwrap_or("")
             .to_string(),
         apf_bundle_id: payload["apf/bundle-id"].as_str().unwrap_or("").to_string(),
+        apf_driver_config: payload["apf/driver-config"].as_str().map(str::to_string),
     })
 }
 
@@ -963,15 +972,15 @@ impl GatewayInterceptorService {
         let driver_cfg = context::driver_config(&op_json)
             .cloned()
             .unwrap_or(serde_json::Value::Null);
+        // The allowlist rides the signature-verified provenance JWT (the native
+        // projection cannot carry it); absent/unparsable ⇒ deny-by-default.
+        let driver_rule = driver_config::decode_rule(claims.apf_driver_config.as_deref());
         let driver_decision = driver_config::evaluate(
-            // TODO(driver-config): source the allowlist and the gateway's
-            // compute driver from the signed SandboxPolicy once policy-service
-            // vends them. `None` holds the deny-by-default contract until then.
-            None,
+            driver_rule.as_ref(),
             &driver_cfg,
             context::is_template_based(&op_json),
             &context::principal_roles(&eval),
-            "",
+            &self.config.gateway_compute_driver,
         );
         if !driver_decision.allowed {
             warn!(
@@ -2490,6 +2499,7 @@ mod tests {
             config: InterceptorConfig {
                 document_kind: "openshell.sandbox.v1".to_string(),
                 document_name: "default".to_string(),
+                gateway_compute_driver: String::new(),
                 signing_key_id: "test-key".to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(
                     SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
@@ -3051,6 +3061,7 @@ mod tests {
             config: InterceptorConfig {
                 document_kind: "openshell.sandbox.v1".to_string(),
                 document_name: "default".to_string(),
+                gateway_compute_driver: String::new(),
                 signing_key_id: "test-key".to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(
                     SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
@@ -3619,6 +3630,7 @@ mod admission_audit_tests {
             config: InterceptorConfig {
                 document_kind: "openshell.sandbox.v1".to_string(),
                 document_name: "default".to_string(),
+                gateway_compute_driver: String::new(),
                 signing_key_id: KEY_ID.to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(signing_key.verifying_key())),
                 audit: InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter"),
@@ -4057,6 +4069,7 @@ mod admission_audit_tests {
             config: InterceptorConfig {
                 document_kind: "openshell.sandbox.v1".to_string(),
                 document_name: "default".to_string(),
+                gateway_compute_driver: String::new(),
                 signing_key_id: KEY_ID.to_string(),
                 verifying_key: Arc::new(std::sync::RwLock::new(signing_key.verifying_key())),
                 audit: InterceptorAudit::to_jsonl_in(dir.path()).expect("build emitter"),

@@ -114,6 +114,7 @@ impl LocalBundleSource {
                 .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
             let projections = surfaces_to_projections(compiled.surfaces);
+            let driver_configs = compiled.sandbox_driver_configs;
 
             Ok(PolicyServiceCore {
                 bundle: LoadedBundle {
@@ -126,6 +127,7 @@ impl LocalBundleSource {
                     bundle: parsed_bundle,
                 },
                 projections,
+                driver_configs,
                 document_signer: self.document_signer.clone(),
                 audit: self.audit.clone(),
             })
@@ -178,6 +180,10 @@ impl PolicySource for LocalBundleSource {
         ))
     }
 
+    fn driver_config(&self, name: &str, _variant: &str) -> Option<Vec<u8>> {
+        self.core.load().driver_configs.get(name).cloned()
+    }
+
     fn list(&self, surface_id: &str) -> Vec<String> {
         let core = self.core.load();
         core.projections
@@ -217,6 +223,7 @@ mod tests {
                     bundle: Default::default(),
                 },
                 projections,
+                driver_configs: BTreeMap::new(),
                 document_signer: None,
                 audit: PolicyServiceAudit::disabled(),
             },

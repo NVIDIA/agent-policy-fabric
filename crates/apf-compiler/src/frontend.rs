@@ -853,6 +853,45 @@ struct SpecDef {
     network_policies: BTreeMap<String, NetworkPolicyRuleDef>,
     #[serde(default)]
     network_middlewares: BTreeMap<String, NetworkMiddlewareConfigDef>,
+    #[serde(default)]
+    driver_config: Option<DriverConfigPolicyDef>,
+}
+
+/// Parsed `driver_config` allowlist from a `SandboxPolicy` YAML document.
+/// Mirrors the APF IR `DriverConfigPolicy`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigPolicyDef {
+    #[serde(default)]
+    allowed: Vec<DriverConfigAllowDef>,
+    #[serde(default)]
+    deny_templates: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigAllowDef {
+    #[serde(default)]
+    require_role: String,
+    #[serde(default)]
+    drivers: Vec<String>,
+    #[serde(default)]
+    max_mounts: u32,
+    #[serde(default)]
+    mounts: Vec<DriverConfigMountDef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigMountDef {
+    #[serde(default, rename = "type")]
+    r#type: String,
+    #[serde(default)]
+    source_prefix: String,
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    read_only: bool,
 }
 
 /// Parsed `network_middlewares` entry from a `SandboxPolicy` YAML document.
@@ -1132,9 +1171,28 @@ fn to_spec(raw: SpecDef) -> ir::SandboxPolicySpec {
                 (key, ir_rule)
             })
             .collect(),
-        // Authoring-side lowering of the driver-config allowlist is a
-        // follow-up; the IR field exists so the interceptor can enforce it.
-        driver_config: None,
+        driver_config: raw.driver_config.map(|dc| ir::DriverConfigPolicy {
+            deny_templates: dc.deny_templates,
+            allowed: dc
+                .allowed
+                .into_iter()
+                .map(|a| ir::DriverConfigAllow {
+                    require_role: a.require_role,
+                    drivers: a.drivers,
+                    max_mounts: a.max_mounts,
+                    mounts: a
+                        .mounts
+                        .into_iter()
+                        .map(|m| ir::DriverConfigMount {
+                            r#type: m.r#type,
+                            source_prefix: m.source_prefix,
+                            target: m.target,
+                            read_only: m.read_only,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }),
     }
 }
 

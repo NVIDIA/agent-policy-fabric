@@ -113,3 +113,21 @@ spec:
           - "api.github.com"
           - "api.openai.com"
           - "host.openshell.internal"
+
+  # Driver-config allowlist — SUPPORTS the Secure Agent Workspace harness mount
+  # (a reviewed bundle of agent skills + MCP servers) while keeping it governed.
+  # Admits a caller-supplied compute-driver mount ONLY when: the caller holds the
+  # gateway-authenticated `openshell-admin` role, it is a single read-only volume
+  # whose source starts with `saw-harness-`, mounted at exactly /sandbox/harness.
+  # Everything else is denied; absent this block, all driver config is denied.
+  driver_config:
+    deny_templates: true
+    allowed:
+      - require_role: openshell-admin
+        drivers: [podman, docker]
+        max_mounts: 1
+        mounts:
+          - type: volume
+            source_prefix: saw-harness-
+            target: /sandbox/harness
+            read_only: true

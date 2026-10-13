@@ -48,6 +48,11 @@ struct ProvenanceClaims {
     /// Bundle manifest `id` field — stable name of the signed bundle that produced this document.
     #[serde(rename = "apf/bundle-id")]
     apf_bundle_id: String,
+    /// Hex-encoded `DriverConfigPolicy` protobuf — the driver-config allowlist
+    /// for this sandbox policy. Absent when the policy carries no rule. The
+    /// native projection cannot carry it, so it rides the signed token.
+    #[serde(rename = "apf/driver-config", skip_serializing_if = "Option::is_none")]
+    apf_driver_config: Option<String>,
 }
 
 /// Encode a 32-byte Ed25519 seed as a PKCS#8 v1 DER blob (RFC 8410).
@@ -79,6 +84,7 @@ fn mint_provenance_jwt(
     valid_until_ms: u64,
     spec_digest: &str,
     bundle_id: &str,
+    driver_config_hex: Option<String>,
 ) -> Option<String> {
     let iat = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -98,6 +104,7 @@ fn mint_provenance_jwt(
         apf_version: version,
         apf_spec_digest: spec_digest.to_string(),
         apf_bundle_id: bundle_id.to_string(),
+        apf_driver_config: driver_config_hex,
     };
 
     let mut header = Header::new(Algorithm::EdDSA);
@@ -247,6 +254,15 @@ impl PolicyService for PolicyServiceImpl {
                     // A signer is configured, so an empty token means the mint
                     // failed and the document is vended unsigned — the consumer
                     // cannot verify it came from here.
+                    //
+                    // The driver-config allowlist (if any) is hex-encoded
+                    // DriverConfigPolicy protobuf; it rides the signed token so
+                    // the interceptor can enforce it, since the native
+                    // projection cannot carry it.
+                    let driver_config_hex = self
+                        .source
+                        .driver_config(&resolved.name, &resolved.variant)
+                        .map(hex::encode);
                     mint_provenance_jwt(
                         id,
                         &proj.digest,
@@ -254,6 +270,7 @@ impl PolicyService for PolicyServiceImpl {
                         valid_until_ms,
                         &spec_digest,
                         &self.bundle_id,
+                        driver_config_hex,
                     )
                     .unwrap_or_else(|| {
                         if let Err(e) = self.audit.emit_provenance_mint_failed(
