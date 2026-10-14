@@ -180,7 +180,7 @@ pub fn evaluate(
             ));
             continue;
         }
-        match match_entry(allow, inner) {
+        match match_entry(allow, driver, inner) {
             Ok(()) => return Decision::allow("driver_config.allowed"),
             Err(detail) => last_detail = Some(detail),
         }
@@ -192,26 +192,150 @@ pub fn evaluate(
     )
 }
 
-/// (4) Exact-match the inner driver block against one allowed entry.
+/// A mount normalized to driver-agnostic attributes. Each compute driver
+/// expresses a mount differently; the normalizer below maps a driver's own
+/// fields onto this one shape so a single abstract allowlist rule governs them
+/// all. The rule describes the mount; APF maps each driver's syntax onto it.
+#[derive(Debug)]
+struct AbstractMount {
+    /// Mount kind — currently always "volume" (matched against `DriverConfigMount.type`).
+    kind: String,
+    /// What is mounted (podman/docker `source`; kubernetes PVC `claim_name`).
+    source: String,
+    /// Where it lands in the sandbox (podman/docker `target`; kubernetes `mount_path`).
+    target: String,
+    /// Whether the mount is read-only.
+    read_only: bool,
+}
+
+/// Map a driver's own mount config onto the abstract shape. Returns `Err` when a
+/// driver, block, or field cannot be mapped — unmappable is a denial, never an
+/// ignore, so an unrecognised driver or shape fails closed.
 ///
-/// The inner block may carry only a `mounts` array; every mount must match one
-/// of the entry's mount shapes exactly and carry no key beyond the four we map.
-fn match_entry(allow: &DriverConfigAllow, inner: &JsonValue) -> Result<(), String> {
+/// * `podman` / `docker` — a flat `mounts` array whose fields are already abstract
+///   (`{type, source, target, read_only}`), and no key beyond that array.
+/// * `kubernetes` — a Pod-style block: `volumes[]` (source = PVC `claim_name`)
+///   joined by `name` to `containers.agent.volume_mounts[]` (target = `mount_path`).
+fn extract_mounts(driver: &str, inner: &JsonValue) -> Result<Vec<AbstractMount>, String> {
     let obj = inner
         .as_object()
         .ok_or_else(|| "driver block is not an object".to_string())?;
+    match driver {
+        "podman" | "docker" => {
+            // No keys beyond `mounts`: anything we cannot map is a denial.
+            for key in obj.keys() {
+                if key != "mounts" {
+                    return Err(format!("driver block carries an unmappable key {key:?}"));
+                }
+            }
+            let mounts = obj
+                .get("mounts")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| "driver block has no mounts array".to_string())?;
+            mounts.iter().map(normalize_container_mount).collect()
+        }
+        "kubernetes" => normalize_kubernetes_mounts(obj),
+        other => Err(format!("driver {other:?} has no driver-config mapping")),
+    }
+}
 
-    // No keys beyond `mounts`: anything we cannot map is a denial, not an ignore.
+/// podman/docker: a mount is `{type, source, target, read_only}` — already abstract.
+/// A mount may carry only those four fields; any extra key is a denial.
+fn normalize_container_mount(mount: &JsonValue) -> Result<AbstractMount, String> {
+    let obj = mount
+        .as_object()
+        .ok_or_else(|| "mount is not an object".to_string())?;
+    const ALLOWED_KEYS: [&str; 4] = ["type", "source", "target", "read_only"];
     for key in obj.keys() {
-        if key != "mounts" {
-            return Err(format!("driver block carries an unmappable key {key:?}"));
+        if !ALLOWED_KEYS.contains(&key.as_str()) {
+            return Err(format!("mount carries an unmappable key {key:?}"));
         }
     }
+    Ok(AbstractMount {
+        kind: str_field(obj, "type"),
+        source: str_field(obj, "source"),
+        target: str_field(obj, "target"),
+        read_only: bool_field(obj, "read_only"),
+    })
+}
 
-    let mounts = obj
-        .get("mounts")
+/// kubernetes: mounts are Pod-style — a PVC-backed `volumes[]` entry joined by
+/// `name` to a `containers.agent.volume_mounts[]` entry. We map each volume
+/// mount to an abstract mount: source = PVC `claim_name`, target = `mount_path`,
+/// read-only if either the volume or the mount is read-only. Only PVC-backed
+/// volumes are mappable; any other volume kind is a denial (fail-closed).
+fn normalize_kubernetes_mounts(
+    obj: &serde_json::Map<String, JsonValue>,
+) -> Result<Vec<AbstractMount>, String> {
+    // name -> (PVC claim_name, volume-level read_only)
+    let mut claims: std::collections::HashMap<&str, (String, bool)> =
+        std::collections::HashMap::new();
+    for v in obj
+        .get("volumes")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| "driver block has no mounts array".to_string())?;
+        .into_iter()
+        .flatten()
+    {
+        let vo = v
+            .as_object()
+            .ok_or_else(|| "kubernetes volume is not an object".to_string())?;
+        let name = vo.get("name").and_then(JsonValue::as_str).unwrap_or("");
+        let pvc = vo
+            .get("persistent_volume_claim")
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                format!("kubernetes volume {name:?} is not a persistent_volume_claim")
+            })?;
+        claims.insert(
+            name,
+            (str_field(pvc, "claim_name"), bool_field(pvc, "read_only")),
+        );
+    }
+
+    let volume_mounts = obj
+        .get("containers")
+        .and_then(|c| c.get("agent"))
+        .and_then(|a| a.get("volume_mounts"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| "kubernetes block has no containers.agent.volume_mounts".to_string())?;
+
+    let mut out = Vec::with_capacity(volume_mounts.len());
+    for m in volume_mounts {
+        let mo = m
+            .as_object()
+            .ok_or_else(|| "kubernetes volume mount is not an object".to_string())?;
+        let name = mo.get("name").and_then(JsonValue::as_str).unwrap_or("");
+        let (claim_name, volume_ro) = claims
+            .get(name)
+            .ok_or_else(|| format!("volume mount references unknown volume {name:?}"))?;
+        out.push(AbstractMount {
+            kind: "volume".to_string(),
+            source: claim_name.clone(),
+            target: str_field(mo, "mount_path"),
+            read_only: bool_field(mo, "read_only") || *volume_ro,
+        });
+    }
+    Ok(out)
+}
+
+fn str_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> String {
+    obj.get(key)
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn bool_field(obj: &serde_json::Map<String, JsonValue>, key: &str) -> bool {
+    obj.get(key).and_then(JsonValue::as_bool).unwrap_or(false)
+}
+
+/// (4) Exact-match the request's normalized mounts against one allowed entry.
+///
+/// The driver's mounts are normalized to the abstract shape first; every mount
+/// must then match one of the entry's mount shapes exactly, and the count must
+/// stay within `max_mounts`.
+fn match_entry(allow: &DriverConfigAllow, driver: &str, inner: &JsonValue) -> Result<(), String> {
+    let mounts = extract_mounts(driver, inner)?;
 
     if mounts.is_empty() {
         return Err("driver block declares no mounts".to_string());
@@ -224,38 +348,24 @@ fn match_entry(allow: &DriverConfigAllow, inner: &JsonValue) -> Result<(), Strin
         ));
     }
 
-    for mount in mounts {
-        if !allow.mounts.iter().any(|shape| mount_matches(shape, mount)) {
-            return Err(format!("mount {mount} matches no allowed mount shape"));
+    for mount in &mounts {
+        if !allow.mounts.iter().any(|shape| shape_matches(shape, mount)) {
+            return Err(format!(
+                "mount (source={:?}, target={:?}) matches no allowed mount shape",
+                mount.source, mount.target
+            ));
         }
     }
     Ok(())
 }
 
-/// Whether one request mount matches an allowed mount shape exactly.
-fn mount_matches(shape: &apf_proto::ir::DriverConfigMount, mount: &JsonValue) -> bool {
-    let Some(obj) = mount.as_object() else {
-        return false;
-    };
-    // (4) No extra keys: a mount may carry only the four fields we map.
-    const ALLOWED_KEYS: [&str; 4] = ["type", "source", "target", "read_only"];
-    if obj.keys().any(|k| !ALLOWED_KEYS.contains(&k.as_str())) {
-        return false;
-    }
-
-    let typ = obj.get("type").and_then(JsonValue::as_str).unwrap_or("");
-    let source = obj.get("source").and_then(JsonValue::as_str).unwrap_or("");
-    let target = obj.get("target").and_then(JsonValue::as_str).unwrap_or("");
-    let read_only = obj
-        .get("read_only")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-
-    typ == shape.r#type
-        && target == shape.target
+/// Whether one normalized mount matches an allowed abstract mount shape exactly.
+fn shape_matches(shape: &apf_proto::ir::DriverConfigMount, mount: &AbstractMount) -> bool {
+    mount.kind == shape.r#type
+        && mount.target == shape.target
         && !shape.source_prefix.is_empty()
-        && source.starts_with(&shape.source_prefix)
-        && (!shape.read_only || read_only)
+        && mount.source.starts_with(&shape.source_prefix)
+        && (!shape.read_only || mount.read_only)
 }
 
 #[cfg(test)]
@@ -484,6 +594,203 @@ mod tests {
             "privileged": true
         }});
         let d = evaluate(Some(&harness_rule()), &cfg, false, &admin(), "podman");
+        assert!(!d.allowed);
+    }
+
+    // ── Driver-agnostic: the SAME abstract rule governs the kubernetes driver ──
+    //
+    // The kubernetes driver expresses a mount as a Pod-style PVC-backed volume
+    // joined to a container volume mount. APF maps that onto the same abstract
+    // shape (source = PVC claim_name, target = mount_path), so the harness rule
+    // — authored once — admits/denies kubernetes creates too.
+
+    fn harness_rule_k8s() -> DriverConfigPolicy {
+        DriverConfigPolicy {
+            deny_templates: true,
+            allowed: vec![DriverConfigAllow {
+                require_role: "openshell-admin".into(),
+                drivers: vec!["kubernetes".into()],
+                max_mounts: 1,
+                mounts: vec![DriverConfigMount {
+                    r#type: "volume".into(),
+                    source_prefix: "saw-harness-".into(),
+                    target: "/sandbox/harness".into(),
+                    read_only: true,
+                }],
+            }],
+        }
+    }
+
+    // A PVC-backed harness volume mounted read-only at the sanctioned path.
+    fn k8s_good_config() -> JsonValue {
+        json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "persistent_volume_claim": {"claim_name": "saw-harness-42", "read_only": true}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/sandbox/harness", "read_only": true}
+            ]}}
+        }})
+    }
+
+    #[test]
+    fn kubernetes_pvc_harness_mount_is_admitted() {
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &k8s_good_config(),
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(d.allowed, "{d:?}");
+        assert_eq!(d.reason_code, "driver_config.allowed");
+    }
+
+    // The mount read-only flag can also be carried on the volume (PVC) side.
+    #[test]
+    fn kubernetes_read_only_on_the_volume_is_admitted() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "persistent_volume_claim": {"claim_name": "saw-harness-7", "read_only": true}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/sandbox/harness"}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(d.allowed, "{d:?}");
+    }
+
+    #[test]
+    fn kubernetes_wrong_target_is_denied() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "persistent_volume_claim": {"claim_name": "saw-harness-42", "read_only": true}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/etc", "read_only": true}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(!d.allowed);
+    }
+
+    #[test]
+    fn kubernetes_non_harness_claim_is_denied() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "secret", "persistent_volume_claim": {"claim_name": "cluster-secrets", "read_only": true}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "secret", "mount_path": "/sandbox/harness", "read_only": true}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(!d.allowed);
+    }
+
+    #[test]
+    fn kubernetes_writable_harness_mount_is_denied() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "persistent_volume_claim": {"claim_name": "saw-harness-42", "read_only": false}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/sandbox/harness", "read_only": false}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(!d.allowed);
+    }
+
+    // A non-PVC volume kind cannot be mapped — fail closed, not ignore.
+    #[test]
+    fn kubernetes_non_pvc_volume_is_denied() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "host_path": {"path": "/sandbox/harness"}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/sandbox/harness", "read_only": true}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(!d.allowed);
+    }
+
+    #[test]
+    fn kubernetes_extra_volume_mount_exceeds_cap_and_is_denied() {
+        let cfg = json!({"kubernetes": {
+            "volumes": [
+                {"name": "harness", "persistent_volume_claim": {"claim_name": "saw-harness-1", "read_only": true}},
+                {"name": "extra", "persistent_volume_claim": {"claim_name": "saw-harness-2", "read_only": true}}
+            ],
+            "containers": {"agent": {"volume_mounts": [
+                {"name": "harness", "mount_path": "/sandbox/harness", "read_only": true},
+                {"name": "extra", "mount_path": "/sandbox/harness", "read_only": true}
+            ]}}
+        }});
+        let d = evaluate(
+            Some(&harness_rule_k8s()),
+            &cfg,
+            false,
+            &admin(),
+            "kubernetes",
+        );
+        assert!(!d.allowed);
+    }
+
+    // An unknown driver has no mapping at all — deny, never admit by default.
+    #[test]
+    fn unknown_driver_is_denied() {
+        let cfg = json!({"firecracker": {"mounts": [
+            {"type": "volume", "source": "saw-harness-1", "target": "/sandbox/harness", "read_only": true}
+        ]}});
+        let rule = DriverConfigPolicy {
+            deny_templates: true,
+            allowed: vec![DriverConfigAllow {
+                require_role: "openshell-admin".into(),
+                drivers: vec!["firecracker".into()],
+                max_mounts: 1,
+                mounts: vec![DriverConfigMount {
+                    r#type: "volume".into(),
+                    source_prefix: "saw-harness-".into(),
+                    target: "/sandbox/harness".into(),
+                    read_only: true,
+                }],
+            }],
+        };
+        let d = evaluate(Some(&rule), &cfg, false, &admin(), "firecracker");
         assert!(!d.allowed);
     }
 }
