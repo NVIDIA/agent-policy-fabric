@@ -1,0 +1,25 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- $bundleSource := include "apf.bundleSource" . }}
+APF release: {{ include "apf.fullname" . }} (tier {{ .Values.tier }})
+
+Policy inputs:
+{{- if eq $bundleSource "local" }}
+  Signed bundle ConfigMap: {{ include "apf.bundleConfigMap" . }}
+{{- else }}
+  Signed bundle URL: {{ .Values.bundle.http.url }}
+{{- if .Values.bundle.http.tokenSecret }}
+  Bundle source token Secret: {{ .Values.bundle.http.tokenSecret }}
+{{- end }}
+{{- end }}
+  Bundle trust-root ConfigMap: {{ include "apf.trustConfigMap" . }}
+  Document signing Secret: {{ include "apf.signingSecret" . }}
+  Policy-service HTTP token Secret: {{ .Values.policyService.httpTokenSecret }}
+
+OpenShell gateway registration is outside this chart and must be managed in
+the OpenShell deployment configuration. Mount the APF issuing CA in OpenShell.
+The interceptor endpoint is:
+  {{ ternary "http" "https" .Values.interceptor.allowInsecureTransport }}://{{ include "apf.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.interceptor.port }}
+{{- if eq (int .Values.tier) 2 }}
+The supervisor middleware endpoint is:
+  https://{{ include "apf.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.middleware.port }}
+{{- end }}

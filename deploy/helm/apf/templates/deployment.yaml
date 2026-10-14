@@ -1,0 +1,317 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- $bundleSource := include "apf.bundleSource" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apf.fullname" . }}
+  labels: {{- include "apf.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  {{- if .Values.state.persistence }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels: {{- include "apf.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "apf.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Chart-created policy input changes restart the pod.
+        checksum/policy-inputs: {{ include (print $.Template.BasePath "/policy-inputs.yaml") . | sha256sum }}
+        {{ .Values.rolloutAnnotationKey }}: {{ .Values.rolloutRevision | quote }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if not .Values.openshift }}
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.securityContext.fsGroup }}
+        {{- end }}
+      volumes:
+        - name: socket
+          emptyDir: {}
+        - name: gateway-socket
+          emptyDir: {}
+        - name: state
+          {{- if .Values.state.persistence }}
+          persistentVolumeClaim:
+            claimName: {{ include "apf.fullname" . }}-state
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: audit
+          {{- if .Values.audit.persistence }}
+          persistentVolumeClaim:
+            claimName: {{ include "apf.fullname" . }}-audit
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if eq $bundleSource "local" }}
+        - name: bundle
+          emptyDir: {}
+        - name: bundle-src
+          configMap:
+            name: {{ include "apf.bundleConfigMap" . }}
+        {{- else }}
+        - name: bundle-download-tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        {{- if .Values.bundle.http.tokenSecret }}
+        - name: bundle-source-token
+          secret:
+            secretName: {{ .Values.bundle.http.tokenSecret | quote }}
+            items:
+              - key: {{ required "bundle.http.tokenKey is required when tokenSecret is set" .Values.bundle.http.tokenKey | quote }}
+                path: token
+        {{- end }}
+        {{- end }}
+        - name: trust
+          configMap:
+            name: {{ include "apf.trustConfigMap" . }}
+        - name: signing
+          secret:
+            secretName: {{ include "apf.signingSecret" . }}
+            items:
+              - key: {{ .Values.signing.keyFile }}
+                path: {{ .Values.signing.keyFile }}
+        - name: httptoken
+          secret:
+            secretName: {{ required "policyService.httpTokenSecret is required; provision it outside Helm" .Values.policyService.httpTokenSecret }}
+            items:
+              - key: token
+                path: token
+        - name: secure-files
+          emptyDir:
+            medium: Memory
+        {{- if not .Values.interceptor.allowInsecureTransport }}
+        - name: interceptor-tls-src
+          secret:
+            secretName: {{ required "interceptor.tlsSecret is required when allowInsecureTransport=false" .Values.interceptor.tlsSecret }}
+            items:
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+              - { key: trust.toml, path: trust.toml }
+        {{- end }}
+        {{- if eq (int .Values.tier) 2 }}
+        - name: middleware-tls-src
+          secret:
+            secretName: {{ required "middleware.tlsSecret is required when tier=2" .Values.middleware.tlsSecret }}
+            items:
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+              - { key: trust.toml, path: trust.toml }
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      initContainers:
+        - name: prepare
+          image: "{{ required "policyService.image is required" .Values.policyService.image }}"
+          imagePullPolicy: {{ .Values.policyService.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              {{- if eq $bundleSource "local" }}
+              tar xzf /src/{{ .Values.bundle.tarKey }} -C /data/bundles \
+                --no-same-owner --no-same-permissions --no-overwrite-dir \
+                --warning=no-unknown-keyword
+              {{- end }}
+              {{- if not .Values.interceptor.allowInsecureTransport }}
+              mkdir -p /secure/interceptor
+              cp /tls/interceptor/tls.crt /secure/interceptor/tls.crt
+              cp /tls/interceptor/tls.key /secure/interceptor/tls.key
+              cp /tls/interceptor/trust.toml /secure/interceptor/trust.toml
+              chmod 0400 /secure/interceptor/tls.crt /secure/interceptor/trust.toml /secure/interceptor/tls.key
+              {{- end }}
+              {{- if eq (int .Values.tier) 2 }}
+              mkdir -p /secure/middleware
+              cp /tls/middleware/tls.crt /secure/middleware/tls.crt
+              cp /tls/middleware/tls.key /secure/middleware/tls.key
+              cp /tls/middleware/trust.toml /secure/middleware/trust.toml
+              chmod 0400 /secure/middleware/tls.crt /secure/middleware/trust.toml /secure/middleware/tls.key
+              {{- end }}
+          volumeMounts:
+            {{- if eq $bundleSource "local" }}
+            - { name: bundle-src, mountPath: /src, readOnly: true }
+            - { name: bundle, mountPath: /data/bundles }
+            {{- end }}
+            - { name: secure-files, mountPath: /secure }
+            {{- if not .Values.interceptor.allowInsecureTransport }}
+            - { name: interceptor-tls-src, mountPath: /tls/interceptor, readOnly: true }
+            {{- end }}
+            {{- if eq (int .Values.tier) 2 }}
+            - { name: middleware-tls-src, mountPath: /tls/middleware, readOnly: true }
+            {{- end }}
+      containers:
+        - name: policy-service
+          image: "{{ required "policyService.image is required" .Values.policyService.image }}"
+          imagePullPolicy: {{ .Values.policyService.pullPolicy }}
+          {{- if or (eq $bundleSource "http") .Values.policyService.extraEnv }}
+          env:
+            {{- if eq $bundleSource "http" }}
+            - name: APF_BUNDLE_SOURCE_POLL_INTERVAL
+              value: {{ .Values.bundle.http.pollIntervalSeconds | quote }}
+            {{- end }}
+            {{- with .Values.policyService.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          readinessProbe:
+            exec:
+              command:
+                - /usr/bin/curl
+                - --fail
+                - --silent
+                - --show-error
+                - --output
+                - /dev/null
+                - http://127.0.0.1:{{ .Values.policyService.httpPort }}/readyz
+            periodSeconds: 5
+            timeoutSeconds: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          args:
+            # The service creates this socket directory under its assigned UID.
+            - --socket=/run/apf/sock/policy-service.sock
+            - --policy-source={{ $bundleSource }}
+            {{- if eq $bundleSource "local" }}
+            - --bundle-path=/data/bundles/{{ required "bundle.manifest is required" .Values.bundle.manifest }}
+            {{- else }}
+            - --bundle-source-url={{ required "bundle.http.url is required when source=http" .Values.bundle.http.url }}
+            {{- if .Values.bundle.http.tokenSecret }}
+            - --bundle-source-token-file=/etc/apf/bundle-source-token/token
+            {{- end }}
+            {{- end }}
+            - --document-signing-key=/etc/apf/signing/{{ .Values.signing.keyFile }}
+            - --document-key-id={{ .Values.signing.keyId }}
+            - --trust-root-dir=/etc/apf/trust-roots
+
+            - --http-addr=127.0.0.1:{{ .Values.policyService.httpPort }}
+            - --http-bearer-token-file=/etc/apf/httptoken/token
+            - --audit-log-dir={{ .Values.audit.mountPath }}
+            - --surfaces={{ join "," .Values.surfaces }}
+            {{- range .Values.policyService.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- with .Values.policyService.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: socket, mountPath: /run/apf }
+            - { name: state, mountPath: /var/lib/apf }
+            - { name: audit, mountPath: {{ .Values.audit.mountPath }} }
+            {{- if eq $bundleSource "local" }}
+            - { name: bundle, mountPath: /data/bundles, readOnly: true }
+            {{- else }}
+            - { name: bundle-download-tmp, mountPath: /tmp }
+            {{- if .Values.bundle.http.tokenSecret }}
+            - { name: bundle-source-token, mountPath: /etc/apf/bundle-source-token, readOnly: true }
+            {{- end }}
+            {{- end }}
+            - { name: trust, mountPath: /etc/apf/trust-roots, readOnly: true }
+            - { name: signing, mountPath: /etc/apf/signing, readOnly: true }
+            - { name: httptoken, mountPath: /etc/apf/httptoken, readOnly: true }
+            {{- with .Values.policyService.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        - name: policy-gateway
+          image: "{{ required "gateway.image is required" .Values.gateway.image }}"
+          imagePullPolicy: {{ .Values.gateway.pullPolicy }}
+          {{- with .Values.gateway.extraEnv }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: interceptor
+            periodSeconds: 5
+            timeoutSeconds: 2
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: interceptor
+              containerPort: {{ .Values.interceptor.port }}
+            {{- if eq (int .Values.tier) 2 }}
+            - name: middleware
+              containerPort: {{ .Values.middleware.port }}
+            {{- end }}
+          args:
+            - --socket=/run/apf-gateway/sock/policy-gateway.sock
+            - --policy-service-socket=/run/apf/sock/policy-service.sock
+            - --document-kind={{ .Values.document.kind }}
+            - --document-name={{ .Values.document.name }}
+            - --document-key-id={{ .Values.signing.keyId }}
+            - --jwks-url=http://127.0.0.1:{{ .Values.policyService.httpPort }}/.well-known/jwks.json
+            - --openshell-interceptor-addr=0.0.0.0:{{ .Values.interceptor.port }}
+            - --audit-log-dir={{ .Values.audit.mountPath }}
+            {{- if .Values.interceptor.gatewayEndpoint }}
+            - --openshell-gateway-url={{ .Values.interceptor.gatewayEndpoint }}
+            {{- end }}
+            {{- if .Values.interceptor.allowInsecureTransport }}
+            - --openshell-interceptor-allow-insecure-transport
+            {{- else }}
+            - --openshell-interceptor-tls-cert-file=/etc/apf/interceptor-tls/tls.crt
+            - --openshell-interceptor-tls-key-file=/etc/apf/interceptor-tls/tls.key
+            - --openshell-interceptor-auth-trust-file=/etc/apf/interceptor-tls/trust.toml
+            {{- end }}
+            {{- if eq (int .Values.tier) 2 }}
+            - --openshell-middleware-addr=0.0.0.0:{{ .Values.middleware.port }}
+            - --openshell-middleware-tls-cert-file=/etc/apf/middleware-tls/tls.crt
+            - --openshell-middleware-tls-key-file=/etc/apf/middleware-tls/tls.key
+            - --openshell-middleware-auth-trust-file=/etc/apf/middleware-tls/trust.toml
+            {{- end }}
+            {{- range .Values.gateway.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- with .Values.gateway.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: socket, mountPath: /run/apf }
+            - { name: gateway-socket, mountPath: /run/apf-gateway }
+            - { name: state, mountPath: /var/lib/apf }
+            - { name: audit, mountPath: {{ .Values.audit.mountPath }} }
+            {{- if not .Values.interceptor.allowInsecureTransport }}
+            - { name: secure-files, mountPath: /etc/apf/interceptor-tls, subPath: interceptor, readOnly: true }
+            {{- end }}
+            {{- if eq (int .Values.tier) 2 }}
+            - { name: secure-files, mountPath: /etc/apf/middleware-tls, subPath: middleware, readOnly: true }
+            {{- end }}
+            {{- with .Values.gateway.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

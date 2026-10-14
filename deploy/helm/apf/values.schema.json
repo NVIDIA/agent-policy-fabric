@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "nameOverride": {
+      "type": "string",
+      "description": "Replace chart name in resource names and labels."
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Replace the release-derived resource name."
+    },
+    "gateway": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Policy-gateway image reference.",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "type": "string",
+          "description": "Gateway image pull policy."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Gateway container CPU and memory requests and limits."
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments appended after chart-managed gateway flags."
+        },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Additional Kubernetes EnvVar entries for the gateway."
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Additional gateway volume mounts."
+        }
+      }
+    },
+    "policyService": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Policy-service image, also used by the init container.",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "type": "string",
+          "description": "Policy-service and init-container image pull policy."
+        },
+        "httpPort": {
+          "type": "integer",
+          "description": "Loopback HTTP port for readiness and JWKS."
+        },
+        "httpTokenSecret": {
+          "type": "string",
+          "description": "Existing Secret with `token` for protected HTTP routes."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Policy-service container CPU and memory requests and limits."
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments appended after chart-managed service flags."
+        },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Additional Kubernetes EnvVar entries for the service."
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Additional policy-service volume mounts."
+        }
+      }
+    },
+    "interceptor": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "description": "Interceptor Service and container port."
+        },
+        "gatewayEndpoint": {
+          "type": "string",
+          "description": "Optional OpenShell gateway URL for APF callbacks."
+        },
+        "allowInsecureTransport": {
+          "type": "boolean",
+          "description": "Disable interceptor TLS for isolated local development only."
+        },
+        "tlsSecret": {
+          "type": "string",
+          "description": "Existing Secret with interceptor `tls.crt`, `tls.key`, and `trust.toml`."
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "`local` tarball or `http` URL.",
+          "enum": [
+            "http",
+            "local"
+          ]
+        },
+        "http": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Signed tarball URL; required in HTTP mode."
+            },
+            "pollIntervalSeconds": {
+              "type": "integer",
+              "description": "Seconds between HTTP source polls.",
+              "minimum": 1
+            },
+            "tokenSecret": {
+              "type": "string",
+              "description": "Optional existing bearer-token Secret for the HTTP source."
+            },
+            "tokenKey": {
+              "type": "string",
+              "description": "Key in that Secret."
+            }
+          }
+        },
+        "tarGz": {
+          "type": "string",
+          "description": "Signed tarball bytes supplied through `--set-file` in local mode."
+        },
+        "file": {
+          "type": "string",
+          "description": "Signed tarball path packaged inside the chart in local mode."
+        },
+        "existingConfigMap": {
+          "type": "string",
+          "description": "Existing local tarball ConfigMap; set to `\"\"` for `tarGz` or `file`."
+        },
+        "tarKey": {
+          "type": "string",
+          "description": "Tarball key in the local ConfigMap."
+        },
+        "manifest": {
+          "type": "string",
+          "description": "Manifest path inside the extracted local bundle."
+        }
+      }
+    },
+    "rolloutRevision": {
+      "type": "string",
+      "description": "Change to restart the pod after external Secret or trust updates."
+    },
+    "rolloutAnnotationKey": {
+      "type": "string",
+      "description": "Pod annotation carrying `rolloutRevision`."
+    },
+    "trustRoot": {
+      "type": "object",
+      "properties": {
+        "existingConfigMap": {
+          "type": "string",
+          "description": "Existing public trust-key ConfigMap; set to `\"\"` to use `trustRoot.keys`."
+        },
+        "keys": {
+          "type": "object",
+          "description": "Public signing keys indexed by key ID for a chart-managed ConfigMap.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "description": "Existing document-signing Secret."
+        },
+        "keyFile": {
+          "type": "string",
+          "description": "Signing seed key in that Secret."
+        },
+        "keyId": {
+          "type": "string",
+          "description": "Key ID attached to signed documents."
+        }
+      }
+    },
+    "surfaces": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Policy projection surfaces requested from the service."
+    },
+    "document": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Requested signed document kind."
+        },
+        "name": {
+          "type": "string",
+          "description": "Requested signed document name."
+        }
+      }
+    },
+    "tier": {
+      "type": "integer",
+      "description": "`1` for admission; `2` also exposes supervisor middleware.",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "middleware": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "description": "Tier-2 middleware Service and container port."
+        },
+        "tlsSecret": {
+          "type": "string",
+          "description": "Existing Secret with middleware TLS files and `trust.toml`; required at tier 2."
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "persistence": {
+          "type": "boolean",
+          "description": "Use a PVC for antirollback counters; otherwise `emptyDir`."
+        },
+        "size": {
+          "type": "string",
+          "description": "State PVC capacity request."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "State PVC StorageClass; empty uses cluster default."
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "persistence": {
+          "type": "boolean",
+          "description": "Use a PVC for audit files; otherwise `emptyDir`."
+        },
+        "size": {
+          "type": "string",
+          "description": "Audit PVC capacity request when enabled."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "Audit PVC StorageClass; empty uses cluster default."
+        },
+        "mountPath": {
+          "type": "string",
+          "description": "Audit directory mounted in both containers."
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Kubernetes Service type."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Service metadata annotations."
+        }
+      }
+    },
+    "openshift": {
+      "type": "boolean",
+      "description": "Let OpenShift assign UID and fsGroup instead of setting explicit IDs."
+    },
+    "securityContext": {
+      "type": "object",
+      "properties": {
+        "runAsUser": {
+          "type": "integer",
+          "description": "Pod user ID when `openshift` is false."
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "Pod group ID when `openshift` is false."
+        },
+        "fsGroup": {
+          "type": "integer",
+          "description": "Pod filesystem group when `openshift` is false."
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Existing Kubernetes image pull Secret references."
+    },
+    "podAnnotations": {
+      "type": "object",
+      "description": "Additional pod-template annotations."
+    },
+    "nodeSelector": {
+      "type": "object",
+      "description": "Node-label selector for pod placement."
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Pod tolerations."
+    },
+    "affinity": {
+      "type": "object",
+      "description": "Pod/node affinity rules."
+    },
+    "extraVolumes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Additional pod volumes for custom configuration."
+    }
+  }
+}

@@ -1,0 +1,176 @@
+# SPDX-License-Identifier: Apache-2.0
+# Default values describe the chart interface. Supply accessible images, a
+# signed bundle, a matching trust root, and runtime Secrets before installing.
+
+# nameOverride replaces the chart name in generated resource names and labels.
+nameOverride: ""
+# fullnameOverride replaces the release-derived resource name.
+fullnameOverride: ""
+
+# gateway configures the policy-gateway container.
+gateway:
+  # gateway.image is the policy-gateway image reference; pin a tag or digest.
+  image: apf-policy-gateway:0.1.0
+  # gateway.pullPolicy is the Kubernetes image pull policy.
+  pullPolicy: IfNotPresent
+  # gateway.resources sets Kubernetes CPU and memory requests and limits.
+  resources: {}
+  # gateway.extraArgs appends command-line arguments after chart-managed flags.
+  extraArgs: []
+  # gateway.extraEnv appends Kubernetes environment variable entries.
+  extraEnv: []
+  # gateway.extraVolumeMounts appends Kubernetes volume mounts to this container.
+  extraVolumeMounts: []
+
+# policyService configures the policy-service and bundle-preparation containers.
+policyService:
+  # policyService.image is the policy-service image used by both containers.
+  image: apf-policy-service:0.1.0
+  # policyService.pullPolicy is the Kubernetes image pull policy for both containers.
+  pullPolicy: IfNotPresent
+  # policyService.httpPort is the loopback HTTP port used for readiness and JWKS.
+  httpPort: 19200
+  # policyService.httpTokenSecret names a Secret with key token for protected HTTP routes.
+  httpTokenSecret: apf-runtime
+  # policyService.resources sets requests and limits for the main container.
+  resources: {}
+  # policyService.extraArgs appends command-line arguments after chart-managed flags.
+  extraArgs: []
+  # policyService.extraEnv appends Kubernetes environment variable entries.
+  extraEnv: []
+  # policyService.extraVolumeMounts appends volume mounts to the main container.
+  extraVolumeMounts: []
+
+# interceptor configures the OpenShell gateway gRPC endpoint.
+interceptor:
+  # interceptor.port is the Service and container port for the interceptor.
+  port: 18081
+  # interceptor.gatewayEndpoint is the optional OpenShell gateway URL for APF callbacks.
+  gatewayEndpoint: ""
+  # interceptor.allowInsecureTransport disables TLS for isolated local development only.
+  allowInsecureTransport: false
+  # interceptor.tlsSecret names a Secret with tls.crt, tls.key, and trust.toml.
+  tlsSecret: apf-runtime
+
+# bundle selects the signed policy source. HTTP polls for updates; local loads
+# one bundle from a ConfigMap. No organization policy ships with this chart.
+bundle:
+  # bundle.source is either local or http.
+  source: local
+  # bundle.http configures the source when bundle.source is http.
+  http:
+    # bundle.http.url is the signed bundle tarball URL; required in HTTP mode.
+    url: ""
+    # bundle.http.pollIntervalSeconds is the interval between HTTP polls.
+    pollIntervalSeconds: 30
+    # bundle.http.tokenSecret names an optional bearer-token Secret for the source.
+    tokenSecret: ""
+    # bundle.http.tokenKey is the bearer-token key in that Secret.
+    tokenKey: token
+  # bundle.tarGz contains tarball bytes supplied with --set-file in local mode.
+  tarGz: ""
+  # bundle.file is a tarball path packaged inside the chart in local mode.
+  file: ""
+  # bundle.existingConfigMap names a ConfigMap with the signed tarball in local mode.
+  # Set it to "" when using bundle.tarGz or bundle.file instead.
+  existingConfigMap: apf-bundle
+  # bundle.tarKey is the tarball key in the local bundle ConfigMap.
+  tarKey: bundle.tar.gz
+  # bundle.manifest is the manifest path inside the extracted local tarball.
+  manifest: bundle/manifest.yaml
+
+# rolloutRevision changes the pod template to restart after external Secret or
+# existing trust ConfigMap changes. HTTP bundle updates do not need a restart.
+rolloutRevision: ""
+# rolloutAnnotationKey names the pod annotation used for rolloutRevision.
+rolloutAnnotationKey: apf-rollout-revision
+
+# trustRoot supplies public keys used to verify signed bundles.
+trustRoot:
+  # trustRoot.existingConfigMap names a ConfigMap containing public trust keys.
+  # Set it to "" to create a ConfigMap from trustRoot.keys instead.
+  existingConfigMap: apf-trust
+  # trustRoot.keys maps key IDs to public trust-key contents; never put private keys here.
+  keys: {}
+
+# signing identifies an existing Secret used for document provenance signatures.
+signing:
+  # signing.existingSecret names the Secret containing the document signing seed.
+  existingSecret: apf-runtime
+  # signing.keyFile is the signing seed key in that Secret.
+  keyFile: document-signing.seed
+  # signing.keyId is the key ID attached to signed documents.
+  keyId: apf
+
+# surfaces lists policy projection surfaces requested from policy-service.
+surfaces:
+  - openshell.sandbox.v1
+  - openshell.provider-profile.v1
+  - apf.policy.v1
+
+# document selects the signed document requested by policy-gateway.
+document:
+  # document.kind is the requested policy document kind.
+  kind: openshell.sandbox.v1
+  # document.name is the requested policy document name.
+  name: default
+
+# tier is 1 for admission only or 2 to expose supervisor middleware as well.
+tier: 1
+# middleware configures the tier-2 OpenShell supervisor endpoint.
+middleware:
+  # middleware.port is the tier-2 Service and container port.
+  port: 9099
+  # middleware.tlsSecret names a Secret with tls.crt, tls.key, and trust.toml.
+  tlsSecret: ""
+
+# state stores antirollback counters shared by the two APF containers.
+state:
+  # state.persistence creates a PVC; disabling it loses counters on pod replacement.
+  persistence: true
+  # state.size is the requested capacity of the state PVC.
+  size: 1Gi
+  # state.storageClass selects a StorageClass, or "" for the cluster default.
+  storageClass: ""
+
+# audit stores JSONL audit files shared by the two APF containers.
+audit:
+  # audit.persistence creates a PVC; otherwise audit files use emptyDir.
+  persistence: false
+  # audit.size is the requested capacity of the audit PVC when enabled.
+  size: 1Gi
+  # audit.storageClass selects a StorageClass, or "" for the cluster default.
+  storageClass: ""
+  # audit.mountPath is the audit directory mounted in both containers.
+  mountPath: /var/log/apf/audit
+
+# service configures the Kubernetes Service exposing OpenShell endpoints.
+service:
+  # service.type is the Kubernetes Service type.
+  type: ClusterIP
+  # service.annotations adds metadata annotations to the Service.
+  annotations: {}
+
+# openshift omits explicit UID/GID settings for OpenShift-assigned identities.
+openshift: false
+# securityContext applies only when openshift is false.
+securityContext:
+  # securityContext.runAsUser is the unprivileged pod user ID.
+  runAsUser: 65532
+  # securityContext.runAsGroup is the unprivileged pod group ID.
+  runAsGroup: 65532
+  # securityContext.fsGroup grants the pod access to mounted volumes.
+  fsGroup: 65532
+
+# imagePullSecrets lists existing Kubernetes image pull Secret references.
+imagePullSecrets: []
+# podAnnotations adds metadata annotations to the pod template.
+podAnnotations: {}
+# nodeSelector constrains pod placement by node labels.
+nodeSelector: {}
+# tolerations adds Kubernetes tolerations to the pod.
+tolerations: []
+# affinity adds Kubernetes pod/node affinity rules.
+affinity: {}
+# extraVolumes appends Kubernetes volumes to the pod for custom configuration.
+extraVolumes: []

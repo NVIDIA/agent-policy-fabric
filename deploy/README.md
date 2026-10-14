@@ -1,7 +1,7 @@
 # deploy/
 
-Container images, local development stack, and host (systemd) deployment
-for APF services.
+Container images, Kubernetes Helm chart, local development stack, and host
+(systemd) deployment for APF services.
 
 ## Structure
 
@@ -13,11 +13,14 @@ deploy/
 │   │   └── Dockerfile         # PAP image
 │   └── apf-policy-gateway/
 │       └── Dockerfile         # Local PDP image
+├── helm/apf/                 # Generic Kubernetes chart
 └── systemd/                   # Host deployment (systemd units, sysusers, polkit)
     └── SECURITY.md            # Host deployment security requirements — read before deploying
 ```
 
-For a bare-host deployment (not containers), see `systemd/README.md` and,
+For Kubernetes, see `helm/apf/README.md`. The chart contains no cluster or
+organization-specific secret integration; keep those values in the deployment
+repository. For a bare-host deployment (not containers), see `systemd/README.md` and,
 before deploying, `systemd/SECURITY.md`. The `docker/` stack is local-dev
 only (loopback-bound, dev-only signing keys, OpenShell-facing surfaces
 running with caller authentication explicitly opted out) and doesn't need

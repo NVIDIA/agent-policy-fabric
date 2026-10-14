@@ -1,0 +1,16 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- if .Values.audit.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "apf.fullname" . }}-audit
+  labels: {{- include "apf.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.audit.storageClass }}
+  storageClassName: {{ .Values.audit.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.audit.size }}
+{{- end }}
