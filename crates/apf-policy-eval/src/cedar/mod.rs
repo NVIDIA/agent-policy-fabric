@@ -41,9 +41,12 @@
 //! those roots is rejected before the context is built.
 //!
 //! A `forbid` that fails to evaluate, typically because it reads an attribute
-//! the request does not carry, denies the request. Cedar would otherwise drop
-//! the erroring policy from the decision, turning a missing attribute into a
-//! grant. A `permit` that fails to evaluate grants nothing, as in plain Cedar.
+//! the request does not carry, denies the request unless another `forbid` in
+//! the same rule fired, in which case that `forbid` decides. Cedar would
+//! otherwise drop the erroring policy from the decision, turning a missing
+//! attribute into a grant. The deny reason names the statement; the engine's
+//! error text is logged, not returned. A `permit` that fails to evaluate
+//! grants nothing, as in plain Cedar.
 
 use cedar_policy::{
     AuthorizationError, Authorizer, Context, Decision, Effect, Entities, PolicyId, Request,
@@ -221,13 +224,23 @@ impl Evaluator for CedarEvaluator {
             )
             .map_err(|e| EvalError::Engine(format!("cedar request: {e}")))?;
             let response = authorizer.is_authorized(&request, &rule.policies, &Entities::empty());
-            if let Some((policy_id, error)) = failed_forbid(rule, &response) {
+            // A forbid that fired decides on its own terms, findings included. A
+            // forbid that failed to evaluate denies only when no forbid fired, and
+            // the engine's error text goes to the log: the reason that reaches the
+            // caller names the statement alone.
+            let explicit_forbid = response.decision() == Decision::Deny
+                && response.diagnostics().reason().next().is_some();
+            if !explicit_forbid && let Some((policy_id, error)) = failed_forbid(rule, &response) {
+                let label = policy_label(rule, policy_id);
+                tracing::warn!(
+                    rule = %rule.name,
+                    policy = %label,
+                    error = %error,
+                    "forbid failed to evaluate; request denied"
+                );
                 return Ok(EvalResult {
                     allow: false,
-                    deny_reason: format!(
-                        "{}: evaluation error: {error}",
-                        policy_label(rule, policy_id)
-                    ),
+                    deny_reason: format!("{label}: evaluation error"),
                     ..EvalResult::default()
                 });
             }
@@ -1168,6 +1181,47 @@ forbid(principal, action, resource) when { context.args.folder == "archive" };
     }
 
     #[test]
+    fn a_forbid_that_fires_wins_over_a_forbid_that_fails_to_evaluate() {
+        let rule = PolicyRuleDoc {
+            name: "secret-redactor".to_string(),
+            schema: None,
+            definition: r#"
+@id("baseline_allow")
+permit(principal, action, resource);
+
+@apf_finding("secret-detected")
+@id("deny_mcp_secret")
+forbid(principal, action, resource) when {
+  context.has_tool_name &&
+  context.annotations has secret_kind
+};
+
+@id("needs-approval")
+forbid(principal, action, resource) when { context.args.approved == "no" };
+"#
+            .to_string(),
+            data: serde_json::json!({}),
+            role: PolicyRuleRole::Grant,
+        };
+        let ev = CedarEvaluator::from_policy_rules(
+            &[rule],
+            &[secret_kind_annotator()],
+            &[redact_effect()],
+            &[secret_finding()],
+        )
+        .expect("evaluator builds");
+        // The approval argument is absent, so the second forbid cannot evaluate;
+        // the first forbid fires on the secret and decides, finding included.
+        let mut leaky = input("slack", "chat_post_message", &[]);
+        leaky.body_text = "key=AKIA0123456789ABCDEF".to_string();
+        let r = ev.evaluate(leaky).unwrap();
+        assert!(!r.allow);
+        assert_eq!(r.deny_reason, "secret-redactor/deny_mcp_secret");
+        assert_eq!(r.findings.len(), 1, "the fired forbid's finding is kept");
+        assert_eq!(r.findings[0].kind, "secret_detected");
+    }
+
+    #[test]
     fn forbid_that_fails_to_evaluate_denies() {
         let rule = PolicyRuleDoc {
             name: "guard".to_string(),
@@ -1190,13 +1244,12 @@ forbid(principal, action, resource) when { context.args.approved == "no" };
             .evaluate(input("gitlab", "merge_request_merge", &[]))
             .unwrap();
         assert!(!r.allow);
+        assert_eq!(r.deny_reason, "guard/needs-approval: evaluation error");
         assert!(
-            r.deny_reason
-                .starts_with("guard/needs-approval: evaluation error: "),
-            "got: {}",
+            !r.deny_reason.contains("approved") && !r.deny_reason.contains("attribute"),
+            "the engine's error text must not reach the caller: {}",
             r.deny_reason
         );
-        assert!(r.deny_reason.contains("approved"), "got: {}", r.deny_reason);
 
         // With the argument present the forbid evaluates normally.
         let r = ev
