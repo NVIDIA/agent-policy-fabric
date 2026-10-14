@@ -25,7 +25,12 @@ pub fn manifest() -> InterceptorManifest {
         bindings: vec![
             sandbox_policy_inject(),
             sandbox_policy_verify(),
-            sandbox_template_verify(),
+            // NOTE: no CreateSandboxTemplate binding. OpenShell (0.1.x) marks
+            // `openshell.v1.OpenShell/CreateSandboxTemplate` as a NON-interceptable
+            // RPC and rejects the whole interceptor if we bind it. The template
+            // threat is covered instead at CreateSandbox Validate: a template-based
+            // create carrying/needing driver config is refused (deny_templates,
+            // criterion #3). See driver_config::evaluate.
             sandbox_policy_refresh(),
             config_policy_verify(),
             provider_instance_create_verify(),
@@ -90,6 +95,8 @@ fn sandbox_policy_verify() -> InterceptorBinding {
     }
 }
 
+// Retained for reference/tests; intentionally NOT in the manifest (see note above).
+#[allow(dead_code)]
 fn sandbox_template_verify() -> InterceptorBinding {
     InterceptorBinding {
         id: "sandbox-template-verify".to_string(),
@@ -227,24 +234,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_fifteen_bindings() {
-        assert_eq!(manifest().bindings.len(), 15);
+    fn manifest_has_fourteen_bindings() {
+        assert_eq!(manifest().bindings.len(), 14);
     }
 
     #[test]
-    fn sandbox_template_verify_is_validate_fail_closed() {
+    fn no_binding_targets_create_sandbox_template() {
+        // OpenShell (0.1.x) marks `CreateSandboxTemplate` as a NON-interceptable
+        // RPC and rejects the entire interceptor registration if any binding
+        // targets it (verified live against a deployed gateway). The manifest
+        // must therefore not advertise one. Template-based driver config is
+        // instead refused at CreateSandbox Validate (deny_templates, criterion #3).
         let m = manifest();
-        let b = m
-            .bindings
-            .iter()
-            .find(|b| b.id == "sandbox-template-verify")
-            .expect("CreateSandboxTemplate binding present");
-        assert_eq!(
-            b.selector.as_ref().unwrap().rpc,
-            "openshell.v1.OpenShell/CreateSandboxTemplate"
+        assert!(
+            m.bindings.iter().all(|b| b
+                .selector
+                .as_ref()
+                .is_none_or(|s| s.rpc != "openshell.v1.OpenShell/CreateSandboxTemplate")),
+            "CreateSandboxTemplate is non-interceptable in OpenShell; no binding may target it"
         );
-        assert_eq!(b.phases, vec![GatewayInterceptorPhase::Validate as i32]);
-        assert_eq!(b.failure_policy, "fail_closed");
+        assert!(m.bindings.iter().all(|b| b.id != "sandbox-template-verify"));
     }
 
     #[test]
