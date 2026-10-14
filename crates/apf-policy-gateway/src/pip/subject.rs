@@ -25,8 +25,10 @@ pub enum SubjectPath {
     Tool,
     Capability,
     Action,
-    /// The whole runtime identity block.
+    /// The whole runtime identity block; as a lookup key, the instance id.
     Runtime,
+    /// The runtime platform name alone, as a lookup key.
+    RuntimePlatform,
     /// One named call argument.
     Arg(String),
     TargetHost,
@@ -44,7 +46,8 @@ impl FromStr for SubjectPath {
             "tool" => Ok(Self::Tool),
             "capability" => Ok(Self::Capability),
             "action" => Ok(Self::Action),
-            "runtime" | "runtime.instance_id" | "runtime.platform" => Ok(Self::Runtime),
+            "runtime" | "runtime.instance_id" => Ok(Self::Runtime),
+            "runtime.platform" => Ok(Self::RuntimePlatform),
             "target.host" => Ok(Self::TargetHost),
             "target.method" => Ok(Self::TargetMethod),
             "target.path" => Ok(Self::TargetPath),
@@ -71,6 +74,7 @@ impl fmt::Display for SubjectPath {
             Self::Capability => f.write_str("capability"),
             Self::Action => f.write_str("action"),
             Self::Runtime => f.write_str("runtime"),
+            Self::RuntimePlatform => f.write_str("runtime.platform"),
             Self::Arg(name) => write!(f, "args.{name}"),
             Self::TargetHost => f.write_str("target.host"),
             Self::TargetMethod => f.write_str("target.method"),
@@ -122,7 +126,7 @@ pub fn project(input: &EvalInput, paths: &[SubjectPath]) -> EvaluationSubject {
                 subject.capability = input.capability.clone().unwrap_or_default();
             }
             SubjectPath::Action => subject.action = input.action_id(),
-            SubjectPath::Runtime => {
+            SubjectPath::Runtime | SubjectPath::RuntimePlatform => {
                 subject.runtime = input.runtime.as_ref().map(|runtime| RuntimeIdentity {
                     platform: runtime.platform.clone(),
                     instance_id: runtime.instance_id.clone(),
@@ -176,6 +180,10 @@ pub fn lookup_value(subject: &EvaluationSubject, path: &SubjectPath) -> Option<S
             .runtime
             .as_ref()
             .and_then(|runtime| non_empty(&runtime.instance_id)),
+        SubjectPath::RuntimePlatform => subject
+            .runtime
+            .as_ref()
+            .and_then(|runtime| non_empty(&runtime.platform)),
         SubjectPath::Arg(name) => match subject.args.as_ref()?.fields.get(name)?.kind.as_ref()? {
             Kind::StringValue(text) => non_empty(text),
             Kind::BoolValue(flag) => Some(flag.to_string()),
@@ -251,6 +259,11 @@ mod tests {
             "runtime.instance_id".parse::<SubjectPath>().expect("alias"),
             SubjectPath::Runtime
         );
+        assert_eq!(
+            "runtime.platform".parse::<SubjectPath>().expect("platform"),
+            SubjectPath::RuntimePlatform
+        );
+        assert_eq!(SubjectPath::RuntimePlatform.to_string(), "runtime.platform");
         for bad in ["", "args.", "body_text", "args.has space", "target"] {
             assert!(bad.parse::<SubjectPath>().is_err(), "{bad}");
         }
@@ -342,6 +355,10 @@ mod tests {
         assert_eq!(
             lookup_value(&subject, &SubjectPath::Runtime).as_deref(),
             Some("sb-7f2e")
+        );
+        assert_eq!(
+            lookup_value(&subject, &SubjectPath::RuntimePlatform).as_deref(),
+            Some("openshell")
         );
         assert_eq!(lookup_value(&subject, &SubjectPath::Tool), None);
     }
