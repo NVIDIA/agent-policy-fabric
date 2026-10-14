@@ -374,6 +374,55 @@ mod tests {
         }
     }
 
+    fn test_signer() -> DocumentSigner {
+        use ed25519_dalek::SigningKey;
+        DocumentSigner {
+            key_id: "test-kid".to_string(),
+            signing_key: SigningKey::generate(&mut ed25519_dalek::rand_core::UnwrapErr(
+                getrandom::SysRng,
+            )),
+        }
+    }
+
+    fn jwt_payload(token: &str) -> serde_json::Value {
+        use base64::Engine as _;
+        let payload_b64 = token.split('.').nth(1).expect("jwt payload segment");
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload_b64)
+            .expect("base64 payload");
+        serde_json::from_slice(&bytes).expect("json payload")
+    }
+
+    // The signed provenance token carries the driver-config rule (the native
+    // projection cannot), so the interceptor can enforce it.
+    #[test]
+    fn mint_embeds_the_driver_config_claim() {
+        let signer = test_signer();
+        let hex_rule = "0a1b2c3d";
+        let token = mint_provenance_jwt(
+            &signer,
+            "digest",
+            1,
+            0,
+            "spec-digest",
+            "bundle",
+            Some(hex_rule.to_string()),
+        )
+        .expect("mint");
+        assert_eq!(jwt_payload(&token)["apf/driver-config"], hex_rule);
+    }
+
+    #[test]
+    fn mint_omits_the_claim_when_no_rule() {
+        let signer = test_signer();
+        let token = mint_provenance_jwt(&signer, "digest", 1, 0, "spec-digest", "bundle", None)
+            .expect("mint");
+        assert!(
+            jwt_payload(&token).get("apf/driver-config").is_none(),
+            "claim must be absent when the policy carries no rule"
+        );
+    }
+
     fn verbs_written(dir: &std::path::Path) -> Vec<String> {
         let written = std::fs::read_to_string(dir.join("apf-policy-service-audit.jsonl"))
             .expect("audit log was written");

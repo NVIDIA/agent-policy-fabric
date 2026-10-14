@@ -231,6 +231,28 @@ mod tests {
     }
 
     #[test]
+    fn driver_config_returns_the_signed_rule_bytes() {
+        let mut dc = BTreeMap::new();
+        dc.insert("default".to_string(), vec![1u8, 2, 3]);
+        let src = LocalBundleSource::new(Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            PolicyServiceCore {
+                bundle: LoadedBundle {
+                    digest_hex: "abc".to_string(),
+                    monotonic_counter: 7,
+                    audit_metadata: BundleAuditMetadata::from_counter_and_digest(0, ""),
+                    bundle: Default::default(),
+                },
+                projections: BTreeMap::new(),
+                driver_configs: dc,
+                document_signer: None,
+                audit: PolicyServiceAudit::disabled(),
+            },
+        ))));
+        assert_eq!(src.driver_config("default", ""), Some(vec![1u8, 2, 3]));
+        assert_eq!(src.driver_config("missing", ""), None);
+    }
+
+    #[test]
     fn get_returns_projection_with_correct_digest_and_version() {
         let mut proj = BTreeMap::new();
         let bytes = vec![1u8, 2, 3];
