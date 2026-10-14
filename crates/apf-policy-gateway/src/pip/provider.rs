@@ -69,6 +69,8 @@ pub enum ProviderError {
     Capacity,
     #[error("evaluation input could not be sent: {0}")]
     InvalidInput(String),
+    #[error("lookup key unusable: {0}")]
+    UnusableKey(String),
     #[error("provider output rejected: {0}")]
     InvalidOutput(String),
     #[error("provider refused the gateway: {0}")]
@@ -86,6 +88,7 @@ impl ProviderError {
             Self::Unavailable(_) => ProviderStatus::Unavailable,
             Self::Capacity => ProviderStatus::Capacity,
             Self::InvalidInput(_) => ProviderStatus::InvalidInput,
+            Self::UnusableKey(_) => ProviderStatus::NoData,
             Self::InvalidOutput(_) => ProviderStatus::InvalidOutput,
             Self::Unauthorized(_) => ProviderStatus::Unauthorized,
             Self::Misconfigured(_) => ProviderStatus::Misconfigured,

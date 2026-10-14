@@ -442,7 +442,11 @@ fn stamp(
 /// The `_meta` record: who answered, whether an authenticated peer gave a
 /// validated answer, how old the facts are, and how the lookup ended.
 fn provenance(provider: &RegisteredProvider, outcome: &ProviderOutcome) -> Map<String, Value> {
+    // An answer counts as verified only when an authenticated peer gave it; a
+    // lookup that failed, including a key the source could never be asked for,
+    // has no answer to verify.
     let verified = provider.peer_authenticated
+        && !outcome.degraded
         && matches!(
             outcome.status,
             ProviderStatus::Found | ProviderStatus::NoData
@@ -899,6 +903,10 @@ mod tests {
             (
                 ProviderError::InvalidOutput("nulls".to_owned()),
                 "pip_invalid_output:idp",
+            ),
+            (
+                ProviderError::UnusableKey("key 'sandbox' is absent from the request".to_owned()),
+                "pip_no_data:idp",
             ),
         ] {
             let transport = FakeTransport::new(Err(error.clone()));

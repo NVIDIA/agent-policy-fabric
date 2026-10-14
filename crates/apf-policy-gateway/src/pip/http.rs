@@ -194,9 +194,7 @@ impl HttpTransport {
         deadline: Duration,
         status: &mut Option<u16>,
     ) -> Result<LookupResult, ProviderError> {
-        let Some(values) = self.resolve_params(&lookup.subject) else {
-            return Ok(LookupResult::NoData);
-        };
+        let values = self.resolve_params(&lookup.subject)?;
         let url = self.template.render(&values).map_err(|reason| {
             ProviderError::Unavailable(format!("request URL could not be built: {reason}"))
         })?;
@@ -241,28 +239,27 @@ impl HttpTransport {
 
     /// Resolve every parameter from the subject. `None` means the lookup has
     /// no answer: a parameter is absent, empty or fails its pattern.
-    fn resolve_params(&self, subject: &EvaluationSubject) -> Option<ParamValues> {
+    /// The key values for this request. A key that is absent, empty or rejected
+    /// by its pattern means the source cannot be asked: the lookup fails with
+    /// `no_data` and the provider's failure mode decides what follows.
+    fn resolve_params(&self, subject: &EvaluationSubject) -> Result<ParamValues, ProviderError> {
         let mut values = ParamValues::new();
         for param in &self.params {
             let Some(value) = subject::lookup_value(subject, &param.from) else {
-                tracing::debug!(
-                    provider = %self.name,
-                    parameter = %param.name,
-                    "parameter absent from the subject; no lookup"
-                );
-                return None;
+                return Err(ProviderError::UnusableKey(format!(
+                    "key '{}' is absent from the request",
+                    param.name
+                )));
             };
             if !param.pattern.is_match(&value) {
-                tracing::warn!(
-                    provider = %self.name,
-                    parameter = %param.name,
-                    "parameter value rejected by its pattern; no lookup"
-                );
-                return None;
+                return Err(ProviderError::UnusableKey(format!(
+                    "key '{}' was rejected by its pattern",
+                    param.name
+                )));
             }
             values.insert(param.name.clone(), value);
         }
-        Some(values)
+        Ok(values)
     }
 
     /// Select the record, check that it is the one asked for, and copy the
@@ -285,7 +282,12 @@ impl HttpTransport {
                         "the selected record is not an object".to_owned(),
                     ));
                 }
-                _ => return Ok(LookupResult::NoData),
+                many => {
+                    return Err(ProviderError::InvalidOutput(format!(
+                        "the selected list holds {} records where exactly one was expected",
+                        many.len()
+                    )));
+                }
             },
             _ => {
                 return Err(ProviderError::InvalidOutput(
@@ -746,7 +748,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::sync::{Arc, Mutex};
 
-    use apf_policy_eval::EvalInput;
+    use apf_policy_eval::{EvalInput, ProviderStatus};
     use axum::Router;
     use axum::body::Body;
     use axum::extract::{Path as AxumPath, Query, RawQuery, Request, State};
@@ -1111,7 +1113,7 @@ timeout_ms: 2000
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn unusable_parameters_yield_no_data_without_a_request() {
+    async fn unusable_parameters_fail_as_no_data_without_a_request() {
         let (port, upstream) = start_upstream().await;
         let transport = transport(&registration_yaml(port, "/api/now/table/change_request"));
         for project in [
@@ -1120,11 +1122,14 @@ timeout_ms: 2000
             Some("a/b^ORapproval=approved"),
             Some("NV/APF"),
         ] {
-            assert_eq!(
-                run(&transport, project).await.expect("lookup succeeds"),
-                LookupResult::NoData,
-                "{project:?}"
+            let error = run(&transport, project)
+                .await
+                .expect_err("an unusable key fails the lookup");
+            assert!(
+                matches!(error, ProviderError::UnusableKey(_)),
+                "{project:?}: {error}"
             );
+            assert_eq!(error.status(), ProviderStatus::NoData, "{project:?}");
         }
         assert!(
             upstream.requests().is_empty(),
@@ -1136,13 +1141,21 @@ timeout_ms: 2000
     async fn unmatched_records_and_404_yield_no_data() {
         let (port, _upstream) = start_upstream().await;
         let table = transport(&registration_yaml(port, "/api/now/table/change_request"));
-        for project in ["nv/none", "nv/two", "nv/other"] {
+        for project in ["nv/none", "nv/other"] {
             assert_eq!(
                 run(&table, Some(project)).await.expect("lookup succeeds"),
                 LookupResult::NoData,
                 "{project}"
             );
         }
+        // Several records for one key: the answer is ambiguous, not empty.
+        let error = run(&table, Some("nv/two"))
+            .await
+            .expect_err("two records are rejected");
+        assert!(
+            matches!(&error, ProviderError::InvalidOutput(reason) if reason.contains("2 records")),
+            "{error}"
+        );
         let missing = transport(&registration_yaml(port, "/status/404"));
         assert_eq!(
             run(&missing, Some("nv/apf"))
@@ -1209,9 +1222,12 @@ timeout_ms: 2000
         let (port, upstream) = start_upstream().await;
         let hostile = "a/b^ORapproval=approved";
         let strict = transport(&registration_yaml(port, "/echo"));
-        assert_eq!(
-            run(&strict, Some(hostile)).await.expect("lookup succeeds"),
-            LookupResult::NoData
+        assert!(
+            matches!(
+                run(&strict, Some(hostile)).await,
+                Err(ProviderError::UnusableKey(_))
+            ),
+            "a hostile value fails the lookup before any request"
         );
         assert!(upstream.requests().is_empty());
 
@@ -1574,11 +1590,12 @@ timeout_ms: 2000
                 "pattern: \"^[a-z0-9-]+/[a-z0-9-]+|legacy-[0-9]+$\"",
             ),
         );
-        assert_eq!(
-            run(&transport, Some("nv/apf^ORapproval=approved"))
-                .await
-                .expect("lookup succeeds"),
-            LookupResult::NoData
+        assert!(
+            matches!(
+                run(&transport, Some("nv/apf^ORapproval=approved")).await,
+                Err(ProviderError::UnusableKey(_))
+            ),
+            "a value matching one branch only fails the lookup"
         );
         assert!(
             upstream.requests().is_empty(),
