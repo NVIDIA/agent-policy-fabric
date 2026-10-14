@@ -31,6 +31,9 @@ manifest:
     sha256: REPLACE_WITH_DIGEST
   - path: provider-profiles/anthropic.yaml
     sha256: REPLACE_WITH_DIGEST
+  # OAuth2 refresh-token example (auto-refreshed credential; see gmail.yaml)
+  - path: provider-profiles/gmail.yaml
+    sha256: REPLACE_WITH_DIGEST
 
   # Stage 1 — detection annotators
   - path: annotators/secret-detector.yaml

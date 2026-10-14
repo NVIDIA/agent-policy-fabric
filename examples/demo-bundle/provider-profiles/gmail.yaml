@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Example provider profile that mints a short-lived credential via an OAuth2
+# REFRESH-TOKEN grant. Use this shape for any provider whose access token
+# expires (e.g. Gmail / Google APIs) — APF/OpenShell refreshes it before expiry,
+# so the credential keeps working past its ~1h lifetime. For a static,
+# non-expiring token (e.g. a Slack xoxb- bot token) use `kind: host-env` instead
+# (see slack.yaml).
+#
+# Secrets are referenced by host env-var NAME only; the signed document never
+# carries the secret values themselves.
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: gmail
+  title: Gmail
+  description: Gmail / Google API — OAuth2 refresh-token credential (auto-refreshed).
+
+spec:
+  type: email
+  endpoints:
+    - host: gmail.googleapis.com
+      port: 443
+      protocol: rest
+      access: read-write
+      enforcement: enforce
+  binaries:
+    - /usr/bin/curl
+  credentials:
+    - name: oauth_token
+      envVars:
+        - GMAIL_ACCESS_TOKEN
+      required: true
+      style: bearer
+      header: Authorization
+      source:
+        kind: oauth2
+        grant: refresh-token
+        tokenUrl: https://oauth2.googleapis.com/token
+        scopes:
+          - https://www.googleapis.com/auth/gmail.modify
+        # Refresh this many seconds before the access token expires.
+        refreshBeforeSeconds: 300
+        # Grant inputs → host env-var names (values resolved at runtime only).
+        parameters:
+          client_id: GMAIL_CLIENT_ID
+          client_secret: GMAIL_CLIENT_SECRET
+          refresh_token: GMAIL_REFRESH_TOKEN

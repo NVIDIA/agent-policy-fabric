@@ -20,7 +20,7 @@ expires_at: "2099-12-31T00:00:00Z"
 manifest:
   # Network and provider governance
   - path: sandbox/default-policy.yaml
-    sha256: ad711ac66e6731c0461e828ce338a4f7f163331611ee2dfe8a01714626945f09
+    sha256: 5a2ee533e5c8dbe738e4cdfb00fa7c4c0e716f93ad4ddf2b8813761fa443725c
   - path: provider-profiles/github.yaml
     sha256: 622e83a44b8038069d4d6c27cf411fcd33a50a2755dd3dc3de97224f9a2ac394
   - path: provider-profiles/slack.yaml
@@ -31,6 +31,9 @@ manifest:
     sha256: c5039056afe6d034ef29fc3101cb2191a90c77488f1cc124b2c6b8ccd0b805e5
   - path: provider-profiles/anthropic.yaml
     sha256: d8549dd66f16ca8f2f3d225b2e7937c57b5b37804f8e24763aef3f39b145ab87
+  # OAuth2 refresh-token example (auto-refreshed credential; see gmail.yaml)
+  - path: provider-profiles/gmail.yaml
+    sha256: f3096a4ddfbbb1a902891de2f21ff991adcf022ca90e43d4bcac92ad08798f05
 
   # Stage 1 — detection annotators
   - path: annotators/secret-detector.yaml
@@ -62,4 +65,4 @@ manifest:
 schema: YamlSigilSignature.v1alpha1
 alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
 keyid: "apf-dev"
-signature: 8jykFYf1K3U0meGjX4BBw28szBQ6bY9vVtikaIUvpENgz8DoPfUdRBTW4rS0lX4vw-QsPSoyf21Pja26T5mnCg
+signature: UcWYzZ_Juk4nZjNrPhQpXes1RH7enQmMphIBtBScSMd8GMc-5zMpCHTAgilIQR1dZcX1AF4Sokdpn2ByDIm3Cg
