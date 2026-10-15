@@ -77,12 +77,16 @@ impl EvaluationServiceImpl {
         // Cloned before `user_subject` is moved into the evaluator input.
         let subject_for_audit = user_subject.clone();
 
-        let mut input = EvalInput::for_tool_call(
-            req.resource.as_ref().map(|r| r.class.clone()),
-            Some(req.verb.clone()),
-            user_subject,
-            args,
-        );
+        // The verb is a proto3 string, so an absent capability arrives empty
+        // and is no capability: with a class and no verb the action is the
+        // class alone, the action the OpenShell middleware produces for an MCP
+        // tool name. The class is taken as sent. A request without a resource
+        // carries no tool and is evaluated like other non-MCP traffic, by the
+        // control rules alone.
+        let tool = req.resource.as_ref().map(|r| r.class.clone());
+        let capability = Some(req.verb.clone()).filter(|verb| !verb.is_empty());
+
+        let mut input = EvalInput::for_tool_call(tool, capability, user_subject, args);
         // Every field on this surface is asserted by the caller behind the
         // socket's peer-UID check, so the runtime identity is never attested.
         input.runtime = openshell
@@ -151,8 +155,9 @@ mod tests {
     use std::sync::Mutex;
 
     use apf_policy_eval::{
-        ActivePolicy, EnrichFuture, EnrichmentError, EvalError, EvalResult, Evaluator, Finding,
-        ProviderOutcome, ProviderStatus, Severity, Verdict,
+        ActivePolicy, CedarEvaluator, EnrichFuture, EnrichmentError, EvalError, EvalResult,
+        Evaluator, Finding, PolicyRuleDoc, PolicyRuleRole, ProviderOutcome, ProviderStatus,
+        Severity, Verdict,
     };
     use apf_proto::pdp_v1alpha1::Resource as ResourceRef;
     use apf_proto::runtime_v1alpha1::{OpenShellContext, runtime_context};
@@ -327,6 +332,179 @@ mod tests {
             .map(|error| error.message.clone())
             .unwrap_or_default();
         assert!(detail.contains("pip_timeout:cm"), "got: {detail}");
+    }
+
+    fn service_with(evaluator: Arc<dyn Evaluator>, dir: &std::path::Path) -> EvaluationServiceImpl {
+        let (_tx, rx) = new_evaluator_channel(ActivePolicy {
+            evaluator,
+            bundle_digest: DIGEST.to_owned(),
+            policy_revision: REVISION,
+        });
+        drop(_tx);
+        EvaluationServiceImpl {
+            evaluator: rx,
+            audit: PolicyGatewayAudit::to_jsonl_in(dir).expect("build emitter"),
+            enricher: None,
+        }
+    }
+
+    fn class_only_request(class: &str) -> Request<EvaluateRequest> {
+        let mut req = request();
+        let inner = req.get_mut();
+        inner.verb.clear();
+        inner.resource.as_mut().expect("resource").class = class.to_owned();
+        req
+    }
+
+    /// An empty verb is no capability: the action is the class alone, the
+    /// action the OpenShell middleware produces for the same MCP tool name.
+    #[tokio::test]
+    async fn an_empty_verb_makes_the_class_the_whole_action() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = Arc::new(RecordingEvaluator(Mutex::new(None), EvalResult::default()));
+        let svc = service_with(evaluator.clone(), dir.path());
+
+        svc.evaluate(class_only_request("github_repo_read"))
+            .await
+            .expect("allow");
+
+        let seen = evaluator.0.lock().unwrap().clone().expect("evaluated");
+        assert_eq!(seen.tool.as_deref(), Some("github_repo_read"));
+        assert_eq!(seen.capability, None);
+        assert_eq!(seen.action_id(), "github_repo_read");
+    }
+
+    /// Against a real evaluator, a grant written for the middleware's action
+    /// name allows the read tool from this surface and nothing grants the
+    /// write tool.
+    #[tokio::test]
+    async fn a_class_only_request_reaches_a_middleware_style_grant() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = CedarEvaluator::from_policy_rules(
+            &[PolicyRuleDoc {
+                name: "github-grants".to_owned(),
+                schema: None,
+                definition:
+                    r#"permit (principal, action == APF::Action::"github_repo_read", resource);"#
+                        .to_owned(),
+                data: serde_json::json!({}),
+                role: PolicyRuleRole::Grant,
+            }],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("evaluator");
+        let svc = service_with(Arc::new(evaluator), dir.path());
+
+        let allowed = svc
+            .evaluate(class_only_request("github_repo_read"))
+            .await
+            .expect("decided")
+            .into_inner();
+        assert_eq!(allowed.decision, Decision::Allow as i32);
+
+        let denied = svc
+            .evaluate(class_only_request("github_repo_write"))
+            .await
+            .expect("decided")
+            .into_inner();
+        assert_eq!(denied.decision, Decision::Deny as i32);
+        assert_eq!(denied.reason, "no grant for github_repo_write");
+    }
+
+    /// No resource is no tool: the request is evaluated like non-MCP traffic,
+    /// with the verb kept as the capability and no tool name for grants to
+    /// apply to.
+    #[tokio::test]
+    async fn a_request_without_a_resource_is_evaluated_without_a_tool() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let evaluator = Arc::new(RecordingEvaluator(Mutex::new(None), EvalResult::default()));
+        let svc = service_with(evaluator.clone(), dir.path());
+
+        let mut req = request();
+        req.get_mut().resource = None;
+        svc.evaluate(req).await.expect("decided");
+
+        let seen = evaluator.0.lock().unwrap().clone().expect("evaluated");
+        assert_eq!(seen.tool, None);
+        assert!(!seen.has_tool_name);
+        assert_eq!(seen.capability.as_deref(), Some("http.post"));
+        assert_eq!(seen.action_id(), apf_policy_eval::ACTION_INVOKE);
+    }
+
+    /// A grant for the read tool plus a control rule that permits everything.
+    fn grant_and_baseline() -> CedarEvaluator {
+        CedarEvaluator::from_policy_rules(
+            &[
+                PolicyRuleDoc {
+                    name: "github-grants".to_owned(),
+                    schema: None,
+                    definition:
+                        r#"permit (principal, action == APF::Action::"github_repo_read", resource);"#
+                            .to_owned(),
+                    data: serde_json::json!({}),
+                    role: PolicyRuleRole::Grant,
+                },
+                PolicyRuleDoc {
+                    name: "baseline".to_owned(),
+                    schema: None,
+                    definition: "permit (principal, action, resource);".to_owned(),
+                    data: serde_json::json!({}),
+                    role: PolicyRuleRole::Control,
+                },
+            ],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("evaluator")
+    }
+
+    /// Against a real evaluator, a tool-less request is decided by the control
+    /// rules alone, while a request naming a tool still needs a grant.
+    #[tokio::test]
+    async fn a_tool_less_request_is_decided_by_the_control_rules() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let svc = service_with(Arc::new(grant_and_baseline()), dir.path());
+
+        let mut req = request();
+        req.get_mut().resource = None;
+        let decided = svc.evaluate(req).await.expect("decided").into_inner();
+        assert_eq!(decided.decision, Decision::Allow as i32);
+
+        let denied = svc
+            .evaluate(class_only_request("github_repo_write"))
+            .await
+            .expect("decided")
+            .into_inner();
+        assert_eq!(denied.decision, Decision::Deny as i32);
+        assert_eq!(denied.reason, "no grant for github_repo_write");
+    }
+
+    /// A resource with an empty class still names a tool, so a grant is still
+    /// required: the request is denied and recorded, not handed to the
+    /// control rules.
+    #[tokio::test]
+    async fn a_resource_with_an_empty_class_still_needs_a_grant() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let svc = service_with(Arc::new(grant_and_baseline()), dir.path());
+
+        let mut req = request();
+        req.get_mut()
+            .resource
+            .as_mut()
+            .expect("resource")
+            .class
+            .clear();
+        let denied = svc.evaluate(req).await.expect("decided").into_inner();
+        assert_eq!(denied.decision, Decision::Deny as i32);
+        assert!(
+            denied.reason.starts_with("no grant for"),
+            "got: {}",
+            denied.reason
+        );
+        assert_eq!(records(dir.path()).len(), 1, "the denial is recorded");
     }
 
     fn records(dir: &std::path::Path) -> Vec<AuditEvent> {
