@@ -445,6 +445,7 @@ pub fn profile_from_yaml(bytes: &[u8]) -> Result<ProviderProfile, String> {
                     path_template: c.path_template,
                     refresh: c.refresh.map(refresh_from_yaml).transpose()?,
                     token_grant: c.token_grant.map(token_grant_from_yaml).transpose()?,
+                    token_grant_owners: Vec::new(),
                 })
             })
             .collect::<Result<_, String>>()?,

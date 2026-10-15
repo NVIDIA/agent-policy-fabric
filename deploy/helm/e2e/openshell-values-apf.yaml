@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registers APF with the OpenShell gateway: sandbox admission as a gateway
+# interceptor, egress request policy as supervisor middleware, and APF as the
+# provider-profile source. The stanza keys, entry names, and audience strings
+# are OpenShell's own. Applied as a second values file on top of
+# openshell-values.yaml once the APF release is Ready; the gateway calls
+# Describe on every extension at startup and fails closed when one is
+# unreachable.
+#
+# Endpoints and audiences assume the default names (release openshell,
+# APF Service apf in namespace apf, chart default ports). up.sh rewrites them
+# from the environment into E2E_WORK before use.
+gatewayConfig:
+  openshell.gateway:
+    provider_profile_sources:
+      - type: interceptor
+        name: apf/policy-adapter
+  openshell.gateway.interceptors:
+    - name: apf/policy-adapter
+      grpc_endpoint: https://apf.apf.svc.cluster.local:18081
+      audience: urn:openshell:extension:interceptor:openshell
+      tls_ca_cert_path: /etc/apf-ca/ca.crt
+      order: 0
+      failure_policy: fail_closed
+  openshell.supervisor.middleware:
+    - name: apf-content-policy
+      grpc_endpoint: https://apf.apf.svc.cluster.local:9099
+      audience: urn:openshell:extension:middleware:openshell
+      tls_ca_cert_path: /etc/apf-ca/ca.crt
+      max_payload_bytes: 4194304
+      timeout: 10s
+
+# The APF serving certificate, published by materials.sh as ConfigMap apf-ca in
+# the OpenShell namespace. The gateway embeds it into the egress request policy
+# registration it sends to supervisors, so sandboxes need no mount.
+server:
+  extraVolumes:
+    - name: apf-ca
+      configMap:
+        name: apf-ca
+  extraVolumeMounts:
+    - name: apf-ca
+      mountPath: /etc/apf-ca
+      readOnly: true

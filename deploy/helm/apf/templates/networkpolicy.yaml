@@ -1,0 +1,32 @@
+{{- /* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */ -}}
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- $np := .Values.networkPolicy }}
+{{- $openshell := .Values.policyGateway.openshell }}
+{{- if $np.enabled }}
+{{- if not $np.admissionFrom }}
+{{- fail "networkPolicy.admissionFrom must list at least one peer when networkPolicy.enabled=true" }}
+{{- end }}
+{{- if and $openshell.egress.enabled (not $np.egressFrom) }}
+{{- fail "networkPolicy.egressFrom must list at least one peer when networkPolicy.enabled=true and egress request policy is enabled" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "apf.fullname" . }}
+  labels: {{- include "apf.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "apf.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from: {{- toYaml $np.admissionFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $openshell.admission.port }}
+    {{- if $openshell.egress.enabled }}
+    - from: {{- toYaml $np.egressFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $openshell.egress.port }}
+    {{- end }}
+{{- end }}

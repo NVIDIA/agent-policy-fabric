@@ -1,16 +1,22 @@
 {{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
-{{- if .Values.state.persistence }}
+{{- $state := .Values.persistence.state }}
+{{- if $state.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "apf.fullname" . }}-state
   labels: {{- include "apf.labels" . | nindent 4 }}
+  {{- if $state.retain }}
+  annotations:
+    # The antirollback counters outlive the release.
+    helm.sh/resource-policy: keep
+  {{- end }}
 spec:
   accessModes: ["ReadWriteOnce"]
-  {{- if .Values.state.storageClass }}
-  storageClassName: {{ .Values.state.storageClass }}
+  {{- if $state.storageClass }}
+  storageClassName: {{ $state.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.state.size }}
+      storage: {{ $state.size }}
 {{- end }}

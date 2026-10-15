@@ -1,363 +1,270 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "properties": {
-    "nameOverride": {
+  "additionalProperties": false,
+  "definitions": {
+    "pullPolicy": {
       "type": "string",
-      "description": "Replace chart name in resource names and labels."
+      "enum": ["Always", "IfNotPresent", "Never"]
     },
-    "fullnameOverride": {
-      "type": "string",
-      "description": "Replace the release-derived resource name."
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
     },
-    "gateway": {
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stringMap": {
       "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "objectList": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "componentImage": {
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "image": {
+        "registry": { "type": "string", "description": "Image registry; empty uses global.image.registry." },
+        "repository": { "type": "string", "minLength": 1, "description": "Image repository." },
+        "tag": { "type": "string", "description": "Image tag; empty uses the chart appVersion." },
+        "digest": {
           "type": "string",
-          "description": "Policy-gateway image reference.",
-          "minLength": 1
+          "pattern": "^$|^sha256:[a-f0-9]{64}$",
+          "description": "Image digest; takes precedence over tag."
         },
         "pullPolicy": {
-          "type": "string",
-          "description": "Gateway image pull policy."
-        },
-        "resources": {
-          "type": "object",
-          "description": "Gateway container CPU and memory requests and limits."
-        },
-        "extraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Arguments appended after chart-managed gateway flags."
-        },
-        "extraEnv": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          },
-          "description": "Additional Kubernetes EnvVar entries for the gateway."
-        },
-        "extraVolumeMounts": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          },
-          "description": "Additional gateway volume mounts."
+          "description": "Image pull policy; null uses global.image.pullPolicy.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/pullPolicy" }]
         }
       }
     },
+    "pvcSize": { "type": "string", "minLength": 1, "description": "PVC capacity request." },
+    "pvcStorageClass": { "type": "string", "description": "PVC StorageClass; empty uses the cluster default." }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "registry": { "type": "string", "description": "Shared image registry." },
+            "tag": { "type": "string", "description": "Shared image tag; empty uses the chart appVersion." },
+            "pullPolicy": { "$ref": "#/definitions/pullPolicy", "description": "Shared image pull policy." }
+          }
+        },
+        "imagePullSecrets": { "$ref": "#/definitions/objectList", "description": "Image pull Secret references." }
+      }
+    },
+    "nameOverride": { "type": "string", "description": "Replaces the chart name in resource names and labels." },
+    "fullnameOverride": { "type": "string", "description": "Replaces the release-derived resource name." },
     "policyService": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "image": {
-          "type": "string",
-          "description": "Policy-service image, also used by the init container.",
-          "minLength": 1
-        },
-        "pullPolicy": {
-          "type": "string",
-          "description": "Policy-service and init-container image pull policy."
-        },
-        "httpPort": {
-          "type": "integer",
-          "description": "Loopback HTTP port for readiness and JWKS."
-        },
-        "httpTokenSecret": {
-          "type": "string",
-          "description": "Existing Secret with `token` for protected HTTP routes."
-        },
-        "resources": {
-          "type": "object",
-          "description": "Policy-service container CPU and memory requests and limits."
-        },
-        "extraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Arguments appended after chart-managed service flags."
-        },
-        "extraEnv": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          },
-          "description": "Additional Kubernetes EnvVar entries for the service."
-        },
-        "extraVolumeMounts": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          },
-          "description": "Additional policy-service volume mounts."
-        }
-      }
-    },
-    "interceptor": {
-      "type": "object",
-      "properties": {
-        "port": {
-          "type": "integer",
-          "description": "Interceptor Service and container port."
-        },
-        "gatewayEndpoint": {
-          "type": "string",
-          "description": "Optional OpenShell gateway URL for APF callbacks."
-        },
-        "allowInsecureTransport": {
-          "type": "boolean",
-          "description": "Disable interceptor TLS for isolated local development only."
-        },
-        "tlsSecret": {
-          "type": "string",
-          "description": "Existing Secret with interceptor `tls.crt`, `tls.key`, and `trust.toml`."
-        }
-      }
-    },
-    "bundle": {
-      "type": "object",
-      "properties": {
-        "source": {
-          "type": "string",
-          "description": "`local` tarball or `http` URL.",
-          "enum": [
-            "http",
-            "local"
-          ]
-        },
+        "image": { "$ref": "#/definitions/componentImage" },
+        "resources": { "type": "object", "description": "Policy service container requests and limits." },
+        "prepareResources": { "type": "object", "description": "Prepare init container requests and limits." },
         "http": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "url": {
-              "type": "string",
-              "description": "Signed tarball URL; required in HTTP mode."
+            "port": { "$ref": "#/definitions/port", "description": "Loopback HTTP port for readiness and JWKS." },
+            "tokenSecret": { "type": "string", "minLength": 1, "description": "Secret with key token for protected HTTP routes." }
+          }
+        },
+        "signing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string", "minLength": 1, "description": "Secret holding the document signing seed." },
+            "keyFile": { "type": "string", "minLength": 1, "description": "Signing seed key in that Secret." },
+            "keyId": { "type": "string", "minLength": 1, "description": "Key ID attached to signed documents." }
+          }
+        },
+        "documentTtlSecs": { "$ref": "#/definitions/nonNegativeInteger", "description": "Signed document lifetime in seconds; 0 keeps the binary default." },
+        "surfaces": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "description": "Policy projection surfaces." },
+        "bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string", "enum": ["local", "http"], "description": "Signed bundle source." },
+            "local": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingConfigMap": { "type": "string", "description": "ConfigMap holding the signed tarball; empty creates one from tarGz or file." },
+                "tarGz": { "type": "string", "description": "Tarball bytes supplied with --set-file." },
+                "file": { "type": "string", "description": "Tarball path packaged inside the chart." },
+                "tarKey": { "type": "string", "minLength": 1, "description": "Tarball key in the bundle ConfigMap." },
+                "manifest": { "type": "string", "minLength": 1, "description": "Manifest path inside the extracted tarball." }
+              }
             },
-            "pollIntervalSeconds": {
-              "type": "integer",
-              "description": "Seconds between HTTP source polls.",
-              "minimum": 1
-            },
-            "tokenSecret": {
-              "type": "string",
-              "description": "Optional existing bearer-token Secret for the HTTP source."
-            },
-            "tokenKey": {
-              "type": "string",
-              "description": "Key in that Secret."
+            "http": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "url": { "type": "string", "description": "Signed tarball URL; required when source is http." },
+                "pollIntervalSeconds": { "type": "integer", "minimum": 1, "description": "Seconds between polls." },
+                "tokenSecret": { "type": "string", "description": "Secret holding a bearer token for the URL." },
+                "tokenKey": { "type": "string", "minLength": 1, "description": "Token key in that Secret." }
+              }
             }
           }
         },
-        "tarGz": {
-          "type": "string",
-          "description": "Signed tarball bytes supplied through `--set-file` in local mode."
+        "trustRoot": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingConfigMap": { "type": "string", "description": "ConfigMap of public bundle-signing keys; empty creates one from keys." },
+            "keys": { "$ref": "#/definitions/stringMap", "description": "Public keys by key ID for a chart-created ConfigMap." }
+          }
         },
-        "file": {
-          "type": "string",
-          "description": "Signed tarball path packaged inside the chart in local mode."
-        },
-        "existingConfigMap": {
-          "type": "string",
-          "description": "Existing local tarball ConfigMap; set to `\"\"` for `tarGz` or `file`."
-        },
-        "tarKey": {
-          "type": "string",
-          "description": "Tarball key in the local ConfigMap."
-        },
-        "manifest": {
-          "type": "string",
-          "description": "Manifest path inside the extracted local bundle."
-        }
+        "extraArgs": { "$ref": "#/definitions/stringList", "description": "Arguments appended after the chart-managed flags." },
+        "extraEnv": { "$ref": "#/definitions/objectList", "description": "Environment variable entries appended to the container." },
+        "extraVolumeMounts": { "$ref": "#/definitions/objectList", "description": "Volume mounts appended to the container." }
       }
     },
-    "rolloutRevision": {
-      "type": "string",
-      "description": "Change to restart the pod after external Secret or trust updates."
-    },
-    "rolloutAnnotationKey": {
-      "type": "string",
-      "description": "Pod annotation carrying `rolloutRevision`."
-    },
-    "trustRoot": {
+    "policyGateway": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "existingConfigMap": {
-          "type": "string",
-          "description": "Existing public trust-key ConfigMap; set to `\"\"` to use `trustRoot.keys`."
-        },
-        "keys": {
+        "image": { "$ref": "#/definitions/componentImage" },
+        "resources": { "type": "object", "description": "Policy gateway container requests and limits." },
+        "document": {
           "type": "object",
-          "description": "Public signing keys indexed by key ID for a chart-managed ConfigMap.",
-          "additionalProperties": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "minLength": 1, "description": "Signed document kind the gateway requests." },
+            "name": { "type": "string", "minLength": 1, "description": "Signed document name the gateway requests." }
+          }
+        },
+        "openshell": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gatewayEndpoint": { "type": "string", "description": "OpenShell gateway URL for outbound callbacks; empty makes none." },
+            "admission": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "port": { "$ref": "#/definitions/port", "description": "Sandbox admission (OpenShell gateway interceptor) listener port." },
+                "tlsSecret": { "type": "string", "description": "Sandbox admission (OpenShell gateway interceptor) Secret with tls.crt, tls.key, and trust.toml." },
+                "allowInsecureTransport": { "type": "boolean", "description": "Serves the sandbox admission listener without TLS." }
+              }
+            },
+            "egress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "description": "Exposes the egress request policy (OpenShell supervisor middleware) listener." },
+                "port": { "$ref": "#/definitions/port", "description": "Egress request policy (OpenShell supervisor middleware) listener port." },
+                "tlsSecret": { "type": "string", "description": "Egress request policy (OpenShell supervisor middleware) Secret with tls.crt, tls.key, and trust.toml." }
+              }
+            }
+          }
+        },
+        "pip": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": { "type": "string", "description": "ConfigMap holding the provider registration; empty disables enrichment." },
+            "key": { "type": "string", "minLength": 1, "description": "Registration file key in that ConfigMap." },
+            "stageBudgetMs": { "$ref": "#/definitions/nonNegativeInteger", "description": "Enrichment stage cap in milliseconds; 0 keeps the binary default." }
+          }
+        },
+        "extraArgs": { "$ref": "#/definitions/stringList", "description": "Arguments appended after the chart-managed flags." },
+        "extraEnv": { "$ref": "#/definitions/objectList", "description": "Environment variable entries appended to the container." },
+        "extraVolumeMounts": { "$ref": "#/definitions/objectList", "description": "Volume mounts appended to the container." }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Creates a PVC for antirollback counters." },
+            "retain": { "type": "boolean", "description": "Keeps the state PVC when the release is uninstalled." },
+            "size": { "$ref": "#/definitions/pvcSize" },
+            "storageClass": { "$ref": "#/definitions/pvcStorageClass" }
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Creates a PVC for audit files." },
+            "size": { "$ref": "#/definitions/pvcSize" },
+            "storageClass": { "$ref": "#/definitions/pvcStorageClass" },
+            "mountPath": { "type": "string", "minLength": 1, "description": "Audit directory mounted in both containers." },
+            "emptyDirSizeLimitMi": { "$ref": "#/definitions/nonNegativeInteger", "description": "Audit emptyDir size limit in MiB; 0 leaves it unbounded." }
           }
         }
       }
     },
-    "signing": {
+    "serviceAccount": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "existingSecret": {
-          "type": "string",
-          "description": "Existing document-signing Secret."
-        },
-        "keyFile": {
-          "type": "string",
-          "description": "Signing seed key in that Secret."
-        },
-        "keyId": {
-          "type": "string",
-          "description": "Key ID attached to signed documents."
-        }
-      }
-    },
-    "surfaces": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Policy projection surfaces requested from the service."
-    },
-    "document": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "description": "Requested signed document kind."
-        },
-        "name": {
-          "type": "string",
-          "description": "Requested signed document name."
-        }
-      }
-    },
-    "tier": {
-      "type": "integer",
-      "description": "`1` for admission; `2` also exposes supervisor middleware.",
-      "enum": [
-        1,
-        2
-      ]
-    },
-    "middleware": {
-      "type": "object",
-      "properties": {
-        "port": {
-          "type": "integer",
-          "description": "Tier-2 middleware Service and container port."
-        },
-        "tlsSecret": {
-          "type": "string",
-          "description": "Existing Secret with middleware TLS files and `trust.toml`; required at tier 2."
-        }
-      }
-    },
-    "state": {
-      "type": "object",
-      "properties": {
-        "persistence": {
-          "type": "boolean",
-          "description": "Use a PVC for antirollback counters; otherwise `emptyDir`."
-        },
-        "size": {
-          "type": "string",
-          "description": "State PVC capacity request."
-        },
-        "storageClass": {
-          "type": "string",
-          "description": "State PVC StorageClass; empty uses cluster default."
-        }
-      }
-    },
-    "audit": {
-      "type": "object",
-      "properties": {
-        "persistence": {
-          "type": "boolean",
-          "description": "Use a PVC for audit files; otherwise `emptyDir`."
-        },
-        "size": {
-          "type": "string",
-          "description": "Audit PVC capacity request when enabled."
-        },
-        "storageClass": {
-          "type": "string",
-          "description": "Audit PVC StorageClass; empty uses cluster default."
-        },
-        "mountPath": {
-          "type": "string",
-          "description": "Audit directory mounted in both containers."
-        }
+        "create": { "type": "boolean", "description": "Creates a ServiceAccount for the pod." },
+        "name": { "type": "string", "description": "ServiceAccount name; empty derives it from the release." },
+        "annotations": { "$ref": "#/definitions/stringMap", "description": "Annotations on the created ServiceAccount." }
       }
     },
     "service": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "type": {
-          "type": "string",
-          "description": "Kubernetes Service type."
-        },
-        "annotations": {
-          "type": "object",
-          "description": "Service metadata annotations."
-        }
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"], "description": "Kubernetes Service type." },
+        "annotations": { "$ref": "#/definitions/stringMap", "description": "Annotations on the Service." }
       }
     },
-    "openshift": {
-      "type": "boolean",
-      "description": "Let OpenShift assign UID and fsGroup instead of setting explicit IDs."
-    },
-    "securityContext": {
+    "networkPolicy": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "runAsUser": {
-          "type": "integer",
-          "description": "Pod user ID when `openshift` is false."
-        },
-        "runAsGroup": {
-          "type": "integer",
-          "description": "Pod group ID when `openshift` is false."
-        },
-        "fsGroup": {
-          "type": "integer",
-          "description": "Pod filesystem group when `openshift` is false."
-        }
+        "enabled": { "type": "boolean", "description": "Creates a NetworkPolicy for the listeners." },
+        "admissionFrom": { "$ref": "#/definitions/objectList", "description": "NetworkPolicyPeer entries allowed to reach the sandbox admission port." },
+        "egressFrom": { "$ref": "#/definitions/objectList", "description": "NetworkPolicyPeer entries allowed to reach the egress request policy port." }
       }
     },
-    "imagePullSecrets": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      },
-      "description": "Existing Kubernetes image pull Secret references."
-    },
-    "podAnnotations": {
+    "rollout": {
       "type": "object",
-      "description": "Additional pod-template annotations."
+      "additionalProperties": false,
+      "properties": {
+        "revision": { "type": "string", "description": "Change to restart the pod after an external Secret or ConfigMap changes." },
+        "annotationKey": { "type": "string", "minLength": 1, "description": "Pod annotation carrying the revision." }
+      }
     },
-    "nodeSelector": {
+    "openshift": { "type": "boolean", "description": "Omits explicit UID and GID so OpenShift assigns them." },
+    "podSecurityContext": {
       "type": "object",
-      "description": "Node-label selector for pod placement."
+      "additionalProperties": false,
+      "properties": {
+        "runAsUser": { "type": "integer", "minimum": 1, "description": "Pod user ID; applied unless openshift is true." },
+        "runAsGroup": { "type": "integer", "minimum": 1, "description": "Pod group ID; applied unless openshift is true." },
+        "fsGroup": { "type": "integer", "minimum": 1, "description": "Pod filesystem group; applied unless openshift is true." }
+      }
     },
-    "tolerations": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      },
-      "description": "Pod tolerations."
-    },
-    "affinity": {
-      "type": "object",
-      "description": "Pod/node affinity rules."
-    },
-    "extraVolumes": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      },
-      "description": "Additional pod volumes for custom configuration."
-    }
+    "podAnnotations": { "$ref": "#/definitions/stringMap", "description": "Annotations on the pod template." },
+    "podLabels": { "$ref": "#/definitions/stringMap", "description": "Labels on the pod template." },
+    "nodeSelector": { "$ref": "#/definitions/stringMap", "description": "Node labels the pod must match." },
+    "tolerations": { "$ref": "#/definitions/objectList", "description": "Pod tolerations." },
+    "affinity": { "type": "object", "description": "Pod affinity rules." },
+    "extraVolumes": { "$ref": "#/definitions/objectList", "description": "Volumes appended to the pod." },
+    "extraContainers": { "$ref": "#/definitions/objectList", "description": "Sidecar containers appended to the pod." }
   }
 }

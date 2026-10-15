@@ -524,6 +524,7 @@ fn lower_endpoint(e: &ir::NetworkEndpoint) -> Result<os::NetworkEndpoint, String
         credential_binding: None,
         allow_uninspected_credentials: false,
         provider_credentialed: false,
+        token_grant_owner: String::new(),
     })
 }
 

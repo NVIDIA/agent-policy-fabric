@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Minimal policy information provider registration for the chart verification
+# run. One HTTP provider keyed on the sandbox id, served by the pip-stub
+# sidecar on the pod's loopback; the gateway accepts plain http on loopback
+# only. It exists to prove the chart wires policyGateway.pip.* and extraContainers,
+# not to enrich a real decision.
+providers:
+  - name: sandbox-attributes
+    context: sandbox
+    type: http
+    applies_to: [verification_tool]
+    endpoint:
+      url: http://127.0.0.1:19500/table/sandbox
+    request:
+      query:
+        id: "{sandbox}"
+      keys:
+        sandbox:
+          from: runtime.instance_id
+          pattern: "^[a-z0-9][a-z0-9._-]{0,62}$"
+    response:
+      record_path: result
+      must_match:
+        id: "{sandbox}"
+      keep: [state]
+    on_failure: degrade

@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Policy information provider lane for the verification run. up.sh adds this
+# file after apf-values.yaml only when PIP is enabled, because ConfigMaps
+# apf-pip and apf-pip-stub exist only then, and rewrites the sidecar image and
+# health path from the environment.
+#
+# The gateway accepts plain-http providers on loopback only, so the provider
+# behind the registration runs as a sidecar in the APF pod. The ConfigMap key
+# stub.py holds whatever script PIP_STUB_SRC names; it must accept --port.
+policyGateway:
+  pip:
+    configMap: apf-pip
+    key: pips.yaml
+
+extraVolumes:
+  - name: pip-stub-script
+    configMap:
+      name: apf-pip-stub
+
+extraContainers:
+  - name: pip-stub
+    image: python:3.12-slim
+    imagePullPolicy: IfNotPresent
+    command: ["python3", "/app/stub.py", "--port", "19500"]
+    env:
+      - name: PYTHONDONTWRITEBYTECODE
+        value: "1"
+      - name: PIP_STUB_HEALTH_URL
+        value: http://127.0.0.1:19500/healthz
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    readinessProbe:
+      exec:
+        command:
+          - python3
+          - -c
+          - "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen(os.environ['PIP_STUB_HEALTH_URL'], timeout=2).status == 200 else 1)"
+      periodSeconds: 5
+    volumeMounts:
+      - name: pip-stub-script
+        mountPath: /app
+        readOnly: true

@@ -10,3 +10,6 @@
 
 # Python bytecode from the repository scripts and their tests
 __pycache__/
+
+# Helm chart verification harness work directory (kind materials, pulled charts, logs).
+/deploy/helm/e2e/.work/

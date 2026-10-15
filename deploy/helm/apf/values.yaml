@@ -1,176 +1,229 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Default values describe the chart interface. Supply accessible images, a
-# signed bundle, a matching trust root, and runtime Secrets before installing.
 
-# nameOverride replaces the chart name in generated resource names and labels.
+# Default values for the APF chart. Keys marked (prerequisite) name Secrets or
+# ConfigMaps created outside the chart before installation.
+#
+# Topology: this chart runs the policy service and the policy gateway as two
+# containers in one pod sharing a Unix socket (the co-located model). The
+# target deployment separates them: the policy service runs centrally and
+# serves many gateways over the network, and each policy gateway runs next to
+# the OpenShell gateway it governs, or centrally as well when latency and the
+# features in use allow. That split needs the networked policy-service
+# transport, which does not exist yet, so this chart does not offer it.
+
+global:
+  image:
+    # -- Shared image registry; a component registry takes precedence.
+    registry: ""
+    # -- Shared image tag; a component tag takes precedence. Empty uses the chart appVersion.
+    tag: ""
+    # -- Shared image pull policy; a component pull policy takes precedence.
+    pullPolicy: IfNotPresent
+  # -- Image pull Secret references for every container in the pod (prerequisite).
+  imagePullSecrets: []
+
+# -- Replaces the chart name in resource names and labels.
 nameOverride: ""
-# fullnameOverride replaces the release-derived resource name.
+# -- Replaces the release-derived resource name.
 fullnameOverride: ""
 
-# gateway configures the policy-gateway container.
-gateway:
-  # gateway.image is the policy-gateway image reference; pin a tag or digest.
-  image: apf-policy-gateway:0.1.0
-  # gateway.pullPolicy is the Kubernetes image pull policy.
-  pullPolicy: IfNotPresent
-  # gateway.resources sets Kubernetes CPU and memory requests and limits.
-  resources: {}
-  # gateway.extraArgs appends command-line arguments after chart-managed flags.
-  extraArgs: []
-  # gateway.extraEnv appends Kubernetes environment variable entries.
-  extraEnv: []
-  # gateway.extraVolumeMounts appends Kubernetes volume mounts to this container.
-  extraVolumeMounts: []
-
-# policyService configures the policy-service and bundle-preparation containers.
+# Policy service (PAP): verifies the signed bundle, serves projections, and
+# mints provenance documents. Its image also runs the prepare init container.
 policyService:
-  # policyService.image is the policy-service image used by both containers.
-  image: apf-policy-service:0.1.0
-  # policyService.pullPolicy is the Kubernetes image pull policy for both containers.
-  pullPolicy: IfNotPresent
-  # policyService.httpPort is the loopback HTTP port used for readiness and JWKS.
-  httpPort: 19200
-  # policyService.httpTokenSecret names a Secret with key token for protected HTTP routes.
-  httpTokenSecret: apf-runtime
-  # policyService.resources sets requests and limits for the main container.
+  image:
+    # -- Policy service image registry. Empty uses global.image.registry.
+    registry: ""
+    # -- Policy service image repository; the default is a local build name.
+    repository: apf-policy-service
+    # -- Policy service image tag. Empty uses the chart appVersion.
+    tag: ""
+    # -- Policy service image digest. When set, this takes precedence over tag.
+    digest: ""
+    # -- Policy service image pull policy. Null uses global.image.pullPolicy.
+    pullPolicy: null
+  # -- CPU and memory requests and limits for the policy service container.
   resources: {}
-  # policyService.extraArgs appends command-line arguments after chart-managed flags.
+  # -- CPU and memory requests and limits for the prepare init container.
+  prepareResources: {}
+  http:
+    # -- Loopback HTTP port serving readiness and JWKS.
+    port: 19200
+    # -- Secret with key token for protected HTTP routes (prerequisite).
+    tokenSecret: apf-runtime
+  signing:
+    # -- Secret holding the document signing seed (prerequisite).
+    existingSecret: apf-runtime
+    # -- Key of the signing seed in that Secret.
+    keyFile: document-signing.seed
+    # -- Key ID attached to signed documents.
+    keyId: apf
+  # -- Signed document lifetime in seconds; 0 keeps the binary default.
+  documentTtlSecs: 0
+  # -- Policy projection surfaces the service compiles.
+  surfaces:
+    - openshell.sandbox.v1
+    - openshell.provider-profile.v1
+    - apf.policy.v1
+  bundle:
+    # -- Signed bundle source: local loads one tarball from a ConfigMap, http polls a URL.
+    source: local
+    local:
+      # -- ConfigMap holding the signed tarball (prerequisite). Empty creates one from tarGz or file.
+      existingConfigMap: apf-bundle
+      # -- Tarball bytes supplied with --set-file when existingConfigMap is empty.
+      tarGz: ""
+      # -- Tarball path packaged inside the chart when existingConfigMap is empty.
+      file: ""
+      # -- Tarball key in the bundle ConfigMap.
+      tarKey: bundle.tar.gz
+      # -- Manifest path inside the extracted tarball.
+      manifest: bundle/manifest.yaml
+    http:
+      # -- Signed tarball URL; required when source is http.
+      url: ""
+      # -- Seconds between polls of the URL.
+      pollIntervalSeconds: 30
+      # -- Secret holding a bearer token for the URL (prerequisite); empty sends none.
+      tokenSecret: ""
+      # -- Token key in that Secret.
+      tokenKey: token
+  trustRoot:
+    # -- ConfigMap of public bundle-signing keys (prerequisite). Empty creates one from keys.
+    existingConfigMap: apf-trust
+    # -- Public keys by key ID for a chart-created ConfigMap; never private keys.
+    keys: {}
+  # -- Arguments appended after the chart-managed flags.
   extraArgs: []
-  # policyService.extraEnv appends Kubernetes environment variable entries.
+  # -- Environment variable entries appended to the container.
   extraEnv: []
-  # policyService.extraVolumeMounts appends volume mounts to the main container.
+  # -- Volume mounts appended to the container.
   extraVolumeMounts: []
 
-# interceptor configures the OpenShell gateway gRPC endpoint.
-interceptor:
-  # interceptor.port is the Service and container port for the interceptor.
-  port: 18081
-  # interceptor.gatewayEndpoint is the optional OpenShell gateway URL for APF callbacks.
-  gatewayEndpoint: ""
-  # interceptor.allowInsecureTransport disables TLS for isolated local development only.
-  allowInsecureTransport: false
-  # interceptor.tlsSecret names a Secret with tls.crt, tls.key, and trust.toml.
-  tlsSecret: apf-runtime
+# Policy gateway (PDP) with two OpenShell-facing features: sandbox admission
+# (registered as a gateway interceptor) and egress request policy (registered
+# as supervisor middleware).
+policyGateway:
+  image:
+    # -- Policy gateway image registry. Empty uses global.image.registry.
+    registry: ""
+    # -- Policy gateway image repository; the default is a local build name.
+    repository: apf-policy-gateway
+    # -- Policy gateway image tag. Empty uses the chart appVersion.
+    tag: ""
+    # -- Policy gateway image digest. When set, this takes precedence over tag.
+    digest: ""
+    # -- Policy gateway image pull policy. Null uses global.image.pullPolicy.
+    pullPolicy: null
+  # -- CPU and memory requests and limits for the policy gateway container.
+  resources: {}
+  document:
+    # -- Signed document kind the gateway requests.
+    kind: openshell.sandbox.v1
+    # -- Signed document name the gateway requests.
+    name: default
+  openshell:
+    # -- OpenShell gateway URL for outbound callbacks; empty makes none.
+    gatewayEndpoint: ""
+    admission:
+      # -- Sandbox admission (OpenShell gateway interceptor): Service and container port of its listener.
+      port: 18081
+      # -- Sandbox admission (OpenShell gateway interceptor): Secret with tls.crt, tls.key, and trust.toml (prerequisite).
+      tlsSecret: apf-runtime
+      # -- Sandbox admission (OpenShell gateway interceptor): serves the listener without TLS; isolated local development only.
+      allowInsecureTransport: false
+    egress:
+      # -- Egress request policy (OpenShell supervisor middleware): exposes its listener.
+      enabled: false
+      # -- Egress request policy (OpenShell supervisor middleware): Service and container port of its listener.
+      port: 9099
+      # -- Egress request policy (OpenShell supervisor middleware): Secret with tls.crt, tls.key, and trust.toml (prerequisite); required when enabled.
+      tlsSecret: ""
+  pip:
+    # -- ConfigMap holding the policy information provider registration (prerequisite); empty disables enrichment.
+    configMap: ""
+    # -- Registration file key in that ConfigMap.
+    key: pips.yaml
+    # -- Cap on the enrichment stage in milliseconds; 0 keeps the binary default.
+    stageBudgetMs: 0
+  # -- Arguments appended after the chart-managed flags.
+  extraArgs: []
+  # -- Environment variable entries appended to the container.
+  extraEnv: []
+  # -- Volume mounts appended to the container.
+  extraVolumeMounts: []
 
-# bundle selects the signed policy source. HTTP polls for updates; local loads
-# one bundle from a ConfigMap. No organization policy ships with this chart.
-bundle:
-  # bundle.source is either local or http.
-  source: local
-  # bundle.http configures the source when bundle.source is http.
-  http:
-    # bundle.http.url is the signed bundle tarball URL; required in HTTP mode.
-    url: ""
-    # bundle.http.pollIntervalSeconds is the interval between HTTP polls.
-    pollIntervalSeconds: 30
-    # bundle.http.tokenSecret names an optional bearer-token Secret for the source.
-    tokenSecret: ""
-    # bundle.http.tokenKey is the bearer-token key in that Secret.
-    tokenKey: token
-  # bundle.tarGz contains tarball bytes supplied with --set-file in local mode.
-  tarGz: ""
-  # bundle.file is a tarball path packaged inside the chart in local mode.
-  file: ""
-  # bundle.existingConfigMap names a ConfigMap with the signed tarball in local mode.
-  # Set it to "" when using bundle.tarGz or bundle.file instead.
-  existingConfigMap: apf-bundle
-  # bundle.tarKey is the tarball key in the local bundle ConfigMap.
-  tarKey: bundle.tar.gz
-  # bundle.manifest is the manifest path inside the extracted local tarball.
-  manifest: bundle/manifest.yaml
+persistence:
+  state:
+    # -- Creates a PVC for antirollback counters; false uses emptyDir and loses them on pod replacement.
+    enabled: true
+    # -- Keeps the state PVC when the release is uninstalled.
+    retain: true
+    # -- Capacity request of the state PVC.
+    size: 1Gi
+    # -- StorageClass of the state PVC; empty uses the cluster default.
+    storageClass: ""
+  audit:
+    # -- Creates a PVC for audit files; false uses emptyDir.
+    enabled: false
+    # -- Capacity request of the audit PVC.
+    size: 1Gi
+    # -- StorageClass of the audit PVC; empty uses the cluster default.
+    storageClass: ""
+    # -- Audit directory mounted in both containers.
+    mountPath: /var/log/apf/audit
+    # -- Size limit of the audit emptyDir in MiB; 0 leaves it unbounded.
+    emptyDirSizeLimitMi: 0
 
-# rolloutRevision changes the pod template to restart after external Secret or
-# existing trust ConfigMap changes. HTTP bundle updates do not need a restart.
-rolloutRevision: ""
-# rolloutAnnotationKey names the pod annotation used for rolloutRevision.
-rolloutAnnotationKey: apf-rollout-revision
-
-# trustRoot supplies public keys used to verify signed bundles.
-trustRoot:
-  # trustRoot.existingConfigMap names a ConfigMap containing public trust keys.
-  # Set it to "" to create a ConfigMap from trustRoot.keys instead.
-  existingConfigMap: apf-trust
-  # trustRoot.keys maps key IDs to public trust-key contents; never put private keys here.
-  keys: {}
-
-# signing identifies an existing Secret used for document provenance signatures.
-signing:
-  # signing.existingSecret names the Secret containing the document signing seed.
-  existingSecret: apf-runtime
-  # signing.keyFile is the signing seed key in that Secret.
-  keyFile: document-signing.seed
-  # signing.keyId is the key ID attached to signed documents.
-  keyId: apf
-
-# surfaces lists policy projection surfaces requested from policy-service.
-surfaces:
-  - openshell.sandbox.v1
-  - openshell.provider-profile.v1
-  - apf.policy.v1
-
-# document selects the signed document requested by policy-gateway.
-document:
-  # document.kind is the requested policy document kind.
-  kind: openshell.sandbox.v1
-  # document.name is the requested policy document name.
-  name: default
-
-# tier is 1 for admission only or 2 to expose supervisor middleware as well.
-tier: 1
-# middleware configures the tier-2 OpenShell supervisor endpoint.
-middleware:
-  # middleware.port is the tier-2 Service and container port.
-  port: 9099
-  # middleware.tlsSecret names a Secret with tls.crt, tls.key, and trust.toml.
-  tlsSecret: ""
-
-# state stores antirollback counters shared by the two APF containers.
-state:
-  # state.persistence creates a PVC; disabling it loses counters on pod replacement.
-  persistence: true
-  # state.size is the requested capacity of the state PVC.
-  size: 1Gi
-  # state.storageClass selects a StorageClass, or "" for the cluster default.
-  storageClass: ""
-
-# audit stores JSONL audit files shared by the two APF containers.
-audit:
-  # audit.persistence creates a PVC; otherwise audit files use emptyDir.
-  persistence: false
-  # audit.size is the requested capacity of the audit PVC when enabled.
-  size: 1Gi
-  # audit.storageClass selects a StorageClass, or "" for the cluster default.
-  storageClass: ""
-  # audit.mountPath is the audit directory mounted in both containers.
-  mountPath: /var/log/apf/audit
-
-# service configures the Kubernetes Service exposing OpenShell endpoints.
-service:
-  # service.type is the Kubernetes Service type.
-  type: ClusterIP
-  # service.annotations adds metadata annotations to the Service.
+serviceAccount:
+  # -- Creates a ServiceAccount for the pod; its token is never mounted.
+  create: true
+  # -- ServiceAccount name; empty derives it from the release, or names an existing one when create is false.
+  name: ""
+  # -- Annotations on the created ServiceAccount.
   annotations: {}
 
-# openshift omits explicit UID/GID settings for OpenShift-assigned identities.
+service:
+  # -- Kubernetes Service type.
+  type: ClusterIP
+  # -- Annotations on the Service.
+  annotations: {}
+
+networkPolicy:
+  # -- Creates a NetworkPolicy admitting ingress to the listeners only from the peers below.
+  enabled: false
+  # -- Sandbox admission (OpenShell gateway interceptor): NetworkPolicyPeer entries allowed to reach its port.
+  admissionFrom: []
+  # -- Egress request policy (OpenShell supervisor middleware): NetworkPolicyPeer entries allowed to reach its port.
+  egressFrom: []
+
+rollout:
+  # -- Any string; change it to restart the pod after an external Secret or ConfigMap changes.
+  revision: ""
+  # -- Pod annotation carrying the revision.
+  annotationKey: apf-rollout-revision
+
+# -- Omits explicit UID and GID so OpenShift assigns them.
 openshift: false
-# securityContext applies only when openshift is false.
-securityContext:
-  # securityContext.runAsUser is the unprivileged pod user ID.
+podSecurityContext:
+  # -- Pod user ID; applied unless openshift is true.
   runAsUser: 65532
-  # securityContext.runAsGroup is the unprivileged pod group ID.
+  # -- Pod group ID; applied unless openshift is true.
   runAsGroup: 65532
-  # securityContext.fsGroup grants the pod access to mounted volumes.
+  # -- Pod filesystem group; applied unless openshift is true.
   fsGroup: 65532
 
-# imagePullSecrets lists existing Kubernetes image pull Secret references.
-imagePullSecrets: []
-# podAnnotations adds metadata annotations to the pod template.
+# -- Annotations on the pod template.
 podAnnotations: {}
-# nodeSelector constrains pod placement by node labels.
+# -- Labels on the pod template.
+podLabels: {}
+# -- Node labels the pod must match.
 nodeSelector: {}
-# tolerations adds Kubernetes tolerations to the pod.
+# -- Pod tolerations.
 tolerations: []
-# affinity adds Kubernetes pod/node affinity rules.
+# -- Pod affinity rules.
 affinity: {}
-# extraVolumes appends Kubernetes volumes to the pod for custom configuration.
+# -- Volumes appended to the pod.
 extraVolumes: []
+# -- Sidecar containers appended to the pod, such as a loopback policy information provider.
+extraContainers: []

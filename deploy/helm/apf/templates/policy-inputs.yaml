@@ -1,24 +1,26 @@
 {{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
 {{- $bundleSource := include "apf.bundleSource" . }}
+{{- $local := .Values.policyService.bundle.local }}
+{{- $trustRoot := .Values.policyService.trustRoot }}
 
-{{- if and (eq $bundleSource "local") (not .Values.bundle.existingConfigMap) }}
-{{- if and .Values.bundle.tarGz .Values.bundle.file }}{{ fail "set only one of bundle.tarGz or bundle.file" }}{{- end }}
-{{- $bundleBytes := .Values.bundle.tarGz -}}
-{{- if .Values.bundle.file -}}
-{{- $bundleBytes = required (printf "bundle.file %s not found" .Values.bundle.file) (.Files.Get .Values.bundle.file) -}}
+{{- if and (eq $bundleSource "local") (not $local.existingConfigMap) }}
+{{- if and $local.tarGz $local.file }}{{ fail "set only one of policyService.bundle.local.tarGz or policyService.bundle.local.file" }}{{- end }}
+{{- $bundleBytes := $local.tarGz -}}
+{{- if $local.file -}}
+{{- $bundleBytes = required (printf "policyService.bundle.local.file %s not found" $local.file) (.Files.Get $local.file) -}}
 {{- end -}}
-{{- if not $bundleBytes }}{{ fail "bundle.existingConfigMap, bundle.tarGz, or bundle.file is required" }}{{- end }}
+{{- if not $bundleBytes }}{{ fail "policyService.bundle.local.existingConfigMap, tarGz, or file is required" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "apf.bundleConfigMap" . }}
   labels: {{- include "apf.labels" . | nindent 4 }}
 binaryData:
-  {{ .Values.bundle.tarKey }}: {{ $bundleBytes | b64enc }}
+  {{ $local.tarKey }}: {{ $bundleBytes | b64enc }}
 {{- end }}
 
-{{- if not .Values.trustRoot.existingConfigMap }}
-{{- if not .Values.trustRoot.keys }}{{ fail "trustRoot.existingConfigMap or trustRoot.keys is required" }}{{- end }}
+{{- if not $trustRoot.existingConfigMap }}
+{{- if not $trustRoot.keys }}{{ fail "policyService.trustRoot.existingConfigMap or policyService.trustRoot.keys is required" }}{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -26,7 +28,7 @@ metadata:
   name: {{ include "apf.trustConfigMap" . }}
   labels: {{- include "apf.labels" . | nindent 4 }}
 data:
-{{- range $k, $v := .Values.trustRoot.keys }}
+{{- range $k, $v := $trustRoot.keys }}
   {{ $k }}: |
 {{ $v | indent 4 }}
 {{- end }}

@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# APF chart values for the kind verification run. Images are local builds
+# loaded with `kind load docker-image`, so pullPolicy is Never. Secrets and
+# ConfigMaps named here are created by materials.sh. up.sh overrides the image
+# tags, the listener ports, and the OpenShell gateway endpoint from the
+# environment.
+fullnameOverride: apf
+
+policyService:
+  image:
+    repository: apf-policy-service
+    tag: dev
+    pullPolicy: Never
+  http:
+    tokenSecret: apf-runtime
+  signing:
+    existingSecret: apf-runtime
+    keyFile: document-signing.seed
+    keyId: apf-dev
+  documentTtlSecs: 86400
+  surfaces:
+    - openshell.sandbox.v1
+    - openshell.provider-profile.v1
+    - apf.policy.v1
+  bundle:
+    source: local
+    local:
+      existingConfigMap: apf-bundle
+      manifest: bundle/manifest.yaml
+  trustRoot:
+    existingConfigMap: apf-trust
+
+policyGateway:
+  image:
+    repository: apf-policy-gateway
+    tag: dev
+    pullPolicy: Never
+  document:
+    kind: openshell.sandbox.v1
+    name: default
+  openshell:
+    gatewayEndpoint: http://openshell.openshell.svc.cluster.local:8080
+    admission:
+      tlsSecret: apf-runtime
+    egress:
+      enabled: true
+      tlsSecret: apf-egress
+
+persistence:
+  state:
+    enabled: true
+  audit:
+    enabled: false

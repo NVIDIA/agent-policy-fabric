@@ -1,5 +1,18 @@
 {{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
 {{- $bundleSource := include "apf.bundleSource" . }}
+{{- $ps := .Values.policyService }}
+{{- $pg := .Values.policyGateway }}
+{{- $admission := $pg.openshell.admission }}
+{{- $egress := $pg.openshell.egress }}
+{{- $audit := .Values.persistence.audit }}
+{{- if eq (int $admission.port) (int $ps.http.port) }}
+{{- fail "policyGateway.openshell.admission.port must differ from policyService.http.port" }}
+{{- end }}
+{{- if and $egress.enabled (or (eq (int $egress.port) (int $admission.port)) (eq (int $egress.port) (int $ps.http.port))) }}
+{{- fail "policyGateway.openshell.egress.port must differ from policyGateway.openshell.admission.port and policyService.http.port" }}
+{{- end }}
+{{- $serviceImage := include "apf.image" (dict "image" $ps.image "global" .Values.global "chart" .Chart) }}
+{{- $servicePullPolicy := include "apf.pullPolicy" (dict "image" $ps.image "global" .Values.global) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +20,7 @@ metadata:
   labels: {{- include "apf.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  {{- if .Values.state.persistence }}
+  {{- if .Values.persistence.state.enabled }}
   strategy:
     type: Recreate
   {{- end }}
@@ -16,15 +29,20 @@ spec:
   template:
     metadata:
       labels: {{- include "apf.selectorLabels" . | nindent 8 }}
+        {{- with omit .Values.podLabels "app.kubernetes.io/name" "app.kubernetes.io/instance" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         # Chart-created policy input changes restart the pod.
         checksum/policy-inputs: {{ include (print $.Template.BasePath "/policy-inputs.yaml") . | sha256sum }}
-        {{ .Values.rolloutAnnotationKey }}: {{ .Values.rolloutRevision | quote }}
+        {{ .Values.rollout.annotationKey }}: {{ .Values.rollout.revision | quote }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.imagePullSecrets }}
+      serviceAccountName: {{ include "apf.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext:
@@ -32,9 +50,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         {{- if not .Values.openshift }}
-        runAsUser: {{ .Values.securityContext.runAsUser }}
-        runAsGroup: {{ .Values.securityContext.runAsGroup }}
-        fsGroup: {{ .Values.securityContext.fsGroup }}
+        runAsUser: {{ .Values.podSecurityContext.runAsUser }}
+        runAsGroup: {{ .Values.podSecurityContext.runAsGroup }}
+        fsGroup: {{ .Values.podSecurityContext.fsGroup }}
         {{- end }}
       volumes:
         - name: socket
@@ -42,16 +60,19 @@ spec:
         - name: gateway-socket
           emptyDir: {}
         - name: state
-          {{- if .Values.state.persistence }}
+          {{- if .Values.persistence.state.enabled }}
           persistentVolumeClaim:
             claimName: {{ include "apf.fullname" . }}-state
           {{- else }}
           emptyDir: {}
           {{- end }}
         - name: audit
-          {{- if .Values.audit.persistence }}
+          {{- if $audit.enabled }}
           persistentVolumeClaim:
             claimName: {{ include "apf.fullname" . }}-audit
+          {{- else if gt (int $audit.emptyDirSizeLimitMi) 0 }}
+          emptyDir:
+            sizeLimit: {{ printf "%dMi" (int $audit.emptyDirSizeLimitMi) | quote }}
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -65,12 +86,12 @@ spec:
         - name: bundle-download-tmp
           emptyDir:
             sizeLimit: 128Mi
-        {{- if .Values.bundle.http.tokenSecret }}
+        {{- if $ps.bundle.http.tokenSecret }}
         - name: bundle-source-token
           secret:
-            secretName: {{ .Values.bundle.http.tokenSecret | quote }}
+            secretName: {{ $ps.bundle.http.tokenSecret | quote }}
             items:
-              - key: {{ required "bundle.http.tokenKey is required when tokenSecret is set" .Values.bundle.http.tokenKey | quote }}
+              - key: {{ required "policyService.bundle.http.tokenKey is required when tokenSecret is set" $ps.bundle.http.tokenKey | quote }}
                 path: token
         {{- end }}
         {{- end }}
@@ -81,42 +102,53 @@ spec:
           secret:
             secretName: {{ include "apf.signingSecret" . }}
             items:
-              - key: {{ .Values.signing.keyFile }}
-                path: {{ .Values.signing.keyFile }}
+              - key: {{ $ps.signing.keyFile }}
+                path: {{ $ps.signing.keyFile }}
         - name: httptoken
           secret:
-            secretName: {{ required "policyService.httpTokenSecret is required; provision it outside Helm" .Values.policyService.httpTokenSecret }}
+            secretName: {{ required "policyService.http.tokenSecret is required; provision it outside Helm" $ps.http.tokenSecret }}
             items:
               - key: token
                 path: token
         - name: secure-files
           emptyDir:
             medium: Memory
-        {{- if not .Values.interceptor.allowInsecureTransport }}
+        {{- if not $admission.allowInsecureTransport }}
         - name: interceptor-tls-src
           secret:
-            secretName: {{ required "interceptor.tlsSecret is required when allowInsecureTransport=false" .Values.interceptor.tlsSecret }}
+            secretName: {{ required "policyGateway.openshell.admission.tlsSecret is required when allowInsecureTransport=false" $admission.tlsSecret }}
             items:
               - { key: tls.crt, path: tls.crt }
               - { key: tls.key, path: tls.key }
               - { key: trust.toml, path: trust.toml }
         {{- end }}
-        {{- if eq (int .Values.tier) 2 }}
+        {{- if $egress.enabled }}
         - name: middleware-tls-src
           secret:
-            secretName: {{ required "middleware.tlsSecret is required when tier=2" .Values.middleware.tlsSecret }}
+            secretName: {{ required "policyGateway.openshell.egress.tlsSecret is required when egress.enabled=true" $egress.tlsSecret }}
             items:
               - { key: tls.crt, path: tls.crt }
               - { key: tls.key, path: tls.key }
               - { key: trust.toml, path: trust.toml }
+        {{- end }}
+        {{- if $pg.pip.configMap }}
+        - name: pip-config
+          configMap:
+            name: {{ $pg.pip.configMap | quote }}
+            items:
+              - key: {{ $pg.pip.key | quote }}
+                path: {{ $pg.pip.key | quote }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       initContainers:
         - name: prepare
-          image: "{{ required "policyService.image is required" .Values.policyService.image }}"
-          imagePullPolicy: {{ .Values.policyService.pullPolicy }}
+          image: {{ $serviceImage | quote }}
+          imagePullPolicy: {{ $servicePullPolicy }}
+          {{- with $ps.prepareResources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -129,18 +161,18 @@ spec:
             - |
               umask 077
               {{- if eq $bundleSource "local" }}
-              tar xzf /src/{{ .Values.bundle.tarKey }} -C /data/bundles \
+              tar xzf /src/{{ $ps.bundle.local.tarKey }} -C /data/bundles \
                 --no-same-owner --no-same-permissions --no-overwrite-dir \
                 --warning=no-unknown-keyword
               {{- end }}
-              {{- if not .Values.interceptor.allowInsecureTransport }}
+              {{- if not $admission.allowInsecureTransport }}
               mkdir -p /secure/interceptor
               cp /tls/interceptor/tls.crt /secure/interceptor/tls.crt
               cp /tls/interceptor/tls.key /secure/interceptor/tls.key
               cp /tls/interceptor/trust.toml /secure/interceptor/trust.toml
               chmod 0400 /secure/interceptor/tls.crt /secure/interceptor/trust.toml /secure/interceptor/tls.key
               {{- end }}
-              {{- if eq (int .Values.tier) 2 }}
+              {{- if $egress.enabled }}
               mkdir -p /secure/middleware
               cp /tls/middleware/tls.crt /secure/middleware/tls.crt
               cp /tls/middleware/tls.key /secure/middleware/tls.key
@@ -153,23 +185,23 @@ spec:
             - { name: bundle, mountPath: /data/bundles }
             {{- end }}
             - { name: secure-files, mountPath: /secure }
-            {{- if not .Values.interceptor.allowInsecureTransport }}
+            {{- if not $admission.allowInsecureTransport }}
             - { name: interceptor-tls-src, mountPath: /tls/interceptor, readOnly: true }
             {{- end }}
-            {{- if eq (int .Values.tier) 2 }}
+            {{- if $egress.enabled }}
             - { name: middleware-tls-src, mountPath: /tls/middleware, readOnly: true }
             {{- end }}
       containers:
         - name: policy-service
-          image: "{{ required "policyService.image is required" .Values.policyService.image }}"
-          imagePullPolicy: {{ .Values.policyService.pullPolicy }}
-          {{- if or (eq $bundleSource "http") .Values.policyService.extraEnv }}
+          image: {{ $serviceImage | quote }}
+          imagePullPolicy: {{ $servicePullPolicy }}
+          {{- if or (eq $bundleSource "http") $ps.extraEnv }}
           env:
             {{- if eq $bundleSource "http" }}
             - name: APF_BUNDLE_SOURCE_POLL_INTERVAL
-              value: {{ .Values.bundle.http.pollIntervalSeconds | quote }}
+              value: {{ $ps.bundle.http.pollIntervalSeconds | quote }}
             {{- end }}
-            {{- with .Values.policyService.extraEnv }}
+            {{- with $ps.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
@@ -182,7 +214,7 @@ spec:
                 - --show-error
                 - --output
                 - /dev/null
-                - http://127.0.0.1:{{ .Values.policyService.httpPort }}/readyz
+                - http://127.0.0.1:{{ $ps.http.port }}/readyz
             periodSeconds: 5
             timeoutSeconds: 3
           securityContext:
@@ -197,54 +229,57 @@ spec:
             - --socket=/run/apf/sock/policy-service.sock
             - --policy-source={{ $bundleSource }}
             {{- if eq $bundleSource "local" }}
-            - --bundle-path=/data/bundles/{{ required "bundle.manifest is required" .Values.bundle.manifest }}
+            - --bundle-path=/data/bundles/{{ required "policyService.bundle.local.manifest is required" $ps.bundle.local.manifest }}
             {{- else }}
-            - --bundle-source-url={{ required "bundle.http.url is required when source=http" .Values.bundle.http.url }}
-            {{- if .Values.bundle.http.tokenSecret }}
+            - --bundle-source-url={{ required "policyService.bundle.http.url is required when source=http" $ps.bundle.http.url }}
+            {{- if $ps.bundle.http.tokenSecret }}
             - --bundle-source-token-file=/etc/apf/bundle-source-token/token
             {{- end }}
             {{- end }}
-            - --document-signing-key=/etc/apf/signing/{{ .Values.signing.keyFile }}
-            - --document-key-id={{ .Values.signing.keyId }}
+            - --document-signing-key=/etc/apf/signing/{{ $ps.signing.keyFile }}
+            - --document-key-id={{ $ps.signing.keyId }}
             - --trust-root-dir=/etc/apf/trust-roots
 
-            - --http-addr=127.0.0.1:{{ .Values.policyService.httpPort }}
+            - --http-addr=127.0.0.1:{{ $ps.http.port }}
             - --http-bearer-token-file=/etc/apf/httptoken/token
-            - --audit-log-dir={{ .Values.audit.mountPath }}
-            - --surfaces={{ join "," .Values.surfaces }}
-            {{- range .Values.policyService.extraArgs }}
+            - --audit-log-dir={{ $audit.mountPath }}
+            - --surfaces={{ join "," $ps.surfaces }}
+            {{- if gt (int $ps.documentTtlSecs) 0 }}
+            - --document-ttl-secs={{ int $ps.documentTtlSecs }}
+            {{- end }}
+            {{- range $ps.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .Values.policyService.resources }}
+          {{- with $ps.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
             - { name: socket, mountPath: /run/apf }
             - { name: state, mountPath: /var/lib/apf }
-            - { name: audit, mountPath: {{ .Values.audit.mountPath }} }
+            - { name: audit, mountPath: {{ $audit.mountPath }} }
             {{- if eq $bundleSource "local" }}
             - { name: bundle, mountPath: /data/bundles, readOnly: true }
             {{- else }}
             - { name: bundle-download-tmp, mountPath: /tmp }
-            {{- if .Values.bundle.http.tokenSecret }}
+            {{- if $ps.bundle.http.tokenSecret }}
             - { name: bundle-source-token, mountPath: /etc/apf/bundle-source-token, readOnly: true }
             {{- end }}
             {{- end }}
             - { name: trust, mountPath: /etc/apf/trust-roots, readOnly: true }
             - { name: signing, mountPath: /etc/apf/signing, readOnly: true }
             - { name: httptoken, mountPath: /etc/apf/httptoken, readOnly: true }
-            {{- with .Values.policyService.extraVolumeMounts }}
+            {{- with $ps.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
         - name: policy-gateway
-          image: "{{ required "gateway.image is required" .Values.gateway.image }}"
-          imagePullPolicy: {{ .Values.gateway.pullPolicy }}
-          {{- with .Values.gateway.extraEnv }}
+          image: {{ include "apf.image" (dict "image" $pg.image "global" .Values.global "chart" .Chart) | quote }}
+          imagePullPolicy: {{ include "apf.pullPolicy" (dict "image" $pg.image "global" .Values.global) }}
+          {{- with $pg.extraEnv }}
           env: {{- toYaml . | nindent 12 }}
           {{- end }}
           readinessProbe:
             tcpSocket:
-              port: interceptor
+              port: {{ ternary "egress" "admission" $egress.enabled }}
             periodSeconds: 5
             timeoutSeconds: 2
           securityContext:
@@ -255,57 +290,71 @@ spec:
             capabilities:
               drop: ["ALL"]
           ports:
-            - name: interceptor
-              containerPort: {{ .Values.interceptor.port }}
-            {{- if eq (int .Values.tier) 2 }}
-            - name: middleware
-              containerPort: {{ .Values.middleware.port }}
+            - name: admission
+              containerPort: {{ $admission.port }}
+            {{- if $egress.enabled }}
+            - name: egress
+              containerPort: {{ $egress.port }}
             {{- end }}
           args:
             - --socket=/run/apf-gateway/sock/policy-gateway.sock
             - --policy-service-socket=/run/apf/sock/policy-service.sock
-            - --document-kind={{ .Values.document.kind }}
-            - --document-name={{ .Values.document.name }}
-            - --document-key-id={{ .Values.signing.keyId }}
-            - --jwks-url=http://127.0.0.1:{{ .Values.policyService.httpPort }}/.well-known/jwks.json
-            - --openshell-interceptor-addr=0.0.0.0:{{ .Values.interceptor.port }}
-            - --audit-log-dir={{ .Values.audit.mountPath }}
-            {{- if .Values.interceptor.gatewayEndpoint }}
-            - --openshell-gateway-url={{ .Values.interceptor.gatewayEndpoint }}
+            - --document-kind={{ $pg.document.kind }}
+            - --document-name={{ $pg.document.name }}
+            - --document-key-id={{ $ps.signing.keyId }}
+            - --jwks-url=http://127.0.0.1:{{ $ps.http.port }}/.well-known/jwks.json
+            - --openshell-interceptor-addr=0.0.0.0:{{ $admission.port }}
+            - --audit-log-dir={{ $audit.mountPath }}
+            {{- if $pg.openshell.gatewayEndpoint }}
+            - --openshell-gateway-url={{ $pg.openshell.gatewayEndpoint }}
             {{- end }}
-            {{- if .Values.interceptor.allowInsecureTransport }}
+            {{- if $admission.allowInsecureTransport }}
             - --openshell-interceptor-allow-insecure-transport
             {{- else }}
             - --openshell-interceptor-tls-cert-file=/etc/apf/interceptor-tls/tls.crt
             - --openshell-interceptor-tls-key-file=/etc/apf/interceptor-tls/tls.key
             - --openshell-interceptor-auth-trust-file=/etc/apf/interceptor-tls/trust.toml
             {{- end }}
-            {{- if eq (int .Values.tier) 2 }}
-            - --openshell-middleware-addr=0.0.0.0:{{ .Values.middleware.port }}
+            {{- if $egress.enabled }}
+            - --openshell-middleware-addr=0.0.0.0:{{ $egress.port }}
             - --openshell-middleware-tls-cert-file=/etc/apf/middleware-tls/tls.crt
             - --openshell-middleware-tls-key-file=/etc/apf/middleware-tls/tls.key
             - --openshell-middleware-auth-trust-file=/etc/apf/middleware-tls/trust.toml
             {{- end }}
-            {{- range .Values.gateway.extraArgs }}
+            {{- if $pg.pip.configMap }}
+            - --pip-config=/etc/apf/pip/{{ $pg.pip.key }}
+            {{- if gt (int $pg.pip.stageBudgetMs) 0 }}
+            - --pip-stage-budget-ms={{ int $pg.pip.stageBudgetMs }}
+            {{- end }}
+            {{- end }}
+            {{- range $pg.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .Values.gateway.resources }}
+          {{- with $pg.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
             - { name: socket, mountPath: /run/apf }
             - { name: gateway-socket, mountPath: /run/apf-gateway }
             - { name: state, mountPath: /var/lib/apf }
-            - { name: audit, mountPath: {{ .Values.audit.mountPath }} }
-            {{- if not .Values.interceptor.allowInsecureTransport }}
+            - { name: audit, mountPath: {{ $audit.mountPath }} }
+            {{- if not $admission.allowInsecureTransport }}
             - { name: secure-files, mountPath: /etc/apf/interceptor-tls, subPath: interceptor, readOnly: true }
             {{- end }}
-            {{- if eq (int .Values.tier) 2 }}
+            {{- if $egress.enabled }}
             - { name: secure-files, mountPath: /etc/apf/middleware-tls, subPath: middleware, readOnly: true }
             {{- end }}
-            {{- with .Values.gateway.extraVolumeMounts }}
+            {{- if $pg.pip.configMap }}
+            # subPath yields a regular file; the gateway rejects the symlinks a
+            # ConfigMap volume exposes. Changes need a pod restart.
+            - { name: pip-config, mountPath: /etc/apf/pip/{{ $pg.pip.key }}, subPath: {{ $pg.pip.key | quote }}, readOnly: true }
+            {{- end }}
+            {{- with $pg.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

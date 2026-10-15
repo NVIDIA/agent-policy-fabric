@@ -1,25 +1,62 @@
 {{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
 {{- $bundleSource := include "apf.bundleSource" . }}
-APF release: {{ include "apf.fullname" . }} (tier {{ .Values.tier }})
+{{- $ps := .Values.policyService }}
+{{- $pg := .Values.policyGateway }}
+{{- $host := printf "%s.%s.svc.cluster.local" (include "apf.fullname" .) .Release.Namespace }}
+APF release: {{ include "apf.fullname" . }} (sandbox admission{{ if $pg.openshell.egress.enabled }} and egress request policy{{ end }})
 
 Policy inputs:
 {{- if eq $bundleSource "local" }}
   Signed bundle ConfigMap: {{ include "apf.bundleConfigMap" . }}
 {{- else }}
-  Signed bundle URL: {{ .Values.bundle.http.url }}
-{{- if .Values.bundle.http.tokenSecret }}
-  Bundle source token Secret: {{ .Values.bundle.http.tokenSecret }}
+  Signed bundle URL: {{ $ps.bundle.http.url }}
+{{- if $ps.bundle.http.tokenSecret }}
+  Bundle source token Secret: {{ $ps.bundle.http.tokenSecret }}
 {{- end }}
 {{- end }}
   Bundle trust-root ConfigMap: {{ include "apf.trustConfigMap" . }}
   Document signing Secret: {{ include "apf.signingSecret" . }}
-  Policy-service HTTP token Secret: {{ .Values.policyService.httpTokenSecret }}
-
-OpenShell gateway registration is outside this chart and must be managed in
-the OpenShell deployment configuration. Mount the APF issuing CA in OpenShell.
-The interceptor endpoint is:
-  {{ ternary "http" "https" .Values.interceptor.allowInsecureTransport }}://{{ include "apf.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.interceptor.port }}
-{{- if eq (int .Values.tier) 2 }}
-The supervisor middleware endpoint is:
-  https://{{ include "apf.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.middleware.port }}
+  Policy-service HTTP token Secret: {{ $ps.http.tokenSecret }}
+{{- if $pg.pip.configMap }}
+  Policy information provider ConfigMap: {{ $pg.pip.configMap }} (key {{ $pg.pip.key }})
 {{- end }}
+
+OpenShell is deployed by its own chart. Register this release there once the
+APF pod is Ready; the OpenShell gateway calls Describe on every registered
+extension at startup and fails closed if one is unreachable. Add this to the
+OpenShell chart values, replacing <gateway_id> with the OpenShell gateway ID
+(its chart fullname by default) and mounting the CA that issued the APF
+serving certificate at /etc/apf-ca/ca.crt through server.extraVolumes and
+server.extraVolumeMounts. Sandbox admission registers as a gateway
+interceptor{{ if $pg.openshell.egress.enabled }} and egress request policy as supervisor middleware{{ end }}:
+
+gatewayConfig:
+  openshell.gateway:
+    provider_profile_sources:
+      - type: interceptor
+        name: apf/policy-adapter
+  openshell.gateway.interceptors:
+    - name: apf/policy-adapter
+{{- if $pg.openshell.admission.allowInsecureTransport }}
+      grpc_endpoint: http://{{ $host }}:{{ $pg.openshell.admission.port }}
+      allow_insecure_transport: true
+{{- else }}
+      grpc_endpoint: https://{{ $host }}:{{ $pg.openshell.admission.port }}
+      tls_ca_cert_path: /etc/apf-ca/ca.crt
+{{- end }}
+      audience: urn:openshell:extension:interceptor:<gateway_id>
+      order: 0
+      failure_policy: fail_closed
+{{- if $pg.openshell.egress.enabled }}
+  openshell.supervisor.middleware:
+    - name: apf-content-policy
+      grpc_endpoint: https://{{ $host }}:{{ $pg.openshell.egress.port }}
+      audience: urn:openshell:extension:middleware:<gateway_id>
+      tls_ca_cert_path: /etc/apf-ca/ca.crt
+      max_payload_bytes: 4194304
+      timeout: 10s
+{{- end }}
+
+Each listener's trust.toml must carry the same audience as its stanza above,
+issuer openshell-gateway:<gateway_id>, and the kid and public.pem from the
+OpenShell JWT Secret. The chart README covers the derivation.

@@ -1,4 +1,5 @@
 {{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- $openshell := .Values.policyGateway.openshell }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,13 +12,13 @@ spec:
   type: {{ .Values.service.type }}
   selector: {{- include "apf.selectorLabels" . | nindent 4 }}
   ports:
-    - name: interceptor
-      port: {{ .Values.interceptor.port }}
-      targetPort: interceptor
+    - name: admission
+      port: {{ $openshell.admission.port }}
+      targetPort: admission
       protocol: TCP
-    {{- if eq (int .Values.tier) 2 }}
-    - name: middleware
-      port: {{ .Values.middleware.port }}
-      targetPort: middleware
+    {{- if $openshell.egress.enabled }}
+    - name: egress
+      port: {{ $openshell.egress.port }}
+      targetPort: egress
       protocol: TCP
     {{- end }}

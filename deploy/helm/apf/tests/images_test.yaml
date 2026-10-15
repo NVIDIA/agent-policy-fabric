@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+suite: image configuration
+templates:
+  - templates/deployment.yaml
+  - templates/policy-inputs.yaml
+tests:
+  - it: defaults image tags to appVersion for both services and preparation
+    template: templates/deployment.yaml
+    chart:
+      appVersion: "1.2.3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: apf-policy-service:1.2.3
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: apf-policy-gateway:1.2.3
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: apf-policy-service:1.2.3
+  - it: applies shared registry tag and pull policy to every container
+    template: templates/deployment.yaml
+    set:
+      global.image.registry: registry.example.com/team
+      global.image.tag: dev
+      global.image.pullPolicy: Always
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/team/apf-policy-service:dev
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: registry.example.com/team/apf-policy-gateway:dev
+      - equal:
+          path: spec.template.spec.initContainers[0].imagePullPolicy
+          value: Always
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+      - equal:
+          path: spec.template.spec.containers[1].imagePullPolicy
+          value: Always
+  - it: prefers component registry tag and pull policy over shared defaults
+    template: templates/deployment.yaml
+    set:
+      global.image.registry: shared.example.com
+      global.image.tag: dev
+      global.image.pullPolicy: Always
+      policyGateway.image.registry: mirror.example.com
+      policyGateway.image.repository: team/gateway
+      policyGateway.image.tag: stable
+      policyGateway.image.pullPolicy: Never
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: mirror.example.com/team/gateway:stable
+      - equal:
+          path: spec.template.spec.containers[1].imagePullPolicy
+          value: Never
+  - it: prefers a digest over tags and uses the same service image for preparation
+    template: templates/deployment.yaml
+    set:
+      global.image.tag: ignored
+      policyService.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      policyGateway.image.digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: apf-policy-service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: apf-policy-service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: apf-policy-gateway@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

@@ -6,7 +6,7 @@
 [[pin]]
 name = "openshell"
 repository = "https://github.com/NVIDIA/OpenShell.git"
-ref = "6648bd0c290efbc41ba131ee9831ee45cd431f94" # v0.1.2
+ref = "e1f3c82caa3ed3b65de22889ae7ef32a774878ef" # v0.1.3
 subdir = "proto"
 license = "Apache-2.0"
 
