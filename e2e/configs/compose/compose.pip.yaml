@@ -1,36 +1,40 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Policy information provider lane. Adds a loopback provider stub to the pod
-# and points the policy gateway at a provider registration. The gateway
-# accepts plain-http providers on loopback only, so the stub shares the pod's
-# network namespace. Layered by up.sh when PIP_CONFIG_SRC is set.
+# Policy information provider lane of the APF compose stack, a verification
+# fixture layered by e2e/with-compose-stack.sh --pip (or when PIP_CONFIG_SRC
+# is set). Adds a loopback provider stub to the pod and points the policy
+# gateway at a provider registration. The gateway accepts plain-http providers
+# on loopback only, so the stub shares the pod's network namespace. Relative
+# paths resolve against the project directory, deploy/docker.
 
 services:
   policy-gateway:
     environment:
       APF_PIP_CONFIG: /etc/apf/pip/pips.yaml
     volumes:
-      - ${PIP_CONFIG:-./e2e/.work/pips.yaml}:/etc/apf/pip/pips.yaml:ro
+      - ${PIP_CONFIG:-../../e2e/.work/compose/pips.yaml}:/etc/apf/pip/pips.yaml:ro
     depends_on:
       pip-stub:
         condition: service_healthy
 
   pip-stub:
-    image: ${PIP_STUB_IMAGE:-python:3.12-slim}
+    # python 3.12-slim, pinned by digest like every other fixture image.
+    image: ${PIP_STUB_IMAGE:-python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1}
     network_mode: service:pod
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=65532,gid=65532,mode=0700"]
+    # The generic tmpfs options only, as in compose.yaml.
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
     restart: unless-stopped
     command: ["python3", "/app/stub.py", "--port", "${PIP_STUB_PORT:-19500}"]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PIP_STUB_HEALTH_URL: http://127.0.0.1:${PIP_STUB_PORT:-19500}${PIP_STUB_HEALTH_PATH:-/healthz}
     volumes:
-      - ${PIP_STUB_SRC:-../helm/e2e/fixtures/pip/stub.py}:/app/stub.py:ro
+      - ${PIP_STUB_SRC:-../../e2e/configs/pip/stub.py}:/app/stub.py:ro
     healthcheck:
       test:
         - CMD

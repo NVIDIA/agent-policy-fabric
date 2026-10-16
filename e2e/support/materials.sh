@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Material-building functions shared by the deployment harnesses: bundle
+# Material-building functions shared by the verification environments: bundle
 # signing and offline verification, serving certificates, OpenShell
-# extension-JWT trust profiles, and the policy-service HTTP token. Nothing here
-# touches a cluster or a container engine; the caller applies the outputs.
+# extension-JWT material and trust profiles, and the policy-service HTTP
+# token. Nothing here touches a cluster or a container engine; the environment
+# lifecycle (e2e/support/compose-stack.sh, e2e/support/kind-stack.sh) delivers
+# the outputs.
 #
 # Source this file. It expects these variables to be set:
 #   APF_DIR              repository root
@@ -13,9 +15,9 @@
 #   SIGNING_KEY_ID       key id of the bundle signing key (apf-dev)
 #   BUNDLE_SRC           bundle source: one *.template.yaml plus its members
 #   BUNDLE_V2_TRANSFORM  optional executable applied to the staged revision 2
-#   E2E_WORK             work directory for every output
-# and these helper functions from the caller's environment file; plain
-# fallbacks are defined when they are missing:
+#   APF_E2E_WORK         work directory for every output
+# and these helper functions from e2e/support/common.sh; plain fallbacks are
+# defined when they are missing:
 #   log, ok, fail, require_cmd
 #
 # Functions provided:
@@ -58,10 +60,10 @@ PY
 }
 
 # stage_bundle v1|v2: copies BUNDLE_SRC, applies the revision transform, signs
-# with the dev key, and packs E2E_WORK/bundle-<rev>.tar.gz with root dir bundle/.
+# with the dev key, and packs APF_E2E_WORK/bundle-<rev>.tar.gz with root dir bundle/.
 stage_bundle() {
   local rev="$1" stage dir template name
-  stage="${E2E_WORK}/bundle-${rev}"
+  stage="${APF_E2E_WORK}/bundle-${rev}"
   dir="${stage}/bundle"
   rm -rf "${stage}"
   mkdir -p "${dir}"
@@ -90,7 +92,7 @@ stage_bundle() {
   rm -f "${template}"
   show_signature "${dir}/manifest.yaml"
   verify_bundle "${rev}" "${dir}/manifest.yaml"
-  name="${E2E_WORK}/bundle-${rev}.tar.gz"
+  name="${APF_E2E_WORK}/bundle-${rev}.tar.gz"
   rm -f "${name}"
   (cd "${stage}" && COPYFILE_DISABLE=1 tar -czf "${name}" bundle)
   ok "bundle ${rev} signed and packed: ${name}"
@@ -116,7 +118,7 @@ verify_bundle() {
     --trust-root-dir "${DEV_KEYS_DIR}" \
     --key-id "${SIGNING_KEY_ID}" 2>&1)" || fail "offline verification of bundle ${rev} failed: ${out}"
   echo "  ${out}"
-  shasum -a 256 "${manifest}" | cut -d' ' -f1 >"${E2E_WORK}/bundle-${rev}.digest"
+  shasum -a 256 "${manifest}" | cut -d' ' -f1 >"${APF_E2E_WORK}/bundle-${rev}.digest"
 }
 
 # make_cert <crt> <key> <cn> <san>...: writes a self-signed server certificate

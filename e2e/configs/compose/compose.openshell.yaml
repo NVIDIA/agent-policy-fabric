@@ -1,15 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# OpenShell overlay for the APF stack. Layered on ../compose.yaml it:
+# OpenShell overlay for the APF compose stack (deploy/docker/compose.yaml), a
+# verification fixture layered by e2e/with-compose-stack.sh --openshell. It:
 #   - publishes the OpenShell gateway and the egress request policy listener
 #     on 127.0.0.1 from the pod, and gives the pod the host.openshell.internal
 #     alias the registration uses;
 #   - enables the policy gateway's two OpenShell listeners with TLS and the
 #     extension-JWT trust profiles from the apf-openshell volume;
 #   - adds the OpenShell gateway itself, driving sandboxes through the engine
-#     socket, registered against APF through config/openshell-gateway.<driver>.toml.
-# Use: docker compose -f compose.yaml -f e2e/compose.openshell.yaml ...
+#     socket, signing extension JWTs with the key pair in the openshell-jwt
+#     volume, registered against APF through the rendered copy of
+#     e2e/configs/gateway/openshell-gateway.<driver>.toml.
+# Each party mounts only its own volume, so neither holds the other's private
+# key. OPENSHELL_STATE_DIR is required: the gateway's state is bind-mounted
+# at the same path inside and outside the container, and the harness only
+# removes a state directory that lies under e2e/.work.
+# By hand, from the repository root:
+#   docker compose -f deploy/docker/compose.yaml -f e2e/configs/compose/compose.openshell.yaml ...
 
 services:
   pod:
@@ -59,26 +67,32 @@ services:
     # Root for the engine socket and the same-path state bind; the remaining
     # development-grade element of this stack.
     user: "0"
+    # The engine socket keeps the label its engine gave it; on an engine host
+    # with SELinux enforcing, label confinement denies the connect.
+    security_opt: ["label=disable"]
     # The image's default command passes bind flags that would override the
     # TOML; the file owns every setting.
     command: ["--config", "/etc/openshell/gateway.toml"]
-    restart: unless-stopped
+    # A root container holding the engine socket and a plaintext,
+    # unauthenticated listener is restarted after a crash but not after an
+    # engine restart: a kept stack does not bring it back by itself.
+    restart: on-failure
     environment:
-      OPENSHELL_DB_URL: "sqlite:${OPENSHELL_STATE_DIR:-/var/lib/openshell}/gateway.db?mode=rwc"
-      XDG_DATA_HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
-      XDG_STATE_HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
-      HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+      OPENSHELL_DB_URL: "sqlite:${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}/gateway.db?mode=rwc"
+      XDG_DATA_HOME: ${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}
+      XDG_STATE_HOME: ${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}
+      HOME: ${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}
     volumes:
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/run/container-engine/engine.sock
       - type: bind
-        source: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
-        target: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+        source: ${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}
+        target: ${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR (see .env.example)}
         bind:
           create_host_path: true
-      # Relative paths resolve against the project directory (the base file's).
-      - ${OPENSHELL_GATEWAY_TOML:-./config/openshell-gateway.docker.toml}:/etc/openshell/gateway.toml:ro
-      # ca.crt for the registrations and the extension-JWT key pair.
-      - apf-openshell:/etc/openshell-extensions/apf:ro
+      # Relative paths resolve against the project directory, deploy/docker.
+      - ${OPENSHELL_GATEWAY_TOML:-../../e2e/configs/gateway/openshell-gateway.docker.toml}:/etc/openshell/gateway.toml:ro
+      # The extension-JWT key pair and ca.crt for the registrations.
+      - openshell-jwt:/etc/openshell-extensions/apf:ro
     depends_on:
       # The gateway Describe()s every registered extension at startup and
       # fails closed, so APF must be serving first.
@@ -86,6 +100,10 @@ services:
         condition: service_healthy
 
 volumes:
-  # TLS material and trust profiles for the two listeners, ca.crt, and the
-  # OpenShell extension-JWT key pair; written by materials.sh --openshell.
+  # Mounted by the policy gateway only: TLS material and trust profile per
+  # listener, and ca.crt; owned by 65532. Written by the wrapper's materials
+  # step.
   apf-openshell: {}
+  # Mounted by the OpenShell gateway only: the extension-JWT signing key
+  # pair with its kid, and ca.crt; owned by root, the gateway's user.
+  openshell-jwt: {}

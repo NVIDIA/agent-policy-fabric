@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Policy information provider lane for the verification run. up.sh adds this
-# file after apf-values.yaml only when PIP is enabled, because ConfigMaps
-# apf-pip and apf-pip-stub exist only then, and rewrites the sidecar image and
-# health path from the environment.
+# Policy information provider lane for the kind verification run.
+# e2e/with-kind-stack.sh --pip adds this file after apf-values.yaml, because
+# ConfigMaps apf-pip and apf-pip-stub exist only then, and renders a copy with
+# the sidecar image and health path from the environment. Helm replaces
+# lists, so the rendered copy also carries the evaluate-proto extraVolumes
+# entry of the base values.
 #
 # The gateway accepts plain-http providers on loopback only, so the provider
 # behind the registration runs as a sidecar in the APF pod. The ConfigMap key
@@ -21,7 +23,9 @@ extraVolumes:
 
 extraContainers:
   - name: pip-stub
-    image: python:3.12-slim
+    # python 3.12-slim, pinned by digest; the wrapper renders the node-side
+    # tag it loaded into the cluster.
+    image: python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
     imagePullPolicy: IfNotPresent
     command: ["python3", "/app/stub.py", "--port", "19500"]
     env:

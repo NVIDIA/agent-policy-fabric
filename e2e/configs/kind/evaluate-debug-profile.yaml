@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Partial container spec for `kubectl debug --custom`: the ephemeral grpcurl
+# container e2e/support/env-kind.sh adds to the APF pod for the evaluate
+# check. It runs as the pod's user so the gateway's peer check admits it, and
+# mounts the gateway socket volume of the chart and the proto volume the
+# rendered values add (extraVolumes: evaluate-proto). Ephemeral containers
+# take no subPath mounts, so the ConfigMap items lay the protos out as
+# import paths.
+securityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+volumeMounts:
+  - name: gateway-socket
+    mountPath: /run/apf-gateway
+  - name: evaluate-proto
+    mountPath: /proto
+    readOnly: true

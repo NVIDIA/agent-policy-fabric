@@ -47,7 +47,7 @@ EXPOSE 19200
 # APF_HTTP_ADDR is opt-in, not defaulted here: apf-policy-service refuses to
 # start with it set unless APF_HTTP_BEARER_TOKEN_FILE is also provided (see
 # apf-policy-service/src/surfaces/http.rs). Set both at `docker run`/compose
-# time — deploy/docker-compose.yml does this for the dev stack.
+# time; deploy/docker/compose.yaml passes them as flags.
 ENV APF_SOCKET=/run/apf/policy-service.sock \
     APF_TRUST_ROOT_DIR=/data/keys \
     APF_COUNTER_STORE=/var/lib/apf/counter \
