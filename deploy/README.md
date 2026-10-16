@@ -1,7 +1,9 @@
 # deploy/
 
 Container images, a Docker Compose stack, a Kubernetes Helm chart, and the
-host (systemd) deployment for APF services.
+host (systemd) deployment for APF services. The verification harness that
+exercises the compose stack and the chart lives at the repository root under
+`e2e/`.
 
 ## Structure
 
@@ -10,19 +12,20 @@ deploy/
 ├── docker/
 │   ├── apf-policy-service/
 │   │   └── Dockerfile         # PAP image
-│   └── apf-policy-gateway/
-│       └── Dockerfile         # Local PDP image
-├── compose/                   # Docker Compose stack (policy-service + policy-gateway), OpenShell add-on under e2e/
-├── helm/apf/                  # Generic Kubernetes chart; helm/e2e/ verifies it on kind
-├── scripts/
-│   └── apf-materials.sh       # Signing, certificate and trust-profile functions shared by the harnesses
+│   ├── apf-policy-gateway/
+│   │   └── Dockerfile         # Local PDP image
+│   ├── compose.yaml           # Docker Compose stack (policy-service + policy-gateway); verified by e2e/with-compose-stack.sh
+│   ├── .env.example
+│   └── README.md
+├── helm/apf/                  # Generic Kubernetes chart; verified on kind by e2e/with-kind-stack.sh
 └── systemd/                   # Host deployment (systemd units, sysusers, polkit)
     └── SECURITY.md            # Host deployment security requirements — read before deploying
 ```
 
-For the compose stack, see `compose/README.md`: it brings APF up on a laptop
-with the chart's shape and defaults, and `compose/e2e/` adds a real OpenShell
-gateway to verify sandbox admission through APF. For Kubernetes, see
+For the compose stack, see `docker/README.md`: it brings APF up on a laptop
+with the chart's shape and defaults. The harness in `e2e/` (see
+`e2e/README.md`) adds a real OpenShell gateway as a fixture to verify sandbox
+admission through APF, on compose and on kind. For Kubernetes, see
 `helm/apf/README.md`. The chart contains no cluster or organization-specific
 secret integration; keep those values in the deployment repository. For a
 bare-host deployment (not containers), see `systemd/README.md` and, before
@@ -31,18 +34,20 @@ deploying, `systemd/SECURITY.md`.
 ## Quick start
 
 ```fish
-# Build images, bring the stack up standalone, run the smoke checks
+# Build images, bring the compose stack up standalone, run the smoke suite, keep it running
 mise run dev
 
-# Tail logs
+# Follow logs
 mise run dev-logs
 
 # Stop (volumes kept)
 mise run dev-down
 ```
 
-`deploy/compose/e2e/up.sh --openshell` adds the OpenShell gateway and admits a
-sandbox through APF.
+`e2e/with-compose-stack.sh --openshell e2e/suites/smoke.sh` adds the OpenShell
+gateway and admits a sandbox through APF. `mise run e2e:compose`,
+`e2e:compose:openshell`, `e2e:kind` and `e2e:parity` run the hermetic
+verification lanes.
 
 ## Native (no Docker)
 
@@ -91,5 +96,5 @@ mise run sign-bundle
 
 Signing key: `examples/dev-keys/apf-dev.seed` (committed; dev only).
 See `examples/dev-keys/README.md` for key format and rotation instructions.
-The compose and Helm harnesses sign their own copy at setup time with
-`deploy/scripts/apf-materials.sh`.
+The verification harness signs its own copy at setup time with
+`e2e/support/materials.sh`.

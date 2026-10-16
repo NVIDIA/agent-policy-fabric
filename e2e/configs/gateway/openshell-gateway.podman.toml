@@ -6,8 +6,8 @@
 # middleware) and as the provider-profile source. Selected by
 # OPENSHELL_COMPUTE_DRIVER=podman; differs from the Docker variant only in the
 # driver name and the driver table. The ports, gateway id, audiences and
-# images below are the defaults; e2e/up.sh rewrites them from the environment
-# into E2E_WORK before use.
+# images below are the defaults; e2e/support/compose-stack.sh renders an
+# environment-adjusted copy into the work directory before use.
 
 [openshell]
 version = 2
@@ -56,4 +56,3 @@ grpc_endpoint         = "http://127.0.0.1:8080"
 # this value; loopback is where the pod publishes the gateway and the egress
 # listener.
 host_gateway_ip       = "127.0.0.1"
-app_armor_profile     = "Unconfined"

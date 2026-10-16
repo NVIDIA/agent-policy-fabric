@@ -5,13 +5,15 @@
 # containers sharing one network namespace owned by the pause container `pod`.
 # The policy service binds loopback inside that namespace and the gateway
 # serves its decision socket, so this file publishes nothing. Inputs come from
-# read-only bind mounts (signed bundle, trust root) and from named volumes that
-# e2e/materials.sh fills (secrets); sockets, state and audit files live on
-# named volumes too. Nothing here knows about OpenShell: e2e/compose.openshell.yaml
-# adds it as an overlay.
+# read-only bind mounts (signed bundle, trust root) and from named volumes
+# holding the secrets; sockets, state and audit files live on named volumes
+# too. Nothing here knows about OpenShell: the verification harness
+# (e2e/with-compose-stack.sh) fills the volumes and layers an OpenShell
+# gateway as an overlay from e2e/configs/compose/.
 #
-# Flags mirror the Helm chart's colocated deployment; see README.md for the
-# journey and ../helm/apf/values.yaml for the topology note.
+# The flags are the Helm chart's for the colocated deployment, which
+# e2e/suites/parity.sh checks; see README.md for the journey and
+# ../helm/apf/values.yaml for the topology note.
 
 name: apf
 
@@ -20,7 +22,11 @@ x-hardened: &hardened
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
-  tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=65532,gid=65532,mode=0700"]
+  # A private, size-bounded /tmp for the read-only root filesystem. The
+  # generic tmpfs options only: Podman's Docker-compatible API accepts no
+  # uid/gid options on a tmpfs, and a sticky world-writable mount private to
+  # one container gives the service user the same writable directory.
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
   restart: unless-stopped
   stop_grace_period: 30s
   logging:
@@ -30,6 +36,11 @@ x-hardened: &hardened
 services:
   pod:
     image: registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a
+    # The pause image sets its own non-root user and writes nothing, so it
+    # takes the hardening block without the user and tmpfs entries.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     restart: always
 
   policy-service:
@@ -57,7 +68,7 @@ services:
       - apf-state:/var/lib/apf
       - apf-audit:/var/log/apf/audit
       - apf-secrets:/etc/apf/secrets:ro
-      - ${APF_BUNDLE_DIR:-./e2e/.work/bundle-v1/bundle}:/data/bundles/bundle:ro
+      - ${APF_BUNDLE_DIR:-./bundle}:/data/bundles/bundle:ro
       - ${APF_TRUST_ROOT:-../../examples/dev-keys/apf-dev.pub}:/etc/apf/trust-roots/${APF_KEY_ID:-apf-dev}.pub:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19200/readyz"]
@@ -102,5 +113,5 @@ volumes:
   apf-state: {}
   apf-audit: {}
   # Bearer token and document signing seed, 0400 and owned by 65532; written
-  # by e2e/materials.sh through a throwaway run of the policy-service image.
+  # through a throwaway run of the policy-service image (see README.md).
   apf-secrets: {}

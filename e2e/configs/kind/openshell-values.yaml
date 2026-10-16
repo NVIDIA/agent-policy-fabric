@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenShell fixture for the kind verification run: a plaintext development
+# gateway. e2e/with-kind-stack.sh renders a copy with the image tag from the
+# environment and the sandbox image as repository and tag of the image it
+# preloaded into the kind node (a digest reference cannot be loaded into kind
+# as such); these are the defaults it starts from.
+global:
+  image:
+    tag: "0.1.3"
+    pullPolicy: IfNotPresent
+
+# Default image for `openshell sandbox create`, pinned by digest. The policy
+# of examples/demo-bundle names the `sandbox` user, which this image defines.
+sandbox:
+  image:
+    repository: ghcr.io/nvidia/openshell-community/sandboxes/base
+    digest: sha256:e29a8e98c1399aa08a8c624d758d1814b6edbe0302eb570c0468a6d3e811d167
+
+server:
+  # Plaintext listener; the harness talks to the gateway through a port-forward.
+  disableTls: true
+  auth:
+    allowUnauthenticatedUsers: true
+
+# The certgen hook creates the extension-JWT signing Secret (<release>-jwt-keys)
+# the wrapper reads to build the APF trust profiles. Keep it on.
+pkiInitJob:
+  enabled: true

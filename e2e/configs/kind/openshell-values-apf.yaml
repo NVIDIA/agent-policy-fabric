@@ -10,8 +10,8 @@
 # unreachable.
 #
 # Endpoints and audiences assume the default names (release openshell,
-# APF Service apf in namespace apf, chart default ports). up.sh rewrites them
-# from the environment into E2E_WORK before use.
+# APF Service apf in namespace apf, chart default ports); e2e/with-kind-stack.sh
+# renders a copy with the environment's values before use.
 gatewayConfig:
   openshell.gateway:
     provider_profile_sources:
@@ -32,7 +32,7 @@ gatewayConfig:
       max_payload_bytes: 4194304
       timeout: 10s
 
-# The APF serving certificate, published by materials.sh as ConfigMap apf-ca in
+# The APF serving certificate, published by the wrapper as ConfigMap apf-ca in
 # the OpenShell namespace. The gateway embeds it into the egress request policy
 # registration it sends to supervisors, so sandboxes need no mount.
 server:

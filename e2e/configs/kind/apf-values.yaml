@@ -3,9 +3,10 @@
 #
 # APF chart values for the kind verification run. Images are local builds
 # loaded with `kind load docker-image`, so pullPolicy is Never. Secrets and
-# ConfigMaps named here are created by materials.sh. up.sh overrides the image
-# tags, the listener ports, and the OpenShell gateway endpoint from the
-# environment.
+# ConfigMaps named here are created by e2e/with-kind-stack.sh, which renders
+# a copy with the image tags, the listener ports and the OpenShell gateway
+# endpoint from the environment, plus the extraVolumes entry its evaluate
+# check mounts (ConfigMap apf-evaluate-proto).
 fullnameOverride: apf
 
 policyService:

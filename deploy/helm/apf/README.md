@@ -110,7 +110,7 @@ gateway calls `Describe` on every registered extension at startup and fails
 closed when one is unreachable, so the order is: install OpenShell without
 the registration, read its JWT Secret, install APF and wait for the pod to be
 Ready, then `helm upgrade` OpenShell with the overlay below.
-[`deploy/helm/e2e/`](../e2e/) runs that sequence end to end on a kind cluster.
+[`e2e/with-kind-stack.sh`](../../../e2e/README.md) runs that sequence end to end on a kind cluster.
 
 ### Trust files from the OpenShell JWT Secret
 
@@ -328,8 +328,8 @@ helm-docs --chart-search-root deploy/helm/apf
 helm unittest deploy/helm/apf
 ```
 
-The [verification harness](../e2e/) covers the integrated kind deployment,
-including the optional provider lane. It is maintained by the target branch.
+The [verification harness](../../../e2e/README.md) covers the integrated kind
+deployment, including the optional provider lane.
 
 ## Values reference
 

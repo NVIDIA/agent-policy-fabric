@@ -16,5 +16,6 @@ grants written for that path. Against `examples/demo-bundle`:
 | `allow.json` | `github_repo_read` | `DECISION_ALLOW` (permitted by `rules/github-grants.yaml`) |
 | `deny.json` | `github_repo_write` | `DECISION_DENY` (`no grant for github_repo_write`) |
 
-`deploy/compose/e2e/smoke.sh` sends both through `grpcurl`; see
-`deploy/compose/README.md` for the command.
+`e2e/suites/smoke.sh` sends both through `grpcurl` in every environment; see
+`e2e/README.md` for the harness and `deploy/docker/README.md` for the
+by-hand command.

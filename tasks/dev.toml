@@ -10,16 +10,32 @@ cargo build --release -p apf-compile
 """
 
 [dev]
-description = "Build images and bring the APF compose stack up standalone (policy-service + policy-gateway), then run the smoke checks"
-run = "./deploy/compose/e2e/up.sh --build"
+description = "Build images, bring the APF compose stack up standalone (policy-service + policy-gateway), run the smoke suite and keep it running"
+run = "./e2e/with-compose-stack.sh --build --keep e2e/suites/smoke.sh"
 
 [dev-logs]
-description = "Tail logs from the APF compose stack"
-run = "docker compose --project-directory deploy/compose logs -f"
+description = "Follow the logs of the APF compose stack"
+run = "./e2e/with-compose-stack.sh --logs"
 
 [dev-down]
-description = "Stop and remove the APF compose stack (volumes kept; deploy/compose/e2e/down.sh --volumes resets them)"
-run = "./deploy/compose/e2e/down.sh"
+description = "Stop and remove the APF compose stack (volumes kept; e2e/with-compose-stack.sh --down --volumes resets them)"
+run = "./e2e/with-compose-stack.sh --down"
+
+["e2e:compose"]
+description = "Compose stack, APF alone: bring up, run the smoke suite, tear down"
+run = "./e2e/with-compose-stack.sh e2e/suites/smoke.sh"
+
+["e2e:compose:openshell"]
+description = "Compose stack with an OpenShell gateway: bring up, run the smoke suite, tear down"
+run = "./e2e/with-compose-stack.sh --openshell e2e/suites/smoke.sh"
+
+["e2e:kind"]
+description = "Helm chart on kind next to an OpenShell gateway: bring up, run the smoke suite, uninstall"
+run = "./e2e/with-kind-stack.sh e2e/suites/smoke.sh"
+
+["e2e:parity"]
+description = "Static flag parity between the compose stack and the Helm chart"
+run = "./e2e/suites/parity.sh"
 
 [dev-native]
 description = "Run policy-service and policy-gateway natively (no Docker; requires cargo build)"
