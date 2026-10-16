@@ -279,6 +279,12 @@ struct Cli {
     #[arg(long, default_value = "openshell.sandbox.v1")]
     document_kind: String,
 
+    /// The OpenShell gateway's configured compute driver (e.g. "podman",
+    /// "kubernetes"). A caller-supplied driver-config mount is admitted only
+    /// when its single driver key equals this value. Empty denies all.
+    #[arg(long, env = "APF_OPENSHELL_COMPUTE_DRIVER", default_value = "")]
+    openshell_compute_driver: String,
+
     /// Document name passed to GetDocument for sandbox policy.
     #[arg(long, default_value = "default")]
     document_name: String,
@@ -892,10 +898,38 @@ async fn main() -> anyhow::Result<()> {
             anyhow::anyhow!("--jwks-url required when --openshell-interceptor-addr is set")
         })?;
 
+        // Determine the gateway's compute driver for driver_config (harness mount)
+        // admission. An explicit --openshell-compute-driver always wins (air-gap /
+        // override). Otherwise, discover it from the gateway itself via
+        // GetGatewayInfo over the callback URL we already use for reconcile — no
+        // Helm knob required, and the value is gateway-asserted, never caller-supplied.
+        let gateway_compute_driver = if !args.openshell_compute_driver.is_empty() {
+            args.openshell_compute_driver.clone()
+        } else if let Some(gw_url) = args.openshell_gateway_url.as_ref() {
+            match apf_openshell_interceptor::reconciler::discover_compute_driver(gw_url, None).await
+            {
+                Ok(driver) => {
+                    info!(%driver, "discovered OpenShell compute driver via GetGatewayInfo");
+                    driver
+                }
+                Err(error) => {
+                    warn!(
+                        %error,
+                        "compute-driver discovery failed; harness (driver_config) mounts will be \
+                         denied until --openshell-compute-driver is set or the gateway is reachable"
+                    );
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
         let config = InterceptorConfig {
             document_kind: args.document_kind.clone(),
             document_name: args.document_name.clone(),
             signing_key_id: args.document_key_id.clone(),
+            gateway_compute_driver,
             verifying_key: Arc::clone(&verifying_key),
             // Its own file: the interceptor is a separate component that
             // happens to share this process today.

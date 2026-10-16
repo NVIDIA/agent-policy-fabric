@@ -42,6 +42,11 @@ pub struct CompiledBundle {
     pub policy_annotators: Vec<frontend::PolicyAnnotator>,
     pub policy_effects: Vec<ir::PolicyEffect>,
     pub policy_findings: Vec<ir::PolicyFinding>,
+    /// Per-sandbox-policy `driver_config` allowlist, keyed by policy name and
+    /// encoded as `DriverConfigPolicy` protobuf bytes. The native projection
+    /// cannot carry this APF-only rule, so it is surfaced here for the
+    /// policy-service to mint into the provenance JWT.
+    pub sandbox_driver_configs: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -164,12 +169,28 @@ impl Compiler {
             }
         }
 
+        // The native SandboxPolicy projection drops `driver_config` (it is an
+        // APF-only admission rule). Capture it here, keyed by policy name, so
+        // the policy-service can mint it into the signed provenance JWT.
+        let sandbox_driver_configs = canonical
+            .sandbox_policies
+            .iter()
+            .filter_map(|(name, policy)| {
+                policy
+                    .spec
+                    .as_ref()
+                    .and_then(|s| s.driver_config.as_ref())
+                    .map(|dc| (name.clone(), dc.encode_to_vec()))
+            })
+            .collect();
+
         Ok(CompiledBundle {
             surfaces,
             policy_rule_docs: policy_rules,
             policy_annotators,
             policy_effects,
             policy_findings,
+            sandbox_driver_configs,
         })
     }
 }

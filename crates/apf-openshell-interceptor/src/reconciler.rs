@@ -15,11 +15,12 @@ use crate::proto::openshell::sandbox::v1::{
     NetworkEndpoint, NetworkEnforcementMode, NetworkTlsMode,
 };
 use crate::proto::openshell::v1::{
-    ImportProviderProfilesRequest, ProviderCredentialRefresh, ProviderCredentialRefreshMaterial,
-    ProviderCredentialRefreshOutput, ProviderCredentialRefreshStrategy,
-    ProviderCredentialTokenGrant, ProviderCredentialTokenGrantAudienceOverride, ProviderProfile,
-    ProviderProfileCredential, ProviderProfileDiscovery, ProviderProfileImportItem,
-    UpdateProviderProfilesRequest, open_shell_client::OpenShellClient,
+    GetGatewayInfoRequest, ImportProviderProfilesRequest, ProviderCredentialRefresh,
+    ProviderCredentialRefreshMaterial, ProviderCredentialRefreshOutput,
+    ProviderCredentialRefreshStrategy, ProviderCredentialTokenGrant,
+    ProviderCredentialTokenGrantAudienceOverride, ProviderProfile, ProviderProfileCredential,
+    ProviderProfileDiscovery, ProviderProfileImportItem, UpdateProviderProfilesRequest,
+    open_shell_client::OpenShellClient,
 };
 use apf_policy_client::PolicyClientHandle;
 use apf_proto::ProviderProfileSet;
@@ -597,6 +598,44 @@ pub(crate) async fn connect_gateway(
     }
     .map_err(|e| format!("connect gateway: {e}"))?;
     Ok(OpenShellClient::new(channel))
+}
+
+/// Discover the OpenShell gateway's configured compute driver(s) via the
+/// existing `GetGatewayInfo` RPC, so the driver_config engine does not need the
+/// operator to pin `--openshell-compute-driver` by hand.
+///
+/// The value is asserted by the **gateway** over this authenticated callback —
+/// it is never taken from the (untrusted) caller request — so it is a sound
+/// trust source for admission. A gateway may initialize several drivers; we log
+/// all of them and return the first, which matches today's single-value engine.
+pub async fn discover_compute_driver(
+    endpoint: &str,
+    tls: Option<ClientTlsConfig>,
+) -> Result<String, String> {
+    let mut client = connect_gateway(endpoint, tls).await?;
+    let info = client
+        .get_gateway_info(GetGatewayInfoRequest {})
+        .await
+        .map_err(|e| format!("GetGatewayInfo: {e}"))?
+        .into_inner();
+    let names: Vec<String> = info
+        .compute_drivers
+        .into_iter()
+        .map(|d| d.name)
+        .filter(|n| !n.is_empty())
+        .collect();
+    match names.split_first() {
+        None => Err("gateway reported no compute drivers".to_string()),
+        Some((first, rest)) => {
+            if !rest.is_empty() {
+                warn!(
+                    drivers = %names.join(","),
+                    "gateway initialized multiple compute drivers; using the first for driver_config matching"
+                );
+            }
+            Ok(first.clone())
+        }
+    }
 }
 
 async fn reconcile_one(

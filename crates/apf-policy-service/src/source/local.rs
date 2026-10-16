@@ -114,6 +114,7 @@ impl LocalBundleSource {
                 .map_err(|e| anyhow::anyhow!("compile bundle: {e}"))?;
 
             let projections = surfaces_to_projections(compiled.surfaces);
+            let driver_configs = compiled.sandbox_driver_configs;
 
             Ok(PolicyServiceCore {
                 bundle: LoadedBundle {
@@ -126,6 +127,7 @@ impl LocalBundleSource {
                     bundle: parsed_bundle,
                 },
                 projections,
+                driver_configs,
                 document_signer: self.document_signer.clone(),
                 audit: self.audit.clone(),
             })
@@ -178,6 +180,10 @@ impl PolicySource for LocalBundleSource {
         ))
     }
 
+    fn driver_config(&self, name: &str, _variant: &str) -> Option<Vec<u8>> {
+        self.core.load().driver_configs.get(name).cloned()
+    }
+
     fn list(&self, surface_id: &str) -> Vec<String> {
         let core = self.core.load();
         core.projections
@@ -217,10 +223,33 @@ mod tests {
                     bundle: Default::default(),
                 },
                 projections,
+                driver_configs: BTreeMap::new(),
                 document_signer: None,
                 audit: PolicyServiceAudit::disabled(),
             },
         ))))
+    }
+
+    #[test]
+    fn driver_config_returns_the_signed_rule_bytes() {
+        let mut dc = BTreeMap::new();
+        dc.insert("default".to_string(), vec![1u8, 2, 3]);
+        let src = LocalBundleSource::new(Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            PolicyServiceCore {
+                bundle: LoadedBundle {
+                    digest_hex: "abc".to_string(),
+                    monotonic_counter: 7,
+                    audit_metadata: BundleAuditMetadata::from_counter_and_digest(0, ""),
+                    bundle: Default::default(),
+                },
+                projections: BTreeMap::new(),
+                driver_configs: dc,
+                document_signer: None,
+                audit: PolicyServiceAudit::disabled(),
+            },
+        ))));
+        assert_eq!(src.driver_config("default", ""), Some(vec![1u8, 2, 3]));
+        assert_eq!(src.driver_config("missing", ""), None);
     }
 
     #[test]

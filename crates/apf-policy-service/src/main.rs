@@ -497,7 +497,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         let default_verifier = YamlSigilVerifier::new(trust_store.clone());
         let compiler = Compiler::new(vec![Box::new(apf_openshell_projector::OpenShellProjector)]);
 
-        let (loaded_bundle, projections) = apf_policy_service::source::BundleLoadContext {
+        let (loaded_bundle, projections, driver_configs) = apf_policy_service::source::BundleLoadContext {
             verifier: &default_verifier,
             counter_store: &mut counter_store,
             audit: &audit,
@@ -523,6 +523,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
                 info!(kind = %s.kind, name = %s.name, bytes = s.bytes.len(), "loaded projection");
             }
             let projections = surfaces_to_projections(compiled.surfaces);
+            let driver_configs = compiled.sandbox_driver_configs;
 
             let loaded_bundle = LoadedBundle {
                 digest_hex: outcome.digest_hex.clone(),
@@ -533,7 +534,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
                 ),
                 bundle: parsed_bundle,
             };
-            Ok((loaded_bundle, projections))
+            Ok((loaded_bundle, projections, driver_configs))
         })?;
         // After the counter persisted: recording this inside `on_verified`
         // would log an activation success for a bundle a persist failure then
@@ -559,6 +560,7 @@ async fn run_serve(args: &mut ServeArgs) -> anyhow::Result<()> {
         let core = Arc::new(ArcSwap::new(Arc::new(PolicyServiceCore {
             bundle: loaded_bundle,
             projections,
+            driver_configs,
             document_signer: Some(Arc::clone(&signer)),
             audit: audit.clone(),
         })));

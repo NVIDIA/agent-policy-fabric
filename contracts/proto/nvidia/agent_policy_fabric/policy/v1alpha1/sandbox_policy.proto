@@ -5,6 +5,7 @@ syntax = "proto3";
 package nvidia.agent_policy_fabric.policy.v1alpha1;
 
 import "nvidia/agent_policy_fabric/policy/v1alpha1/object_meta.proto";
+import "nvidia/agent_policy_fabric/policy/v1alpha1/driver_config.proto";
 
 // SandboxPolicy is the canonical APF sandbox runtime policy document.
 // A bundle member of this kind is lowered into a substrate-native projection
@@ -26,6 +27,13 @@ message SandboxPolicySpec {
   ProcessPolicy process = 3;
   // Network access policies keyed by name, e.g. "github", "gitlab".
   map<string, NetworkPolicyRule> network_policies = 4;
+  // Allowlist governing caller-supplied compute-driver config (for example a
+  // harness volume mount) on CreateSandbox / CreateSandboxTemplate. When this
+  // field is absent, APF denies any non-empty driver config (deny-by-default):
+  // an empty or upgraded policy can never silently admit a mount. Defined in
+  // driver_config.proto — admission governance, kept separate from the sandbox
+  // security policy here.
+  DriverConfigPolicy driver_config = 5;
 }
 
 // FilesystemPolicy declares which paths the sandbox may read or write.

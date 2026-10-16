@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "policy_annotator.proto",
         "policy_set.proto",
         "provider_profile_set.proto",
+        "driver_config.proto",
         "sandbox_policy.proto",
         "provider.proto",
         "policy_effect.proto",

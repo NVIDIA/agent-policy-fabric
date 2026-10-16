@@ -69,6 +69,62 @@ pub fn extract(eval: &InterceptorEvaluation) -> Result<SandboxReviewContext, Con
     })
 }
 
+/// Roles the gateway authenticated for the caller.
+///
+/// The gateway populates `principal["roles"]` with a comma-joined list derived
+/// from verified auth (OIDC claims or the mTLS client-cert subject OU). These
+/// are the only trustworthy roles — a request body field must never be used.
+#[must_use]
+pub fn principal_roles(eval: &InterceptorEvaluation) -> Vec<String> {
+    eval.principal
+        .get("roles")
+        .map(|csv| {
+            csv.split(',')
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The request's decoded `driver_config` envelope, if present.
+///
+/// Lives at `spec.template.driver_config` on a `CreateSandboxRequest`. The
+/// gateway's JSON encoding of the field name is tolerated in both snake_case
+/// and camelCase.
+#[must_use]
+pub fn driver_config(op: &JsonValue) -> Option<&JsonValue> {
+    let template = op.pointer("/spec/template")?;
+    template
+        .get("driver_config")
+        .or_else(|| template.get("driverConfig"))
+}
+
+/// The driver-config envelope on a `CreateSandboxTemplate` request, if present.
+///
+/// Lives at `template.spec.driver_config` on a `CreateSandboxTemplateRequest`.
+/// Governing it here closes the gap where a `CreateSandbox` references a
+/// template by name and the template's driver_config is otherwise invisible.
+#[must_use]
+pub fn driver_config_template(op: &JsonValue) -> Option<&JsonValue> {
+    let spec = op.pointer("/template/spec")?;
+    spec.get("driver_config")
+        .or_else(|| spec.get("driverConfig"))
+}
+
+/// Whether the create resolves a workload template (by name).
+///
+/// A template's driver config cannot be inspected before it is resolved, so a
+/// governance rule may refuse template-based creates outright.
+#[must_use]
+pub fn is_template_based(op: &JsonValue) -> bool {
+    op.get("workload_template")
+        .or_else(|| op.get("workloadTemplate"))
+        .and_then(JsonValue::as_str)
+        .is_some_and(|name| !name.is_empty())
+}
+
 /// Build a `RuntimeContext` from the extracted sandbox context.
 #[must_use]
 pub fn to_runtime_context(ctx: &SandboxReviewContext) -> RuntimeContext {

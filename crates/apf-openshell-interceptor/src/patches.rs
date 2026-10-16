@@ -36,6 +36,9 @@ pub struct ProvenanceClaims {
     pub apf_spec_digest: String,
     /// Bundle manifest `id` — stored as `apf.nvidia.com/bundle-id`.
     pub apf_bundle_id: String,
+    /// Hex-encoded `DriverConfigPolicy` protobuf — the signed driver-config
+    /// allowlist for this sandbox policy. `None` when the policy carries none.
+    pub apf_driver_config: Option<String>,
 }
 
 /// Raw claims shape used only for JSON deserialization.
@@ -55,6 +58,8 @@ struct RawClaims {
     apf_spec_digest: String,
     #[serde(rename = "apf/bundle-id", default)]
     apf_bundle_id: String,
+    #[serde(rename = "apf/driver-config", default)]
+    apf_driver_config: Option<String>,
 }
 
 /// Decode the payload segment of a compact JWT without verifying the signature.
@@ -86,6 +91,7 @@ pub fn extract_provenance_claims(jwt: &str) -> Option<ProvenanceClaims> {
         apf_version: raw.apf_version,
         apf_spec_digest: raw.apf_spec_digest,
         apf_bundle_id: raw.apf_bundle_id,
+        apf_driver_config: raw.apf_driver_config,
     })
 }
 

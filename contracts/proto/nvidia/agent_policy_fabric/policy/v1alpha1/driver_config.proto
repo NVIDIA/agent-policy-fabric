@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package nvidia.agent_policy_fabric.policy.v1alpha1;
+
+// DriverConfigPolicy is an allowlist for caller-supplied compute-driver config
+// (the OpenShell SandboxTemplate.driver_config envelope). It describes the
+// mount, not one driver's syntax, so a single entry can cover several drivers;
+// APF maps each driver's own mount fields onto the entry and denies any field
+// it cannot map. Deny-by-default: driver config that matches no allowed entry
+// is refused.
+//
+// This governs compute-driver admission and is intentionally separate from the
+// sandbox security policy (sandbox_policy.proto): SandboxPolicySpec references
+// it, but the two evolve independently.
+message DriverConfigPolicy {
+  // Allowed driver-config shapes. An empty list denies all driver config.
+  repeated DriverConfigAllow allowed = 1;
+  // When true, a template-based create that carries or resolves driver config
+  // is refused, because a template's driver config cannot be checked before it
+  // is resolved. Defaults to the safe behaviour (treated as true when unset).
+  bool deny_templates = 2;
+}
+
+// DriverConfigAllow is one allowed driver-config shape.
+message DriverConfigAllow {
+  // Gateway-authenticated role the caller must hold. Sourced only from the
+  // principal the gateway authenticated (verified OIDC roles / mTLS cert OU),
+  // never from a request field.
+  string require_role = 1;
+  // Compute driver keys this entry may apply to, e.g. ["podman", "docker"].
+  // The request's single driver key must be in this list and must also equal
+  // the gateway's configured compute driver.
+  repeated string drivers = 2;
+  // Maximum number of mounts the driver config may declare. Zero denies.
+  uint32 max_mounts = 3;
+  // Exact-match mount shapes. Every mount in the request must match one entry,
+  // and the request may carry no driver-config keys other than its mounts.
+  repeated DriverConfigMount mounts = 4;
+}
+
+// DriverConfigMount is one exact-match mount shape.
+message DriverConfigMount {
+  // Required mount type, e.g. "volume". No host path or bind type is admitted.
+  string type = 1;
+  // Required source prefix, e.g. "saw-harness-". The mount source must start
+  // with this value and carry nothing beyond it that the entry does not allow.
+  string source_prefix = 2;
+  // Exact mount target, e.g. "/sandbox/harness".
+  string target = 3;
+  // When true, the mount must be read-only (read_only=true is required).
+  bool read_only = 4;
+}

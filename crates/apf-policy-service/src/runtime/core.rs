@@ -28,6 +28,10 @@ pub struct PolicyServiceCore {
     pub bundle: LoadedBundle,
     /// Vended projection bytes keyed by `(kind, name)`.
     pub projections: BTreeMap<(String, String), Vec<u8>>,
+    /// Per-sandbox-policy `driver_config` allowlist, keyed by policy name and
+    /// encoded as `DriverConfigPolicy` protobuf bytes. Minted into the signed
+    /// provenance JWT so the interceptor can enforce it at admission.
+    pub driver_configs: BTreeMap<String, Vec<u8>>,
     /// Present when the daemon signs vended documents.
     pub document_signer: Option<Arc<DocumentSigner>>,
     pub audit: PolicyServiceAudit,

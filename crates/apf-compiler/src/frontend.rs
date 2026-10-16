@@ -853,6 +853,54 @@ struct SpecDef {
     network_policies: BTreeMap<String, NetworkPolicyRuleDef>,
     #[serde(default)]
     network_middlewares: BTreeMap<String, NetworkMiddlewareConfigDef>,
+    #[serde(default)]
+    driver_config: Option<DriverConfigPolicyDef>,
+}
+
+/// Parsed `driver_config` allowlist from a `SandboxPolicy` YAML document.
+/// Mirrors the APF IR `DriverConfigPolicy`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigPolicyDef {
+    #[serde(default)]
+    allowed: Vec<DriverConfigAllowDef>,
+    // Omitting this must deny templates — a template's driver config cannot be
+    // checked before it is resolved, and CreateSandboxTemplate is not
+    // interceptable, so an unset field defaulting to `false` (allow) would let a
+    // template-delivered mount through unchecked. Default to the safe behaviour,
+    // matching the proto doc ("treated as true when unset").
+    #[serde(default = "default_true")]
+    deny_templates: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigAllowDef {
+    #[serde(default)]
+    require_role: String,
+    #[serde(default)]
+    drivers: Vec<String>,
+    #[serde(default)]
+    max_mounts: u32,
+    #[serde(default)]
+    mounts: Vec<DriverConfigMountDef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriverConfigMountDef {
+    #[serde(default, rename = "type")]
+    r#type: String,
+    #[serde(default)]
+    source_prefix: String,
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    read_only: bool,
 }
 
 /// Parsed `network_middlewares` entry from a `SandboxPolicy` YAML document.
@@ -1132,6 +1180,28 @@ fn to_spec(raw: SpecDef) -> ir::SandboxPolicySpec {
                 (key, ir_rule)
             })
             .collect(),
+        driver_config: raw.driver_config.map(|dc| ir::DriverConfigPolicy {
+            deny_templates: dc.deny_templates,
+            allowed: dc
+                .allowed
+                .into_iter()
+                .map(|a| ir::DriverConfigAllow {
+                    require_role: a.require_role,
+                    drivers: a.drivers,
+                    max_mounts: a.max_mounts,
+                    mounts: a
+                        .mounts
+                        .into_iter()
+                        .map(|m| ir::DriverConfigMount {
+                            r#type: m.r#type,
+                            source_prefix: m.source_prefix,
+                            target: m.target,
+                            read_only: m.read_only,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }),
     }
 }
 
@@ -1374,6 +1444,50 @@ spec:
         assert_eq!(ll.compatibility, "best_effort");
         let proc_p = spec.process.expect("process present");
         assert_eq!(proc_p.run_as_user, "sandbox");
+    }
+
+    const DRIVER_CONFIG_RULE: &str = r#"      allowed:
+        - require_role: openshell-admin
+          drivers: [kubernetes]
+          max_mounts: 1
+          mounts:
+            - type: volume
+              source_prefix: saw-harness-
+              target: /sandbox/harness
+              read_only: true
+"#;
+
+    #[test]
+    fn driver_config_omitting_deny_templates_defaults_to_true() {
+        // A rule that omits deny_templates must compile to the SAFE default
+        // (true). Otherwise a template-based create — whose driver config APF
+        // cannot inspect (CreateSandboxTemplate is not interceptable) — would
+        // slip a mount through unchecked.
+        let yaml =
+            format!("metadata:\n  name: default\nspec:\n  driver_config:\n{DRIVER_CONFIG_RULE}");
+        let ir = parse(yaml.as_bytes()).expect("parse");
+        let dc = ir
+            .spec
+            .expect("spec")
+            .driver_config
+            .expect("driver_config present");
+        assert!(
+            dc.deny_templates,
+            "omitting deny_templates must default to true (deny)"
+        );
+    }
+
+    #[test]
+    fn driver_config_explicit_deny_templates_false_is_honored() {
+        let yaml = format!(
+            "metadata:\n  name: default\nspec:\n  driver_config:\n      deny_templates: false\n{DRIVER_CONFIG_RULE}"
+        );
+        let ir = parse(yaml.as_bytes()).expect("parse");
+        let dc = ir.spec.expect("spec").driver_config.expect("driver_config");
+        assert!(
+            !dc.deny_templates,
+            "an explicit deny_templates: false must be honored as an opt-out"
+        );
     }
 
     #[test]

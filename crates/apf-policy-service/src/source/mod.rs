@@ -475,6 +475,15 @@ pub trait PolicySource: Send + Sync {
         variant: &str,
     ) -> Option<(PolicyProjection, String)>;
 
+    /// The `driver_config` allowlist for sandbox policy `name`, as
+    /// `DriverConfigPolicy` protobuf bytes, if the signed bundle carries one.
+    /// Minted into the provenance JWT so the interceptor can enforce it.
+    /// Defaults to `None` for sources that do not yet surface it.
+    fn driver_config(&self, name: &str, variant: &str) -> Option<Vec<u8>> {
+        let _ = (name, variant);
+        None
+    }
+
     /// Whether this source has a verified bundle loaded and can serve
     /// requests. `LocalBundleSource` is always ready once constructed — the
     /// initial local bundle is loaded synchronously before it exists.
