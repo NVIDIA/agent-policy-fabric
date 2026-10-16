@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenShell overlay for the APF stack. Layered on ../compose.yaml it:
+#   - publishes the OpenShell gateway and the egress request policy listener
+#     on 127.0.0.1 from the pod, and gives the pod the host.openshell.internal
+#     alias the registration uses;
+#   - enables the policy gateway's two OpenShell listeners with TLS and the
+#     extension-JWT trust profiles from the apf-openshell volume;
+#   - adds the OpenShell gateway itself, driving sandboxes through the engine
+#     socket, registered against APF through config/openshell-gateway.<driver>.toml.
+# Use: docker compose -f compose.yaml -f e2e/compose.openshell.yaml ...
+
+services:
+  pod:
+    extra_hosts:
+      - "host.openshell.internal:127.0.0.1"
+    ports:
+      - "127.0.0.1:${OPENSHELL_PORT:-8080}:${OPENSHELL_PORT:-8080}"
+      - "127.0.0.1:${OPENSHELL_HEALTH_PORT:-8081}:${OPENSHELL_HEALTH_PORT:-8081}"
+      # Supervisors run with host networking and reach the egress listener
+      # through this loopback publish.
+      - "127.0.0.1:${APF_EGRESS_PORT:-9099}:${APF_EGRESS_PORT:-9099}"
+
+  policy-gateway:
+    # The base flags plus the two OpenShell listeners; a command override
+    # replaces the base list, so the base flags are repeated here.
+    command:
+      - --socket=/run/apf/policy-gateway/policy-gateway.sock
+      - --policy-service-socket=/run/apf/policy-service/policy-service.sock
+      - --document-kind=openshell.sandbox.v1
+      - --document-name=default
+      - --document-key-id=${APF_KEY_ID:-apf-dev}
+      - --jwks-url=http://127.0.0.1:19200/.well-known/jwks.json
+      - --audit-log-dir=/var/log/apf/audit
+      - --openshell-gateway-url=http://127.0.0.1:${OPENSHELL_PORT:-8080}
+      - --openshell-interceptor-addr=0.0.0.0:${APF_ADMISSION_PORT:-18081}
+      - --openshell-interceptor-tls-cert-file=/etc/apf/openshell/interceptor/tls.crt
+      - --openshell-interceptor-tls-key-file=/etc/apf/openshell/interceptor/tls.key
+      - --openshell-interceptor-auth-trust-file=/etc/apf/openshell/interceptor/trust.toml
+      - --openshell-middleware-addr=0.0.0.0:${APF_EGRESS_PORT:-9099}
+      - --openshell-middleware-tls-cert-file=/etc/apf/openshell/middleware/tls.crt
+      - --openshell-middleware-tls-key-file=/etc/apf/openshell/middleware/tls.key
+      - --openshell-middleware-auth-trust-file=/etc/apf/openshell/middleware/trust.toml
+    volumes:
+      - apf-openshell:/etc/apf/openshell:ro
+    # Ready once the egress listener accepts connections, the same signal the
+    # chart's readiness probe uses; the socket alone no longer proves it.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${APF_EGRESS_PORT:-9099}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  openshell-gateway:
+    image: ghcr.io/nvidia/openshell/gateway:${OPENSHELL_IMAGE_TAG:?set OPENSHELL_IMAGE_TAG (see .env.example)}
+    network_mode: service:pod
+    # Root for the engine socket and the same-path state bind; the remaining
+    # development-grade element of this stack.
+    user: "0"
+    # The image's default command passes bind flags that would override the
+    # TOML; the file owns every setting.
+    command: ["--config", "/etc/openshell/gateway.toml"]
+    restart: unless-stopped
+    environment:
+      OPENSHELL_DB_URL: "sqlite:${OPENSHELL_STATE_DIR:-/var/lib/openshell}/gateway.db?mode=rwc"
+      XDG_DATA_HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+      XDG_STATE_HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+      HOME: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+    volumes:
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/run/container-engine/engine.sock
+      - type: bind
+        source: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+        target: ${OPENSHELL_STATE_DIR:-/var/lib/openshell}
+        bind:
+          create_host_path: true
+      # Relative paths resolve against the project directory (the base file's).
+      - ${OPENSHELL_GATEWAY_TOML:-./config/openshell-gateway.docker.toml}:/etc/openshell/gateway.toml:ro
+      # ca.crt for the registrations and the extension-JWT key pair.
+      - apf-openshell:/etc/openshell-extensions/apf:ro
+    depends_on:
+      # The gateway Describe()s every registered extension at startup and
+      # fails closed, so APF must be serving first.
+      policy-gateway:
+        condition: service_healthy
+
+volumes:
+  # TLS material and trust profiles for the two listeners, ca.crt, and the
+  # OpenShell extension-JWT key pair; written by materials.sh --openshell.
+  apf-openshell: {}

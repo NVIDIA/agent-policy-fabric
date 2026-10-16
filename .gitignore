@@ -13,3 +13,6 @@ __pycache__/
 
 # Helm chart verification harness work directory (kind materials, pulled charts, logs).
 /deploy/helm/e2e/.work/
+
+# Compose verification harness work directory (signed bundles, TLS, logs, OpenShell state).
+/deploy/compose/e2e/.work/

@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# APF standalone: the policy service and the policy gateway as two hardened
+# containers sharing one network namespace owned by the pause container `pod`.
+# The policy service binds loopback inside that namespace and the gateway
+# serves its decision socket, so this file publishes nothing. Inputs come from
+# read-only bind mounts (signed bundle, trust root) and from named volumes that
+# e2e/materials.sh fills (secrets); sockets, state and audit files live on
+# named volumes too. Nothing here knows about OpenShell: e2e/compose.openshell.yaml
+# adds it as an overlay.
+#
+# Flags mirror the Helm chart's colocated deployment; see README.md for the
+# journey and ../helm/apf/values.yaml for the topology note.
+
+name: apf
+
+x-hardened: &hardened
+  user: "65532:65532"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=65532,gid=65532,mode=0700"]
+  restart: unless-stopped
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  pod:
+    image: registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a
+    restart: always
+
+  policy-service:
+    <<: *hardened
+    build:
+      context: ../..
+      dockerfile: deploy/docker/apf-policy-service/Dockerfile
+      target: runtime
+    image: apf-policy-service:${APF_IMAGE_TAG:-dev}
+    network_mode: service:pod
+    # The entrypoint is `apf-policy-service serve`; these are its flags.
+    command:
+      - --socket=/run/apf/policy-service/policy-service.sock
+      - --policy-source=local
+      - --bundle-path=/data/bundles/bundle/manifest.yaml
+      - --document-signing-key=/etc/apf/secrets/document-signing.seed
+      - --document-key-id=${APF_KEY_ID:-apf-dev}
+      - --trust-root-dir=/etc/apf/trust-roots
+      - --http-addr=127.0.0.1:19200
+      - --http-bearer-token-file=/etc/apf/secrets/http-bearer-token
+      - --audit-log-dir=/var/log/apf/audit
+      - --surfaces=openshell.sandbox.v1,openshell.provider-profile.v1,apf.policy.v1
+    volumes:
+      - apf-run:/run/apf
+      - apf-state:/var/lib/apf
+      - apf-audit:/var/log/apf/audit
+      - apf-secrets:/etc/apf/secrets:ro
+      - ${APF_BUNDLE_DIR:-./e2e/.work/bundle-v1/bundle}:/data/bundles/bundle:ro
+      - ${APF_TRUST_ROOT:-../../examples/dev-keys/apf-dev.pub}:/etc/apf/trust-roots/${APF_KEY_ID:-apf-dev}.pub:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19200/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  policy-gateway:
+    <<: *hardened
+    build:
+      context: ../..
+      dockerfile: deploy/docker/apf-policy-gateway/Dockerfile
+    image: apf-policy-gateway:${APF_IMAGE_TAG:-dev}
+    network_mode: service:pod
+    # A plain decision point on its socket; the OpenShell listeners are
+    # enabled by the overlay.
+    command:
+      - --socket=/run/apf/policy-gateway/policy-gateway.sock
+      - --policy-service-socket=/run/apf/policy-service/policy-service.sock
+      - --document-kind=openshell.sandbox.v1
+      - --document-name=default
+      - --document-key-id=${APF_KEY_ID:-apf-dev}
+      - --jwks-url=http://127.0.0.1:19200/.well-known/jwks.json
+      - --audit-log-dir=/var/log/apf/audit
+    depends_on:
+      policy-service:
+        condition: service_healthy
+    volumes:
+      - apf-run:/run/apf
+      - apf-audit:/var/log/apf/audit
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/apf/policy-gateway/policy-gateway.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  apf-run: {}
+  # Anti-rollback counter; `down --volumes` is a deliberate reset.
+  apf-state: {}
+  apf-audit: {}
+  # Bearer token and document signing seed, 0400 and owned by 65532; written
+  # by e2e/materials.sh through a throwaway run of the policy-service image.
+  apf-secrets: {}

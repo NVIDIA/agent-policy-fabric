@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Policy information provider lane. Adds a loopback provider stub to the pod
+# and points the policy gateway at a provider registration. The gateway
+# accepts plain-http providers on loopback only, so the stub shares the pod's
+# network namespace. Layered by up.sh when PIP_CONFIG_SRC is set.
+
+services:
+  policy-gateway:
+    environment:
+      APF_PIP_CONFIG: /etc/apf/pip/pips.yaml
+    volumes:
+      - ${PIP_CONFIG:-./e2e/.work/pips.yaml}:/etc/apf/pip/pips.yaml:ro
+    depends_on:
+      pip-stub:
+        condition: service_healthy
+
+  pip-stub:
+    image: ${PIP_STUB_IMAGE:-python:3.12-slim}
+    network_mode: service:pod
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=65532,gid=65532,mode=0700"]
+    restart: unless-stopped
+    command: ["python3", "/app/stub.py", "--port", "${PIP_STUB_PORT:-19500}"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_STUB_HEALTH_URL: http://127.0.0.1:${PIP_STUB_PORT:-19500}${PIP_STUB_HEALTH_PATH:-/healthz}
+    volumes:
+      - ${PIP_STUB_SRC:-../helm/e2e/fixtures/pip/stub.py}:/app/stub.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen(os.environ['PIP_STUB_HEALTH_URL'], timeout=2).status == 200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 20

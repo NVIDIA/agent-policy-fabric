@@ -1,0 +1,11 @@
+{
+  "resource": { "id": "octo/repo", "class": "github_repo_read" },
+  "context": {
+    "openshell": {
+      "sandbox_id": "evaluate-example",
+      "user_subject": "alice@example.com",
+      "agent_type": "example"
+    },
+    "audit_context": { "correlation_id": "evaluate-example" }
+  }
+}
