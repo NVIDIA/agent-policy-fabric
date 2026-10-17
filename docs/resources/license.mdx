@@ -14,7 +14,7 @@ NVIDIA Agent Policy Fabric is licensed under the [Apache License, Version 2.0](h
 
 `THIRD_PARTY_LICENSES.txt` in the repository root lists every external crate version in `Cargo.lock`, its upstream license expression, the license APF selects, its attribution, and the full license and notice texts. `licenses/selections.json` records the license APF selects for each upstream license expression, such as MIT for `r-efi`. `scripts/third_party_licenses.py` regenerates the file, and CI checks that it is current.
 
-APF allows MIT and Apache-2.0 for the crates it builds. Any other license must be granted to a named crate in `deny.toml`, and `cargo deny check` enforces this. The OpenShell protobuf sources exported at build time and the operating system packages in container images are outside that check.
+APF allows MIT and Apache-2.0 for the crates it builds. Any other license must be granted to a named crate in `deny.toml`, and `cargo deny check` enforces this. The third-party protobuf sources committed under `contracts/third_party/` (Apache-2.0, recorded in `contracts/third_party/pins.toml`) and the operating system packages in container images are outside that check.
 
 ## Apache License 2.0
 

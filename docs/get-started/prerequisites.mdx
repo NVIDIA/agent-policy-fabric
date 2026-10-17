@@ -25,7 +25,7 @@ You should be comfortable with:
 | Git | Clone the APF repository. |
 | Rust via `rustup` | Build the workspace. The repository pins Rust `1.95.0` in `rust-toolchain.toml`, and `rustup` installs it on first build. |
 | `protoc` | Compile protobuf contracts. On Debian or Ubuntu, install the `protobuf-compiler` and `libprotobuf-dev` packages, as the container build does. |
-| `buf` | Export the OpenShell protobuf sources during the build. The container build installs version `1.50.0`. Refer to the [buf installation instructions](https://buf.build/docs/installation/). |
+| `buf` (optional) | Lint the protobuf contracts with `buf lint contracts/` and refresh the committed third-party sources with `cargo xtask vendor-protos`. The build does not use it. `mise install` provides the pinned version; otherwise refer to the [buf installation instructions](https://buf.build/docs/installation/). |
 | `mise` (optional) | Run the repository tasks, such as `mise run sign-bundle` and `mise run test`. |
 | Docker with Compose v2 (optional) | Run the local container stack. Its setup also uses `openssl`, `python3`, `tar`, and `shasum`; adding an OpenShell gateway to it also needs `curl` and `lsof`. |
 | `kind`, `kubectl`, Helm 3, and `yq` v4 (optional) | Verify the Helm chart on a local kind cluster, which runs on Docker. The harness installs OpenShell and the Agent Sandbox controller into that cluster itself and fetches the matching OpenShell CLI. Refer to [Kubernetes](/deployment/kubernetes#verify-locally-with-kind). |

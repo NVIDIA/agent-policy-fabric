@@ -28,7 +28,7 @@ cd apf
 cargo build --release -p apf-policy-service -p apf-policy-gateway -p apf-compile
 ```
 
-The binaries land in `target/release/`. The first build downloads the pinned Rust toolchain and exports the OpenShell protobuf sources with `buf`.
+The binaries land in `target/release/`. The first build downloads the pinned Rust toolchain and compiles the committed protobuf sources with `protoc`.
 
 ## Set an Audit Directory
 

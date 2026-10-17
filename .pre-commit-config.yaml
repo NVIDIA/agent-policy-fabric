@@ -7,3 +7,4 @@ repos:
         entry: python3 scripts/verify_copyright.py --fix
         language: system
         files: \.(rs|proto|py|sh)$
+        exclude: ^contracts/third_party/

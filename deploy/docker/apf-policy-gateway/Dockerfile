@@ -7,12 +7,8 @@
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM rust:1.88-bookworm AS build
 
-ARG BUF_VERSION=1.50.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        protobuf-compiler libprotobuf-dev curl \
-    && ARCH="$(dpkg --print-architecture | sed 's/amd64/x86_64/;s/arm64/aarch64/')" \
-    && curl -sSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-${ARCH}" \
-        -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf \
+        protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

@@ -18,7 +18,7 @@ journalctl -u apf-policy-service -u apf-policy-gateway --since "10 min ago"
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The first build fails with errors about missing types. | The build exports OpenShell's protobuf definitions from GitHub with `buf`. If that export fails, the build continues with a placeholder and fails later. | Install `buf` and allow access to `github.com`, then build again. Refer to [Prerequisites](/get-started/prerequisites). |
+| The build fails with errors about missing protobuf files or types. | `protoc` is not installed, or the committed third-party protobuf sources under `contracts/third_party/` do not match `contracts/third_party/pins.toml`. | Install `protoc`, run `cargo xtask vendor-protos --check`, and build again. Refer to [Prerequisites](/get-started/prerequisites). |
 
 ## The Shipped Configurations Do Not Start
 
