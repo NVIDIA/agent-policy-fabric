@@ -39,7 +39,7 @@ only network surfaces.
   for the init container and readiness probe. The repository's
   [Dockerfiles](../../../deploy/docker/) provide suitable images.
 - A signed policy bundle and its matching public trust key. See
-  [policy publishing](../../../docs/policy-publishing.md). The chart does not
+  [Publish and Distribute Bundles](../../../docs/manage-policy-bundles/publish-and-distribute.mdx). The chart does not
   ship a policy bundle or signing key. `apf-compile compile --verify-only
   --bundle-path <manifest> --trust-root-dir <dir> --key-id <id>` runs the same
   verification as the policy service, so a bundle can be checked against its

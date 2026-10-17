@@ -1,6 +1,6 @@
 # cargo-deny configuration. CI runs `cargo-deny --locked check licenses bans
 # sources -D no-license-field` (`mise run rust:deny:policy`) on every pull
-# request and `check advisories` on a schedule; see docs/third-party-licenses.md.
+# request and `check advisories` on a schedule; AGENTS.md lists the rules for license exceptions.
 # Every key below can change which crates pass, so treat any edit as a license
 # decision.
 

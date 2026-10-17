@@ -41,9 +41,70 @@ pull request.
 
 We aim to acknowledge new issues and pull requests within 5 business days, but we do not commit to a merge timeline. Pull requests may be declined if they duplicate internal work in progress, conflict with planned direction, or expand scope we are not prepared to maintain. We will say so rather than leave a PR open indefinitely.
 
-## Developer Certificate of Origin
+## Signing off your work
 
-All contributions must be signed off under the [DCO](https://developercertificate.org/). Add `-s` to your `git commit` to certify that you have the right to submit the work under the project's Apache-2.0 license. Unsigned commits cannot be merged.
+- We require that all contributors "sign-off" on their commits. This certifies
+  that the contribution is your original work, or you have rights to submit it
+  under the same license, or a compatible license.
+
+  - Any contribution which contains commits that are not signed off will not
+    be accepted.
+
+- To sign off on a commit, use the `--signoff` (or `-s`) option when
+  committing your changes:
+
+  ```bash
+  git commit -s -m "feat(apf): add policy bundle validation"
+  ```
+
+  This appends the following to your commit message:
+
+  ```text
+  Signed-off-by: Your Name <your@email.com>
+  ```
+
+- The first time you open a pull request, the DCO Assistant asks you to sign
+  the DCO. Post the comment it gives you on the pull request.
+
+- Full text of the [DCO](https://developercertificate.org/), also in the
+  [DCO](DCO) file:
+
+  ```text
+  Developer Certificate of Origin
+  Version 1.1
+
+  Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+  Everyone is permitted to copy and distribute verbatim copies of this
+  license document, but changing it is not allowed.
+
+
+  Developer's Certificate of Origin 1.1
+
+  By making a contribution to this project, I certify that:
+
+  (a) The contribution was created in whole or in part by me and I
+      have the right to submit it under the open source license
+      indicated in the file; or
+
+  (b) The contribution is based upon previous work that, to the best
+      of my knowledge, is covered under an appropriate open source
+      license and I have the right under that license to submit that
+      work with modifications, whether created in whole or in part
+      by me, under the same open source license (unless I am
+      permitted to submit under a different license), as indicated
+      in the file; or
+
+  (c) The contribution was provided directly to me by some other
+      person who certified (a), (b) or (c) and I have not modified
+      it.
+
+  (d) I understand and agree that this project and the contribution
+      are public and that a record of the contribution (including all
+      personal information I submit with it, including my sign-off) is
+      maintained indefinitely and may be redistributed consistent with
+      this project or the open source license(s) involved.
+  ```
 
 ## Code review and CI
 
@@ -108,7 +169,21 @@ mise run dag-guard       # crate dependency DAG
 mise run contracts:lint  # buf lint contracts/
 ```
 
-For documentation-only changes, state that no code tests were required.
+For documentation-only changes, run the documentation checks below instead,
+and state that no code tests were required.
+
+## Documentation
+
+The user documentation lives in `docs/` as Fern MDX pages, and the navigation
+is defined in `docs/index.yml`. The Fern site configuration is in `fern/`.
+
+- Follow the writing conventions, page structure, and validation steps in
+  [docs/CONTRIBUTING.mdx](docs/CONTRIBUTING.mdx).
+- If your change affects user-facing behavior, update the affected pages in
+  the same pull request.
+- Validate the docs with `mise run docs`, and preview them with
+  `mise run docs:serve`. Both tasks need mise and Node.js. Refer to
+  [fern/README.md](fern/README.md).
 
 ## Project layout
 
@@ -117,8 +192,11 @@ apf/
 |-- contracts/  # Protobuf and interface contracts
 |-- crates/     # Rust workspace crates
 |-- deploy/     # Deployment assets
-|-- docs/       # Design and architecture documentation
+|-- docs/       # Documentation pages (Fern MDX)
+|-- e2e/        # End-to-end verification harness
 |-- examples/   # Runnable examples and sample policy assets
+|-- fern/       # Fern documentation site configuration
+|-- scripts/    # Repository scripts
 `-- xtask/      # Repository automation and validation helpers
 ```
 
@@ -168,6 +246,9 @@ Every source file carries an SPDX header:
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 ```
+
+Documentation pages carry the same header as YAML comments in their
+frontmatter. Refer to [docs/CONTRIBUTING.mdx](docs/CONTRIBUTING.mdx).
 
 You do not need to maintain the year by hand. Run `pre-commit install` once
 after cloning; the `verify-copyright` hook fixes headers on any file you

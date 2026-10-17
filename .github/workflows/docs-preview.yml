@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Builds a preview for every PR from this repository and comments the link.
+# Also rebuilds the preview from main after each push to main, and on manual
+# runs from any branch. All builds share one preview ID, so the preview URL
+# never changes and shows the most recent build. Deploys to the nvidia-authed
+# Fern org. Skips if the FERN_TOKEN_PREVIEW repository secret is unset; generate
+# it in the nvidia-authed organization's Fern dashboard.
+#
+# GitHub does not pass repository secrets to pull requests from forks, so this
+# job skips fork PRs. If fork previews are needed, use a two-stage pattern: a
+# pull_request job that builds and a workflow_run job that comments.
+
+name: Docs preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  # Merged PRs never rebuild the preview, so rebuild it from main after merges.
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One group for all builds because they deploy to the same preview. Queued
+# builds wait rather than interrupt a running deploy; the latest push still wins.
+concurrency:
+  group: docs-preview
+  cancel-in-progress: false
+
+env:
+  # Shared, repository-scoped preview ID. Fern serves it at
+  # nvidia-authed-preview-apf.docs.buildwithfern.com.
+  PREVIEW_ID: apf
+
+jobs:
+  preview:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine preview action
+        id: fern-preview
+        env:
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN_PREVIEW }}
+        run: |
+          if [ -z "$FERN_TOKEN" ]; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping Fern docs preview generation because the FERN_TOKEN_PREVIEW secret is not set."
+          else
+            echo "action=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.fern-preview.outputs.action == 'build'
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        if: steps.fern-preview.outputs.action == 'build'
+        with:
+          node-version: 24
+
+      - name: Setup Fern CLI
+        if: steps.fern-preview.outputs.action == 'build'
+        run: npm install -g fern-api
+
+      - name: Generate preview
+        if: steps.fern-preview.outputs.action == 'build'
+        id: preview
+        env:
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN_PREVIEW }}
+        run: |
+          # Fern skips its overwrite prompt for an existing ID in GitHub Actions.
+          OUTPUT=$(fern generate --docs --preview --id "$PREVIEW_ID" 2>&1) || { echo "$OUTPUT"; exit 1; }
+          echo "$OUTPUT"
+          # Extract the first plain URL from the "Published docs to" output.
+          URL=$(echo "$OUTPUT" | grep 'Published docs to' | grep -oE 'https://[A-Za-z0-9._~:/?#@!$&*+,;=%-]+' | head -n 1) || true
+          if [ -z "$URL" ]; then
+            echo "::error::Fern did not print a preview URL."
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Docs preview for ${GITHUB_SHA::7} (authentication required): $URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment preview link
+        if: steps.fern-preview.outputs.action == 'build' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none \
+            --body "Docs preview for ${GITHUB_SHA::7} (authentication required): $PREVIEW_URL
+          All PRs and main share this preview, so it shows whichever was built most recently. Push to this PR to rebuild it."

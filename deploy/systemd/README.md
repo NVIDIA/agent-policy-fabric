@@ -2,11 +2,11 @@
 
 Runs `apf-policy-service` and `apf-policy-gateway` as the unprivileged `apf`
 system account, co-located on one host (the currently supported topology —
-see `docs/architecture.md`). Read **`SECURITY.md` before deploying** — it
-covers the access-control, interface-lockdown, and process-lockdown
-requirements this unit set implements and cannot fully enforce on its own
-(host firewall, polkit, sudoers, and file-integrity monitoring live outside
-what a `.service` file can express).
+see `docs/deployment/deployment-models.mdx`). Read **`SECURITY.md` before
+deploying** — it covers the access-control, interface-lockdown, and
+process-lockdown requirements this unit set implements and cannot fully
+enforce on its own (host firewall, polkit, sudoers, and file-integrity
+monitoring live outside what a `.service` file can express).
 
 ## Layout
 

@@ -15,7 +15,7 @@ reviewer signs off against, not documentation of what the units already do.
 
 Scope: `apf-policy-service` + `apf-policy-gateway`, co-located with an
 OpenShell gateway/supervisor on one host (the current supported topology —
-see `apf/docs/architecture.md`).
+see `apf/docs/deployment/deployment-models.mdx`).
 
 ## 1. Access controls on OpenShell and APF configuration
 
@@ -101,11 +101,11 @@ General rules for this section:
 - The `apf` service account gets **read-only** access to `/etc/apf`. It
   cannot write back to its own config even if compromised.
 - Bundle delivery and signing are a separate, out-of-band process (see
-  `apf/docs/policy-publishing.md`) — nothing on this host mutates the
-  bundle file. Anything that runs as `root` on this host is already inside
-  the trust boundary; the ownership rules above stop the `apf` account and
-  any other non-root service account from reading or writing APF/OpenShell
-  config, not a compromised root.
+  `apf/docs/manage-policy-bundles/publish-and-distribute.mdx`) — nothing on
+  this host mutates the bundle file. Anything that runs as `root` on this
+  host is already inside the trust boundary; the ownership rules above stop
+  the `apf` account and any other non-root service account from reading or
+  writing APF/OpenShell config, not a compromised root.
 - **OpenShell's own config gets the equivalent treatment**, under its own
   service account (`openshell`, not `apf`) with no group overlap — neither
   account should be able to read the other's secrets. If OpenShell and APF
