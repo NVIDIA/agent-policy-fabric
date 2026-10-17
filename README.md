@@ -25,15 +25,13 @@ it's integrated with today.
 - **Gateway interceptor** — at sandbox admission, injects the compiled `SandboxPolicy`
 - **Supervisor middleware** — on every egress request, evaluates and returns the decision OpenShell enforces
 
-See [Architecture](docs/architecture.md) for how policy is compiled, signed, distributed,
+See [Architecture](docs/about/architecture.mdx) for how policy is compiled, signed, distributed,
 and evaluated without a cloud round-trip on the hot path.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — enterprise-governed policy for agentic flows, components, control/data plane split, deployment models
-- [Governed path](docs/governed-path.md) — admission and per-action enforcement layers: where APF decides, where the runtime enforces
-- [Policy model](docs/policy-model.md) — document kinds, Cedar conventions, bundle format
-- [Policy publishing](docs/policy-publishing.md) — compile, sign, publish, distribute, hot-swap
+- [Developer guide](docs/index.mdx) — the APF documentation: overview, getting started, policy authoring, bundle management, OpenShell integration, operations, and reference. Navigation is defined in [docs/index.yml](docs/index.yml)
+- [Documentation contributor guide](docs/CONTRIBUTING.mdx) — conventions for writing and reviewing the developer guide
 - [AGENTS.md](AGENTS.md) — for agents and contributors working in this codebase
 
 ## Contributing
@@ -50,4 +48,4 @@ vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
 
 Licensed under the [Apache License 2.0](LICENSE).
 
-Third-party crate licenses and attribution are published in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). See [license selection and regeneration](docs/third-party-licenses.md) for the explicit MIT choice for `r-efi` and the distribution requirements.
+Third-party crate licenses and attribution are published in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). [licenses/selections.json](licenses/selections.json) records the license APF selects for each upstream license expression, such as MIT for `r-efi`, and `scripts/third_party_licenses.py` regenerates the notice. See [License](docs/resources/license.mdx).

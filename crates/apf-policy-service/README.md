@@ -45,5 +45,6 @@ Bundle (YAML) → compiler pipeline → projections
                                   apf-policy-gateway
 ```
 
-See `docs/architecture.md` for the full control/data plane diagram.
-See `docs/policy-model.md` for the policy model and document schemas.
+See `docs/about/architecture.mdx` for the components and the control/data plane split.
+See `docs/author-policies/policy-model.mdx` for the policy model and
+`docs/reference/policy-schemas.mdx` for the document schemas.

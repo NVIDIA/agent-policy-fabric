@@ -13,3 +13,11 @@ __pycache__/
 
 # Verification harness work directory: OpenShell CLI, per-environment materials, logs, OpenShell state.
 /e2e/.work/
+
+# Fern docs: local CLI installs and caches.
+node_modules/
+.fern-cache/
+fern/.fern-cache/
+
+# macOS Finder metadata.
+.DS_Store

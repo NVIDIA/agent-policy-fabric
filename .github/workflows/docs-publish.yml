@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Publishes the docs to the instance URL in fern/docs.yml. Needs the
+# FERN_TOKEN repository secret for the public nvidia Fern org; generate it in
+# that organization's Fern dashboard. Only this job switches out of
+# nvidia-authed.
+#
+# Manual publishing from main explicitly selects the public nvidia org after the
+# INTERNAL-REVIEW release-readiness check passes. Organization controls access.
+# The custom domain in fern/docs.yml stays configured while routing is set up.
+# Add a main-branch push trigger when automation is approved.
+
+name: Docs publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Block INTERNAL-REVIEW markers in fern/docs.yml and docs/ for all publishes.
+      # Domain configuration does not affect this check.
+      - name: Block internal review content
+        run: |
+          if grep -rq 'INTERNAL-REVIEW' fern/docs.yml docs; then
+            echo "::error::Remove the INTERNAL-REVIEW blocks from documentation sources before publishing."
+            grep -rn 'INTERNAL-REVIEW' fern/docs.yml docs
+            exit 1
+          fi
+
+      - name: Setup Fern CLI
+        run: npm install -g fern-api
+
+      - name: Publish docs
+        env:
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = "fern/fern.config.json";
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+          config.organization = "nvidia";
+          fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+          NODE
+          fern generate --docs

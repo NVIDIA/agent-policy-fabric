@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Validates docs on PRs and pushes to main that match the path filters below.
+# Runs the same checks as `mise run docs`. Uses no repository secrets and
+# supports pull requests from forks.
+
+name: Docs check
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "fern/**"
+      - "scripts/check_docs_nav.py"
+      - ".github/workflows/docs-*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "fern/**"
+      - "scripts/check_docs_nav.py"
+      - ".github/workflows/docs-*.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup Fern CLI
+        run: npm install -g fern-api
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check docs navigation
+        run: uv run scripts/check_docs_nav.py
+
+      - name: Run fern check
+        run: fern check

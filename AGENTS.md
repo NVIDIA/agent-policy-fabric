@@ -35,9 +35,9 @@ out of scope for this repository and belong to the network egress gateway.
 
 | Changing | Read first |
 |---|---|
-| Any crate or wire contract | `docs/architecture.md` — component responsibilities, data flow, control/data plane split |
-| `contracts/proto/` | `docs/governed-path.md` and `docs/policy-publishing.md` §6 (flows that use the wire contracts) and the `buf lint` / `buf breaking` rules below |
-| `crates/apf-openshell-*` | `docs/architecture.md` §3 — OpenShell seams and adapter responsibilities |
+| Any crate or wire contract | `docs/about/architecture.mdx` — components, trust boundary, control/data plane split |
+| `contracts/proto/` | `docs/about/governed-path.mdx` (flows that use the wire contracts), `docs/reference/adapter-contracts.mdx` (the OpenShell wire contracts), and the `buf lint` / `buf breaking` rules below |
+| `crates/apf-openshell-*` | `docs/integrations/openshell/index.mdx` — OpenShell seams and adapter responsibilities |
 | Any service crate | Run `cargo xtask dag-guard` after changes |
 
 ---
@@ -92,7 +92,7 @@ no changes to shared library or service crates are needed.
 - Wire contract change (`contracts/proto/`) — new proto package or `$id` if breaking; `buf breaking` must pass.
 - Third-party proto pin change (`contracts/third_party/pins.toml`) — run `cargo xtask vendor-protos`, build, and commit the exported files together with the pin; CI runs `cargo xtask vendor-protos --check`.
 - New crate — add to `[workspace] members`; run `cargo xtask dag-guard` before opening a pull request.
-- New or updated dependency — `cargo-deny --locked check licenses bans sources -D no-license-field` must pass (`mise run rust:deny:policy`; the cargo-deny version is pinned in `mise.toml`). Only MIT and Apache-2.0 are allowed globally. Any other license needs a per-crate exception in `deny.toml` that lists only the licenses the crate declares, a `licenses/selections.json` entry if its expression is new, and a regenerated `THIRD_PARTY_LICENSES.txt` (see `docs/third-party-licenses.md`). Never widen the global `allow` list to admit one crate; treat any `deny.toml` edit as a license decision.
+- New or updated dependency — `cargo-deny --locked check licenses bans sources -D no-license-field` must pass (`mise run rust:deny:policy`; the cargo-deny version is pinned in `mise.toml`). Only MIT and Apache-2.0 are allowed globally. Any other license needs a per-crate exception in `deny.toml` that lists only the licenses the crate declares, a `licenses/selections.json` entry if its expression is new, and a regenerated `THIRD_PARTY_LICENSES.txt` (`mise run third-party-notices:update`). Never widen the global `allow` list to admit one crate; treat any `deny.toml` edit as a license decision.
 
 ---
 

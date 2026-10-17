@@ -1,0 +1,34 @@
+[docs]
+description = "Validate the Fern documentation: config, links, and navigation"
+depends = ["docs:build:strict", "docs:nav"]
+
+["docs:deps"]
+description = "Resolve the pinned Fern CLI"
+run = """
+FERN_VERSION=$(node -p "require('./fern/fern.config.json').version")
+npx --yes "fern-api@${FERN_VERSION}" --version
+"""
+
+["docs:build:strict"]
+description = "Validate the Fern docs configuration and links"
+depends = ["docs:deps"]
+run = """
+FERN_VERSION=$(node -p "require('./fern/fern.config.json').version")
+npx --yes "fern-api@${FERN_VERSION}" check
+"""
+
+["docs:nav"]
+description = "Check that docs page URLs match their file paths"
+run = "python3 scripts/check_docs_nav.py"
+
+["docs:serve"]
+description = "Serve the Fern docs locally"
+depends = ["docs:deps"]
+run = """
+FERN_VERSION=$(node -p "require('./fern/fern.config.json').version")
+npx --yes "fern-api@${FERN_VERSION}" docs dev
+"""
+
+["docs:clean"]
+description = "Remove the local Fern docs cache"
+run = "rm -rf .fern-cache fern/.fern-cache"
