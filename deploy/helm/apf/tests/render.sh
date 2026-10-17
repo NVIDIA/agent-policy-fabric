@@ -77,6 +77,13 @@ must_fail() {
 
 helm lint --strict "$chart" >/dev/null
 
+# The chart's LICENSE is a link to the repository's, so the packaged chart is
+# what has to carry the license text.
+helm package "$chart" --destination "$work/pkg" >/dev/null
+tar -tzf "$work"/pkg/apf-*.tgz | grep -qx 'apf/LICENSE'
+tar -xzf "$work"/pkg/apf-*.tgz -C "$work/pkg" apf/LICENSE
+grep -q 'Apache License' "$work/pkg/apf/LICENSE"
+
 render defaults
 check_file_count 4
 check_egress off

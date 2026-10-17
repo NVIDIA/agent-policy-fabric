@@ -46,6 +46,7 @@ vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE). The Helm chart under
+`deploy/helm/apf` links to the same file, so a packaged chart carries it.
 
 Third-party crate licenses and attribution are published in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt). [licenses/selections.json](licenses/selections.json) records the license APF selects for each upstream license expression, such as MIT for `r-efi`, and `scripts/third_party_licenses.py` regenerates the notice. See [License](docs/resources/license.mdx).
