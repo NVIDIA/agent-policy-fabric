@@ -40,7 +40,7 @@ Open `$WORK/coder/sandbox/default-policy.yaml`. Keep only the `anthropic` and `g
     anthropic:
       name: anthropic
       endpoints:
-        - host: api.anthropic.com
+        - host: integrate.api.nvidia.com
           port: 443
           protocol: rest
           access: read-write
@@ -76,7 +76,7 @@ In the same file, change the middleware entry so APF evaluates every request to 
           - "api.github.com"
 ```
 
-Requests to `api.anthropic.com` are not routed to APF in this bundle. If you add the inference host, APF's content gate also inspects prompts, and the demo's controls would rewrite or deny prompts. `redact-wholesale` replaces any prompt that contains a credential pattern, which the model API will then reject, and a prompt that contains personal data is denied, because model request bodies have no top-level `text` field for `redact-pii-body` to replace.
+Requests to `integrate.api.nvidia.com` are not routed to APF in this bundle. If you add the inference host, APF's content gate also inspects prompts, and the demo's controls would rewrite or deny prompts. `redact-wholesale` replaces any prompt that contains a credential pattern, which the model API will then reject, and a prompt that contains personal data is denied, because model request bodies have no top-level `text` field for `redact-pii-body` to replace.
 
 ## Keep Only the Providers You Need
 

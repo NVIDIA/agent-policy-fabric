@@ -15,6 +15,7 @@ At startup:
   Build Cedar evaluator from PolicyRule documents
   Start bundle watch loop (hot-swap evaluator on bundle change)
   If an authenticated interceptor or middleware listener is enabled, load caller trust + TLS identity before listening
+  If --pip-config is set, load and validate the provider registration before any listener binds
 
 At sandbox admission (OpenShell control plane):
   GatewayInterceptorServer ← OpenShell gateway calls here
@@ -24,6 +25,7 @@ At sandbox admission (OpenShell control plane):
 
 Per egress request (OpenShell data plane):
   SupervisorMiddlewareServer ← OpenShell supervisor calls here
+  → Enrichment: consult registered providers within budget, stamp context.<domain>._meta
   → call EvaluationService/Evaluate (local Cedar)
   → return: allow/deny + body patches + header mutations + findings
 ```
@@ -48,6 +50,8 @@ Per egress request (OpenShell data plane):
 | `--openshell-middleware-tls-cert-file` | `APF_OPENSHELL_MIDDLEWARE_TLS_CERT_FILE` | — | PEM certificate chain served by the middleware HTTPS listener |
 | `--openshell-middleware-tls-key-file` | `APF_OPENSHELL_MIDDLEWARE_TLS_KEY_FILE` | — | PEM private key for the middleware HTTPS listener |
 | `--openshell-middleware-allow-insecure-transport` | `APF_OPENSHELL_MIDDLEWARE_ALLOW_INSECURE_TRANSPORT` | `false` | Explicitly disable middleware TLS and caller authentication for local research |
+| `--pip-config` | `APF_PIP_CONFIG` | — | YAML registration of the policy information providers consulted in the Enrichment stage; absent means no enrichment |
+| `--pip-stage-budget-ms` | `APF_PIP_STAGE_BUDGET_MS` | `250` | Hard cap on the whole Enrichment stage; the default and the upper bound of every registration's `timeout_ms` |
 
 ## OpenShell extension authentication
 
@@ -109,6 +113,39 @@ On the middleware listener, authenticated `Describe` accepts a gateway or superv
 On the interceptor listener, authenticated `Describe`, `SnapshotProviderProfiles`, and `Evaluate` all accept a gateway caller only and advertise the configured audience in `InterceptorManifest.expected_audience` — the interceptor is exclusively called by the OpenShell gateway at admission time, so there is no supervisor-caller path and no sandbox-binding check on this surface.
 
 For trusted local development or isolated research only, pass `--openshell-{interceptor,middleware}-allow-insecure-transport` with the corresponding listener address and omit that surface's three authenticated-mode files. The matching OpenShell registration must set `allow_insecure_transport = true`. This mode serves plaintext gRPC, does not require or verify an extension credential, advertises an empty `expected_audience`, and logs a startup warning. It cannot be combined with any authenticated-mode setting for the same surface.
+
+## Policy information providers
+
+Before the engine runs, the gateway consults the policy information providers registered in the
+file passed with `--pip-config` (env `APF_PIP_CONFIG`) and exposes their facts to Cedar as
+`context.<domain>`, each with a `_meta` provenance record. The whole stage is capped by
+`--pip-stage-budget-ms` (env `APF_PIP_STAGE_BUDGET_MS`, default 250), which is also the default
+and the upper bound of every registration's `timeout_ms`. Without the flag there is no enrichment.
+
+The file is loaded through the same checked startup path as the TLS material: a regular file,
+not a symlink, not group or world writable, at most 64 KiB. It is parsed and validated before any
+listener binds, and the gateway refuses to start on any error, including an unknown key. A
+conventional location is `/etc/apf/providers.yaml`. Every registration declares a `type`: `grpc`,
+where the system implements the `PolicyInformationService` contract and the gateway reaches it
+over HTTPS with mutual TLS or over a Unix socket with peer-UID verification, or `http`, where the
+gateway calls a JSON API itself and keeps the fields policy needs.
+
+```yaml
+providers:
+  - name: identity
+    context: identity                             # policy reads context.identity.*
+    type: grpc
+    endpoint:
+      url: unix:///run/apf/providers/identity.sock
+      peer_uid: 1201                              # UID the provider runs as
+    on_failure: fail_closed                       # deny with pip_<status>:identity on failure
+    timeout_ms: 20
+```
+
+Each registration names its context, its type, its endpoint, and its failure mode (`fail_closed`
+or `degrade`), and optionally the tools or actions it applies to and a timeout. Annotated
+examples of all three shapes are in `examples/pips/`; the key reference is
+`docs/integrations/policy-information-providers.mdx`.
 
 ## Two enforcement seams
 

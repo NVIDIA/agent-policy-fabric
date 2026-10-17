@@ -20,4 +20,4 @@ the modes the comments describe before starting the gateway.
 The gateway loads the file before any listener binds and refuses to start on
 any validation error, including an unknown key. The key reference, the subject
 projection, the `http` lookup rules, timeouts, provenance and the security
-notes are in the APF documentation under *Policy information providers*.
+notes are in `docs/integrations/policy-information-providers.mdx`.
