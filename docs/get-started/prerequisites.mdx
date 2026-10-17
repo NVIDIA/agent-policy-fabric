@@ -1,0 +1,78 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Prerequisites for Running APF"
+sidebar-title: "Prerequisites"
+description: "Tools, OpenShell version, keys, and network access you need before you build and run Agent Policy Fabric."
+keywords: "Generative AI, Cybersecurity, AI Agents, Prerequisites, Installation, Rust, buf, OpenShell, Signing Keys"
+position: 1
+---
+
+This page lists what you need before you install APF and connect it to OpenShell. APF is distributed as source in this release, so you build the binaries yourself.
+
+## Knowledge
+
+You should be comfortable with:
+
+- Running and configuring an [OpenShell gateway](https://docs.nvidia.com/openshell/latest/how-it-works/gateways/overview) and creating sandboxes with the `openshell` CLI.
+- Reading YAML and editing TOML configuration files.
+- Basic public-key cryptography concepts: private keys sign, public keys verify.
+
+## Build Tools
+
+| Tool | Why you need it |
+|---|---|
+| Git | Clone the APF repository. |
+| Rust via `rustup` | Build the workspace. The repository pins Rust `1.95.0` in `rust-toolchain.toml`, and `rustup` installs it on first build. |
+| `protoc` | Compile protobuf contracts. On Debian or Ubuntu, install the `protobuf-compiler` and `libprotobuf-dev` packages, as the container build does. |
+| `buf` | Export the OpenShell protobuf sources during the build. The container build installs version `1.50.0`. Refer to the [buf installation instructions](https://buf.build/docs/installation/). |
+| `mise` (optional) | Run the repository tasks, such as `mise run sign-bundle` and `mise run test`. |
+| Docker with Compose v2 (optional) | Run the local container stack. Its setup also uses `openssl`, `python3`, `tar`, and `shasum`; adding an OpenShell gateway to it also needs `curl` and `lsof`. |
+| `kind`, `kubectl`, Helm 3, and `yq` v4 (optional) | Verify the Helm chart on a local kind cluster, which runs on Docker. The harness installs OpenShell and the Agent Sandbox controller into that cluster itself and fetches the matching OpenShell CLI. Refer to [Kubernetes](/deployment/kubernetes#verify-locally-with-kind). |
+| `curl` | Check health endpoints and call the refresh API. The native run commands in [Installation](/get-started/installation) use it. |
+| `jq` | Read and filter audit records in the walkthroughs and tutorials. |
+
+The build needs network access to `github.com`, for the OpenShell protobuf export, and to crates.io, for dependencies.
+
+The container stack and the kind harness also pull from `ghcr.io` (the OpenShell images and chart, and the sandbox image), `registry.k8s.io` (the pause image), Docker Hub (`grpcurl` and the provider stub image), and `github.com` (the Agent Sandbox controller manifest and the OpenShell CLI).
+
+## OpenShell
+
+APF `main` is built against OpenShell `v0.1.3`. Install a matching OpenShell 0.1.x gateway by following the [OpenShell installation guide](https://docs.nvidia.com/openshell/latest/about/installation). Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility) for the compatibility rules.
+
+You need permission to edit the OpenShell gateway configuration and restart the gateway, because APF is registered as a gateway interceptor and a supervisor middleware in gateway TOML.
+
+The walkthroughs create sandboxes from a workload image of your choice. The demo sandbox policy runs the workload as user and group `sandbox`, so the image needs that user and group, and `curl` at `/usr/bin/curl`. OpenShell refuses to start a sandbox whose image lacks the configured user or group.
+
+## Keys
+
+APF uses two separate key pairs. Keep them distinct. The document signing key is Ed25519. The bundle signing key is Ed25519, or ECDSA P-256 when a signing service produces it.
+
+| Key | Signs | Verified by | Where the private half lives |
+|---|---|---|---|
+| Bundle signing key | The policy bundle manifest. | `apf-policy-service`, against the public keys in its trust-root directory. | With your signing authority, offline. Never on the APF host. |
+| Document signing key | The provenance token on every document the policy service serves. | `apf-policy-gateway`, through the policy service's JWKS endpoint. | On the APF host, readable only by the policy service. |
+
+A third trust relationship, the OpenShell extension trust profile, lets the policy gateway verify calls from OpenShell. It contains OpenShell's public key, not an APF key. Refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+
+For local development, the repository includes a committed key pair, `examples/dev-keys/apf-dev.seed` and `examples/dev-keys/apf-dev.pub`, with key ID `apf-dev`. The dev stack uses it for both bundle signing and document signing.
+
+<Warning>
+The development key has no security value. Anyone with the repository can sign bundles that a host trusting `apf-dev.pub` accepts. Generate your own keys for anything other than local experiments. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+</Warning>
+
+## Ports
+
+The local development stack uses these loopback ports. Production deployments bind the same surfaces, and you choose the addresses.
+
+| Port | Surface |
+|---|---|
+| `127.0.0.1:19200` | Policy service HTTP surface: health, JWKS, documents, refresh. |
+| `127.0.0.1:18202` | Policy gateway: OpenShell gateway interceptor gRPC. |
+| `127.0.0.1:9099` | Policy gateway: OpenShell supervisor middleware gRPC. |
+
+The policy service and policy gateway also talk over Unix domain sockets, which need no ports.
+
+## Next Steps
+
+Continue with [Installation](/get-started/installation).

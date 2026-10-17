@@ -1,0 +1,185 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Reject a Tampered Bundle"
+sidebar-title: "Reject a Tampered Bundle"
+description: "Tamper with a signed policy bundle in three ways, see each one refused with a precise reason, and confirm that the policy service keeps enforcing the last good bundle."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Tamper Evidence, Signature, Manifest, Trust Root, Bundle Verification"
+position: 8
+---
+
+A signed bundle is only useful if every change to it is caught. This tutorial makes three kinds of unauthorized change to a copy of your bundle, verifies each one offline, and then hands one to the running policy service to show that it refuses the bundle and keeps enforcing the last good one.
+
+After completing it, you understand:
+
+- What the signature covers and what the manifest digests cover.
+- How an unknown signer is refused.
+- What a refusal looks like at the command line, over HTTP, and in the audit trail.
+- Which checks only the policy service can make.
+
+## Prerequisites
+
+- The `$WORK` directory from [Your First Signed Policy](/get-started/your-first-signed-policy), with a signed bundle in `$WORK/bundle`, your key in `$WORK/keys/my-signer.seed`, and its public key in `$WORK/trust-roots`.
+- The native services running with that bundle, for the last steps.
+
+<Steps toc={true}>
+
+## Make a Working Copy
+
+Tamper with a copy, never the bundle you publish:
+
+```shell
+rm -rf "$WORK/tamper"
+cp -r "$WORK/bundle" "$WORK/tamper"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/tamper/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+verified  digest=<sha256> counter=<revision>
+```
+
+The copy verifies because nothing has changed yet. Manifest member paths are resolved relative to the signed file, so the copy is checked against its own member files.
+
+## Change a Policy Document
+
+Append a harmless-looking comment to the security team's content gate:
+
+```shell
+echo "# temporary exception" >> "$WORK/tamper/rules/security-content-gate.yaml"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/tamper/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+Error: verification failed: ["manifest_hash_mismatch: rules/security-content-gate.yaml: declared <digest>, actual <digest>"]
+```
+
+The manifest records the SHA-256 digest of each member's bytes. Any change to a member, even a comment or a trailing space, changes the digest. Restore the file before the next step:
+
+```shell
+cp "$WORK/bundle/rules/security-content-gate.yaml" "$WORK/tamper/rules/"
+```
+
+## Change the Signed Manifest
+
+Edit the signed file itself, for example to claim a much higher revision:
+
+```shell
+sed -i.bak -E 's/^policy_revision: [0-9]+$/policy_revision: 99/' "$WORK/tamper/demo-bundle.yaml"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/tamper/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+Error: verification failed: ["signature_invalid: cryptographic verification failed"]
+```
+
+The signature covers the whole manifest payload: the bundle ID, revision, validity window, and every member digest. Changing any of them invalidates it. Signature verification runs first, so a bundle that fails it is never parsed.
+
+Restore the signed file:
+
+```shell
+mv "$WORK/tamper/demo-bundle.yaml.bak" "$WORK/tamper/demo-bundle.yaml"
+```
+
+## Sign with a Key Nobody Trusts
+
+Re-sign the bundle with a new key that is not in your trust-root directory:
+
+```shell
+mkdir -p "$WORK/rogue"
+
+./target/release/apf-compile genfixture \
+  --template "$WORK/bundle/demo-bundle.template.yaml" \
+  --base-dir "$WORK/tamper" \
+  --key "$WORK/rogue/rogue.seed" --generate-key \
+  --out "$WORK/tamper/demo-bundle.yaml"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/tamper/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+Error: verification failed: ["signature_invalid: trust_root_unknown: rogue (loaded: [\"my-signer\"])"]
+```
+
+The bundle is well formed and correctly signed, but by a key the verifier does not trust. The verifier selects the public key by the signature's `keyid`, and only keys in its trust-root directory count. Anyone can sign a bundle. Only the holders of a trusted key can sign one that APF accepts.
+
+## Hand a Tampered Bundle to the Policy Service
+
+Make the member change again, then ask the running policy service to load the copy:
+
+```shell
+cp "$WORK/bundle/demo-bundle.yaml" "$WORK/tamper/demo-bundle.yaml"
+echo "# temporary exception" >> "$WORK/tamper/rules/security-content-gate.yaml"
+
+curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+  -H "Authorization: Bearer $(cat examples/dev-keys/http-bearer-token.dev)" \
+  -H 'content-type: application/json' \
+  -d "{\"bundle_path\": \"$WORK/tamper/demo-bundle.yaml\"}"
+```
+
+The service answers with HTTP 500:
+
+```text
+refresh failed: bundle verification failed: ["manifest_hash_mismatch: rules/security-content-gate.yaml: declared <digest>, actual <digest>"]
+```
+
+The active bundle is unchanged. The gateway sees no new policy set, and every sandbox keeps the policy it had.
+
+## Find the Refusal in the Audit Trail
+
+```shell
+jq -c 'select(.event_type == "policy_verification" and .outcome == "refused")
+  | {reason_code, rejection_reasons, bundle_id, policy_revision}' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-service-audit.jsonl" | tail -n 1
+```
+
+```text
+{"reason_code":"policy.bundle_rejected.manifest_hash_mismatch","rejection_reasons":["manifest_hash_mismatch"],"bundle_id":"cedar-demo-bundle","policy_revision":<revision>}
+```
+
+The full detail, including both digests, is in the record's `error.message`. A bundle refused for `signature_invalid` has no `bundle_id` or `policy_revision` in its record, because APF does not trust anything in a payload whose signature failed.
+
+## Try a Replay
+
+Offline verification uses a fresh anti-rollback counter on every run, so it cannot tell whether a bundle is older than the one in service. Only the policy service, with its persistent counter store, can. To see it, follow [Try to Roll Back](/tutorials/update-a-signed-policy#try-to-roll-back). The refusal is `counter_regression` for a lower revision, or `counter_content_mismatch` for different content at the active revision.
+
+</Steps>
+
+## What Each Check Catches
+
+| Change | Caught by | Reason |
+|---|---|---|
+| A member file is edited, replaced, or appended to. | Manifest digest | `manifest_hash_mismatch` |
+| A member file is missing. | Manifest digest | `manifest_member_unreadable` |
+| The manifest is edited. | Signature | `signature_invalid` |
+| The bundle is signed by an untrusted key. | Trust roots | `signature_invalid` with `trust_root_unknown` |
+| An older bundle is republished. | Counter store, policy service only | `counter_regression` |
+| Different content is published at the active revision. | Counter store, policy service only | `counter_content_mismatch` |
+| The bundle is outside its validity window. | Validity check | `bundle_not_yet_valid` or `bundle_expired` |
+
+For every reason APF can report, refer to [Bundle Rejection Reasons](/reference/error-reference#bundle-rejection-reasons).
+
+## Clean Up
+
+```shell
+rm -rf "$WORK/tamper" "$WORK/rogue"
+```
+
+## Next Steps
+
+- To protect the keys these checks depend on, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+- To learn how verification fits activation, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).

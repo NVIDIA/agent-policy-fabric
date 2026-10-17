@@ -1,0 +1,94 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "APF Adapter"
+sidebar-title: "APF Adapter"
+description: "What an APF adapter is, what an enforcement point must provide, and how to build the projector and gateway hooks that connect APF to one."
+keywords: "Generative AI, Cybersecurity, AI Agents, APF Adapter, Projector, Hooks, Extensibility, Enforcement Point, dag-guard"
+position: 4
+---
+
+An APF adapter connects APF to one enforcement point. It has two halves. A projector in the policy service lowers the signed bundle into the enforcement point's native policy, and hooks in the policy gateway serve the enforcement point's extension points: delivering the projection at admission, and returning a decision for each request routed to APF. Everything between those halves, from bundle verification to evaluation and audit, is shared. A new enforcement point adds an adapter, and nothing else changes.
+
+One adapter ships today, for OpenShell, which is why the architecture diagram labels the policy gateway as the APF adapter. Its projector is `apf-openshell-projector`. Its hooks are the OpenShell interceptor, `apf-openshell-interceptor`, and the OpenShell middleware, `apf-openshell-middleware`, with caller authentication in `apf-openshell-auth`. Refer to [OpenShell Integration](/integrations/openshell).
+
+| Half | Plane | Where it runs | OpenShell adapter |
+|---|---|---|---|
+| Projector | Control | In `apf-policy-service`, at bundle load. | `apf-openshell-projector` |
+| Hooks | Data | In `apf-policy-gateway`, on each call from the enforcement point. | `apf-openshell-interceptor`, `apf-openshell-middleware`, `apf-openshell-auth` |
+
+## What the Enforcement Point Must Provide
+
+APF decides and the enforcement point enforces, so the enforcement point has to give APF somewhere to decide and has to honor the answer.
+
+- **A configuration surface for containment.** It must accept a configuration that a projector can produce, such as a sandbox policy, and enforce it.
+- **A pre-dispatch hook for requests.** It must call APF before a governed request leaves, with the request's target and body, and must block or rewrite the request as APF answers. For credential safety the hook should run before credentials are injected.
+- **No path around the hook.** If the workload can reach the network without passing through the hook, APF's decisions are advisory.
+- **Caller authentication.** It must authenticate its calls to APF so a workload cannot impersonate the enforcement point.
+- **A failure policy.** It must refuse governed operations when APF is unreachable, rather than run them ungoverned.
+
+## Build an Adapter
+
+Besides the projector and the hooks, a new adapter touches a few shared places:
+
+- Generate the enforcement point's protobuf types in `apf-proto`, if it has any.
+- Add a variant for it to `RuntimeContext` in `contracts/`.
+- Register the projector where the policy service builds its compiler.
+- Add listener flags to the policy gateway and start the hooks' servers.
+- Add the adapter crate prefix to `cargo xtask dag-guard`.
+
+## Write a Projector
+
+A projector lowers APF's canonical policy to the enforcement point's native surfaces. It implements the `Projector` trait from `apf-compiler`:
+
+```rust
+/// A projector lowers `CanonicalPolicy` IR to one substrate's native surfaces.
+pub trait Projector: Send + Sync {
+    /// Stable substrate identifier, e.g. `"openshell"`.
+    fn target(&self) -> &str;
+
+    /// Project `p` to this substrate's native surfaces.
+    fn project(&self, p: &CanonicalPolicy) -> Result<Vec<CompiledSurface>, ProjectError>;
+}
+```
+
+`CanonicalPolicy` carries the bundle's sandbox policies, providers, native provider profiles, and the rule, annotator, effect, and finding documents. Each `CompiledSurface` has a `kind`, such as `openshell.sandbox.v1`, a `name`, and the encoded `bytes`. The policy service serves each surface through `GetDocument` under its kind and name.
+
+Register the projector where the policy service builds its compiler, alongside the OpenShell projector, and add the new surface kinds to `--surfaces` on hosts that serve them. A projection error stops the bundle from loading, so reject anything the enforcement point cannot represent rather than drop it silently.
+
+## Write the Hooks
+
+A hook is a crate named `apf-<name>-<role>`, for example `apf-openshell-middleware`, that implements the enforcement point's extension protocol and is linked into `apf-policy-gateway`. A request hook:
+
+1. Authenticates the caller. The OpenShell hooks share `apf-openshell-auth` for this.
+2. Translates the enforcement point's request into an `EvalInput`, including the runtime identity and how it was attested.
+3. Reads the active policy, which carries the evaluator and the digest and revision it was built from, from the gateway's watch channel.
+4. Runs the Enrichment stage and the evaluator with `apf_policy_eval::decide`, or `enrich_or_deny` followed by `Evaluator::evaluate`, then applies the result with `apf_policy_eval::apply_effects`, so every enforcement point shares the same provider, decision, and mutation semantics.
+5. Maps the result to the enforcement point's response, denying when anything cannot be applied.
+6. Writes one audit record per decision through `apf-audit`, in its own component file.
+
+An admission hook fetches the projection from the policy service, verifies its provenance token against the policy service's JWKS, and returns it in the enforcement point's admission format.
+
+To host the hooks, add a bind-address flag to the gateway and start their servers alongside the existing listeners.
+
+## Rules Every Adapter Follows
+
+`cargo xtask dag-guard` checks the dependency rules:
+
+- Library crates may not depend on service or adapter crates.
+- Service crates may not depend on each other.
+- An adapter crate may depend on another adapter crate only if that one is a leaf with no adapter dependencies of its own, like `apf-openshell-auth`.
+- Enforcement-point-specific code belongs in `apf-<name>-*` crates. This check is a text search for `openshell_` that runs only when `rg` is installed. Service and adapter crates are exempt, but `apf-proto`, which generates OpenShell's protobuf types, is not, so on `main` the check fails wherever `rg` is available.
+- Only `apf-bundle`'s signing backend and `apf-compile` may import the yaml-sigil crates.
+
+Start new code in the crate that owns it, and extract it into a shared library only when a second consumer needs it.
+
+## Status
+
+The extension point is available. The OpenShell adapter is the only one in the repository.
+
+## Next Steps
+
+- For the trait and wire contracts, refer to [Adapter Contracts](/reference/adapter-contracts).
+- To see the one adapter that ships, refer to [OpenShell Integration](/integrations/openshell).
+- To see how an adapter fits the whole system, refer to [Architecture](/about/architecture#how-enforcement-points-attach).

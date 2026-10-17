@@ -1,0 +1,186 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Capability Grants"
+sidebar-title: "Capability Grants"
+description: "Write PolicyRule documents with role capability that grant agents specific tool calls, constrain their arguments, and keep tunable values in data blocks."
+keywords: "Generative AI, Cybersecurity, AI Agents, Capability Grants, Cedar, PolicyRule, MCP Tools, Least Privilege, Policy Information Providers"
+position: 4
+---
+
+A capability grant says which tool calls an agent may make and under which argument constraints. Grants are `PolicyRule` documents with `role: capability`. Every MCP tool call that reaches APF must be permitted by at least one grant, so a tool without a grant is denied by default.
+
+## A First Example
+
+This rule permits only the `github_repo_read` tool. There is no permit for a write tool, so an MCP call to one is denied:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: github-grants
+spec:
+  description: Grants for GitHub tool capabilities. repo_write has no permit.
+  language: cedar
+  role: capability
+  definition: |
+    @id("github-grants/repo_read")
+    permit (
+      principal,
+      action == APF::Action::"github_repo_read",
+      resource
+    );
+```
+
+## Naming the Action
+
+A grant matches the Cedar action APF builds for the request.
+
+| Caller | Action |
+|---|---|
+| OpenShell supervisor middleware, for an MCP `tools/call` | `APF::Action::"<params.name>"`, for example `APF::Action::"github_repo_read"`. |
+| `EvaluationService.Evaluate` with a `verb` | `APF::Action::"<resource.class>::<verb>"`, for example `APF::Action::"outlook::message_search"`. |
+| `EvaluationService.Evaluate` with an empty `verb` | `APF::Action::"<resource.class>"`. Send the MCP tool name as the class to exercise a middleware grant, for example `APF::Action::"github_repo_read"`. |
+
+The resource is `APF::Tool::"<tool>"`, where the tool is the MCP tool name on the middleware path and `resource.class` on the `Evaluate` path. Write grants for the path your callers use.
+
+## Constraining Arguments
+
+Tool arguments are available as `context.args.<name>`. For each string argument, APF also adds two derived fields, because Cedar has no string-length or numeric-coercion functions:
+
+- `context.args.<name>_len`: the length of the string in characters.
+- `context.args.<name>_num`: the string's integer value, present only when it parses as an integer.
+
+```cedar
+@id("outlook-grants/message_search")
+permit (
+  principal,
+  action == APF::Action::"outlook_message_search",
+  resource
+)
+when {
+  context.args.folder == "inbox" &&
+  context.args has limit_num &&
+  context.args.limit_num <= 25
+};
+```
+
+Guard any attribute that may be absent with `has`. Reading a missing attribute is a Cedar evaluation error. A permit that errors grants nothing. A forbid that errors denies the request with the reason `<rule>/<@id>: evaluation error: <detail>`, so an unguarded forbid fails closed rather than silently stopping to protect you; guard it with `has` when it should not apply to requests that lack the attribute.
+
+## Keeping Tunable Values in Data
+
+Put operator-tunable values, such as an approved channel or a size limit, in `spec.data`. Each rule sees only its own data as `context.data`, so a tool owner can change a value without editing Cedar:
+
+```yaml
+spec:
+  language: cedar
+  role: capability
+  data:
+    approved_channel: "C0123456789"
+    max_text_len: 500
+  definition: |
+    @id("slack-grants/slack_chat_post")
+    permit (
+      principal,
+      action == APF::Action::"slack_chat_post",
+      resource
+    )
+    when {
+      context.args.channel == context.data.approved_channel &&
+      context.args.text_len <= context.data.max_text_len
+    };
+```
+
+`spec.data` must be a mapping. It does not influence the decision except through the conditions that read it.
+
+## Grants That Depend on Provider Facts
+
+A grant can read facts that a policy information provider supplied in the Enrichment stage, such as a change request's approval state, as `context.<domain>.<claim>`. Guard the read with `has`:
+
+```cedar
+@id("change-grants/github_merge_pull_request")
+permit (
+  principal,
+  action == APF::Action::"github_merge_pull_request",
+  resource
+)
+when {
+  context.change has approval &&
+  context.change.approval == "approved"
+};
+```
+
+What happens when the provider cannot answer depends on its registration. With `on_failure: degrade`, `context.change` holds only its `_meta` record, with `degraded` set to `true`, so the guard keeps the grant off and the call is denied with `no grant for <action>`. With `on_failure: fail_closed`, the request is denied before any rule runs, with the reason `pip_<status>:<provider>`. The provider looks the change up by the repository the tool acts on, so the agent cannot choose which record gates its request. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+
+## Type-Checking with a Schema
+
+Add a Cedar schema in `spec.schema` to catch misspelled fields and type errors when the evaluator is built, before any request runs. When a schema is present, every policy in the rule is validated against it, so the schema must declare each context attribute the policies read.
+
+```yaml
+spec:
+  language: cedar
+  role: capability
+  schema: |
+    namespace APF {
+      entity User;
+      entity Tool;
+      action "slack_chat_post" appliesTo {
+        principal: [User],
+        resource: [Tool],
+        context: {
+          args: {
+            channel: String,
+            text_len: Long,
+          },
+          data: {
+            approved_channel: String,
+            max_text_len: Long,
+          },
+        }
+      };
+    }
+  data:
+    approved_channel: "C0123456789"
+    max_text_len: 500
+  definition: |
+    @id("slack-grants/slack_chat_post")
+    permit (principal, action == APF::Action::"slack_chat_post", resource)
+    when {
+      context.args.channel == context.data.approved_channel &&
+      context.args.text_len <= context.data.max_text_len
+    };
+```
+
+Do not put the schema at the top of `definition`. APF rejects a definition that starts with a schema declaration and asks you to move it into `spec.schema`.
+
+## How Grants Combine
+
+- Grants are evaluated in manifest order with the other rules. A grant whose statements do not match is skipped.
+- One permit from any capability rule satisfies the grant requirement for a tool call.
+- A `forbid` in any rule, including a capability rule, stops evaluation and denies the request.
+- Grants are written against tool actions, so they normally match only tool calls. A request that is not a tool call needs no grant.
+
+## Deny Reasons
+
+When a tool call gets no grant, APF returns one of two reasons:
+
+| Reason | When |
+|---|---|
+| `<rule>: conditions not met for <action>` | A capability rule whose name contains the full tool name was skipped. For OpenShell traffic the tool name is the whole MCP tool name, so a rule named `github-grants` does not match `github_repo_write`. |
+| `no grant for <action>` | No capability rule's name contains the full tool name. |
+
+An explicit `forbid` returns `<rule>/<@id>` instead, or the `@id` itself when it contains `/`, or `<rule>/policyN` when the statement has no `@id`. Use `@id("<rule>/<label>")` on every statement so deny reasons read clearly in audit records.
+
+## Authoring Checklist
+
+1. Use `role: capability` for tool grants and `role: control` for content policy. Any value other than exactly `control`, including a misspelling or `Control`, is treated as a grant.
+2. Name grant rules after the tools they cover. A rule name that contains the full tool name gets the more specific deny reason.
+3. Put tunable values in `spec.data`.
+4. Add `spec.schema` for any rule that reads `context.args`.
+5. Guard optional attributes and provider facts with `has`.
+6. Give every statement an `@id`.
+
+## Next Steps
+
+- To inspect and rewrite content on allowed calls, refer to [Content Controls](/author-policies/content-controls).
+- To exercise grants without a live agent, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).

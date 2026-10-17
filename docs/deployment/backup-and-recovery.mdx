@@ -1,0 +1,55 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Backup and Recovery"
+sidebar-title: "Backup and Recovery"
+description: "The state an APF host keeps, what to back up and how, and how to recover from service, host, and policy failures."
+keywords: "Generative AI, Cybersecurity, AI Agents, Backup, Recovery, Counter Store, Disaster Recovery, Operations"
+position: 6
+---
+
+APF keeps little state on a host. Most of what it needs, the signed bundle, trust roots, and keys, comes from your deployment and publish pipelines and can be reinstalled. The anti-rollback counter is the one piece of state that only the host has, and it needs deliberate handling.
+
+## State on a Host
+
+| State | Location on a systemd host | Source of truth | Back up? |
+|---|---|---|---|
+| Service settings | `/etc/apf/*.env` | Your deployment pipeline. | Rebuild from the pipeline. |
+| Signed bundle | `/etc/apf/bundle/` | Your artifact store. | Rebuild from the artifact store. |
+| Trust roots | `/etc/apf/trust-roots/` | Your signing authority. | Rebuild from the pipeline. |
+| Document signing key, TLS keys, tokens | `/etc/apf/document-signing-key`, `/etc/apf/tls/`, `/etc/apf/http-bearer-token` | Your secret manager. | Reissue or restore from the secret manager. Never copy into ordinary backups. |
+| Extension trust profiles | `/etc/apf/openshell-*-auth.toml` | The OpenShell gateway's configuration. | Rebuild from the pipeline. |
+| Anti-rollback counter | `/var/lib/apf/policy-service/counter` and `counter.digest` | The host. | Yes. See below. |
+| Audit records | The audit directories | Your log pipeline, once shipped. | Ship off the host. |
+
+The policy gateway keeps no policy state of its own. It rebuilds its evaluator from the policy service at startup.
+
+## The Anti-Rollback Counter
+
+The counter records the highest bundle revision the policy service accepted. Losing it, or restoring an older copy, lets the host accept an older signed bundle again.
+
+- **Back it up after each activation**, or at least as often as you publish bundles.
+- **Treat counter loss as a security event.** A missing counter reads as `0`, as on a fresh install. Before you restart the service, make sure the only bundle it can load is the current one.
+- **Do not restore an older counter** to work around a rejection. Publish a bundle with a higher revision instead.
+- **A corrupt counter stops the service.** It refuses to start until an operator restores a good copy or removes the files deliberately.
+
+## Recovery Scenarios
+
+| Situation | What happens | Recovery |
+|---|---|---|
+| The policy service stops while the gateway runs. | The gateway keeps deciding requests with its current evaluator and logs failed polls. New sandbox admissions fail closed because the interceptor cannot fetch the projection. | Restart the policy service. |
+| The gateway restarts while the policy service is down. | The gateway cannot fetch the policy set and does not start. With `fail_closed` registrations, OpenShell refuses governed operations. | Start the policy service first, then the gateway. |
+| A bad bundle is delivered by refresh or poll. | The policy service keeps the current bundle. A verification failure is recorded. A compilation or fetch failure is only logged. | Fix the bundle and publish a higher revision. Refer to [Update Policies](/manage-policy-bundles/update-policies#recover-from-a-rejected-update). |
+| A bad bundle is installed in place and the policy service restarts. | The policy service rejects the bundle and does not start. | Restore the previous bundle files, or install a fixed bundle with a higher revision. |
+| The active bundle expires and the policy service restarts. | The policy service rejects the bundle and does not start. | Publish a re-signed bundle with a later `expires_at` and a higher revision. |
+| A host is rebuilt. | All local state is gone. | Reinstall from your pipelines, restore the counter from backup, then start the services. |
+| A signing key is compromised. | Bundles signed with it are accepted until its trust root is removed. | Sign a replacement bundle with a new key, put it where each policy service loads it at startup, install the new trust root, remove the compromised one, and restart. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots). |
+
+## Backup Tooling
+
+The repository does not include backup or restore tooling. Use your platform's tools, and keep backups of the counter under the same access controls as the counter itself.
+
+## Next Steps
+
+- To diagnose a service that does not start, refer to [Troubleshooting](/deployment/troubleshooting).
+- To understand the counter in depth, refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).

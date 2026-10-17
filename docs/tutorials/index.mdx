@@ -1,0 +1,36 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Tutorials"
+description: "Hands-on walkthroughs that set up a governance scenario with APF, configure its policy, show the expected behavior, and verify the audit evidence."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorials, Walkthroughs, Policy, Governance"
+position: 1
+---
+
+Each tutorial sets up one governance scenario end to end: the setup, the policy, the behavior you should see, and the audit evidence that proves it. The scenarios are introduced in [Use Cases](/about/use-cases).
+
+Start with [Your First Signed Policy](/get-started/your-first-signed-policy) and [Your First Governed Agent](/get-started/your-first-governed-agent). The tutorials assume APF is running and registered with OpenShell as described there.
+
+<Cards>
+
+<Card title="Govern a Coding Agent" href="/tutorials/govern-a-coding-agent">
+
+Give a coding agent read-only source control, approved inference endpoints, and nothing else.
+</Card>
+
+<Card title="Protect Sensitive Data" href="/tutorials/protect-sensitive-data">
+
+Deny tool calls that carry credentials, redact them from plain requests, and withhold personal data.
+</Card>
+
+<Card title="Update a Signed Policy" href="/tutorials/update-a-signed-policy">
+
+Change a rule, publish a new revision, and watch the gateway swap its evaluator without a restart.
+</Card>
+
+<Card title="Reject a Tampered Bundle" href="/tutorials/reject-a-tampered-bundle">
+
+Tamper with a signed bundle in three ways and see each one refused with a precise reason.
+</Card>
+
+</Cards>

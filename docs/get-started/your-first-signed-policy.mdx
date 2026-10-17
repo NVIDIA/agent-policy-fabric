@@ -1,0 +1,195 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Sign Your First Policy Bundle"
+sidebar-title: "Your First Signed Policy"
+description: "Copy the demo bundle, change a rule, sign it with your own key, verify it offline, and load it into the APF policy service."
+keywords: "Generative AI, Cybersecurity, AI Agents, Signed Policy, Bundle, apf-compile, Ed25519, Trust Root"
+position: 4
+---
+
+This walkthrough takes you through the authoring side of APF. You copy the demo bundle, change one rule, sign the bundle with a key you create, verify it offline, and load it into the policy service.
+
+After completing it, you understand:
+
+- How a bundle manifest binds every policy document by digest.
+- How the key ID in the signature selects a trust root.
+- Why every change needs a higher `policy_revision`.
+
+## Prerequisites
+
+- APF built from source and running as native processes, as described in [Installation](/get-started/installation). The commands below use the variables from [Set Up Each Terminal](/get-started/installation#set-up-each-terminal).
+- A shell in the root of the APF repository.
+
+<Steps toc={true}>
+
+## Copy the Demo Bundle
+
+Work on a copy so the committed demo bundle stays intact.
+
+```shell
+export WORK="$HOME/apf-work"
+mkdir -p "$WORK/keys" "$WORK/trust-roots"
+cp -r examples/demo-bundle "$WORK/bundle"
+```
+
+The bundle is a directory of policy documents plus a manifest template:
+
+```text
+bundle/
+├── demo-bundle.template.yaml   # manifest template with REPLACE_WITH_DIGEST placeholders
+├── demo-bundle.yaml            # the signed manifest
+├── sandbox/default-policy.yaml # SandboxPolicy
+├── provider-profiles/*.yaml    # Provider documents
+├── annotators/*.yaml           # PolicyAnnotator documents
+├── findings/*.yaml             # PolicyFinding documents
+├── effects/*.yaml              # PolicyEffect documents
+└── rules/*.yaml                # PolicyRule documents
+```
+
+## Change a Rule
+
+Open `$WORK/bundle/sandbox/default-policy.yaml`. The `httpbin` entry allows only `POST /anything` at Layer 7. Add a second rule that also allows `GET /get`:
+
+```yaml
+    httpbin:
+      name: httpbin
+      binaries:
+        - path: /usr/bin/curl
+        - path: /usr/bin/python3
+      endpoints:
+        - host: httpbin.org
+          port: 443
+          protocol: rest
+          enforcement: enforce
+          rules:
+            - allow:
+                method: POST
+                path: /anything
+            - allow:
+                method: GET
+                path: /get
+```
+
+## Increase the Revision
+
+Open `$WORK/bundle/demo-bundle.template.yaml` and change `policy_revision: 1` to `policy_revision: 2`.
+
+The policy service already accepted the demo bundle at revision 1. Its anti-rollback counter rejects any bundle whose revision is lower, and rejects different content at the same revision. Every change you publish needs a higher revision.
+
+## Sign the Bundle
+
+Sign the template with a new Ed25519 key. `--generate-key` creates the key file and a matching `.pub` file if the key does not exist yet.
+
+```shell
+./target/release/apf-compile genfixture \
+  --template "$WORK/bundle/demo-bundle.template.yaml" \
+  --base-dir "$WORK/bundle" \
+  --key "$WORK/keys/my-signer.seed" --generate-key \
+  --out "$WORK/bundle/demo-bundle.yaml"
+```
+
+The command hashes each manifest member, fills in the digests, and signs the result:
+
+```text
+manifest  sandbox/default-policy.yaml: sha256=<digest>
+manifest  provider-profiles/github.yaml: sha256=<digest>
+...
+generated dev signing key at <WORK>/keys/my-signer.seed
+generated dev public key at <WORK>/keys/my-signer.pub
+signed bundle written to <WORK>/bundle/demo-bundle.yaml
+```
+
+The key ID defaults to the key file's stem, `my-signer`. It is written into the signature document at the end of the signed file:
+
+```yaml
+---
+schema: YamlSigilSignature.v1alpha1
+alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
+keyid: my-signer
+signature: <base64url>
+```
+
+## Publish the Public Key as a Trust Root
+
+Verifiers find the public key by matching the signature's `keyid` to a `.pub` file stem in their trust-root directory. Keep the private key out of that directory.
+
+```shell
+cp "$WORK/keys/my-signer.pub" "$WORK/trust-roots/"
+```
+
+## Verify the Bundle Offline
+
+Check the signature, every member digest, and the validity window before you ship the bundle:
+
+```shell
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/bundle/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+verified  digest=<sha256 of the signed file> counter=2
+```
+
+Run the same command without `--verify-only` to also parse every member document. It prints one `projection` line, with kind, name, and size, for each surface it produced: the policy set and the provider profile set, which holds only `ProviderProfile` members, not `Provider` documents. The `apf-compile` CLI does not register the OpenShell projector, so it does not print the sandbox policy projection. The policy service produces that projection when it loads the bundle.
+
+## Load the Bundle into the Policy Service
+
+Trust roots are read at startup, so restart the policy service with your trust-root directory and bundle. Reuse the same counter store so the anti-rollback check sees revision 1 from the earlier run. Stop both native services first, then start them again:
+
+```shell
+./target/release/apf-policy-service serve \
+  --socket "$SOCK_DIR/policy-service.sock" \
+  --http-addr 127.0.0.1:19200 \
+  --http-bearer-token-file examples/dev-keys/http-bearer-token.dev \
+  --bundle-path "$WORK/bundle/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --counter-store "$SOCK_DIR/counter" \
+  --document-key-id apf-dev \
+  --document-signing-key examples/dev-keys/apf-dev.seed \
+  --policy-source local &
+
+until curl -sf http://127.0.0.1:19200/healthz >/dev/null; do sleep 0.2; done
+
+./target/release/apf-policy-gateway \
+  --socket "$SOCK_DIR/policy-gateway.sock" \
+  --policy-service-socket "$SOCK_DIR/policy-service.sock" \
+  --document-key-id apf-dev \
+  --jwks-url http://127.0.0.1:19200/.well-known/jwks.json \
+  --openshell-interceptor-addr 127.0.0.1:18202 \
+  --openshell-interceptor-allow-insecure-transport \
+  --openshell-middleware-addr 127.0.0.1:9099 \
+  --openshell-middleware-allow-insecure-transport &
+```
+
+The document signing key stays `apf-dev`. It signs provenance tokens on served documents and is separate from the bundle signing key you created.
+
+## Confirm the New Revision Is Active
+
+The policy service records the verification with the bundle ID and revision:
+
+```shell
+grep '"event_type":"policy_verification"' "$APF_AUDIT_LOG_DIR/apf-policy-service-audit.jsonl" | tail -n 1
+```
+
+The record carries `"outcome":"success"`, `"reason_code":"policy.bundle_verified"`, `"bundle_id":"cedar-demo-bundle"`, and `"policy_revision":2`.
+
+</Steps>
+
+## What the Signature Protects
+
+The signature covers the manifest payload. The manifest lists each member file by path and SHA-256 digest of its bytes on disk. Together they make the bundle tamper-evident:
+
+- Changing any member file changes its digest, and the policy service rejects the bundle with `manifest_hash_mismatch`.
+- Changing the manifest invalidates the signature, and the policy service rejects the bundle with `signature_invalid`.
+- Re-serving an older bundle fails the revision check with `counter_regression`.
+
+Try each of these in [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+
+## Next Steps
+
+- To admit a sandbox under this bundle, continue with [Your First Governed Agent](/get-started/your-first-governed-agent).
+- To learn every manifest field, refer to [Bundle Structure](/manage-policy-bundles/bundle-structure).
+- To use a production signing authority, refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority).

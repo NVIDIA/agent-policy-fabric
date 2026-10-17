@@ -1,0 +1,68 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Signing Keys and Trust Roots"
+sidebar-title: "Signing Keys and Trust Roots"
+description: "Every key and secret in an APF deployment, who holds it, how it is stored, how to rotate it, and what to do if it is compromised."
+keywords: "Generative AI, Cybersecurity, AI Agents, Signing Keys, Trust Roots, JWKS, Key Rotation, Key Custody, Secrets"
+position: 3
+---
+
+An APF deployment uses several keys, each with one job. Confusing them is the most common configuration mistake, so this page lists every one.
+
+## Key Inventory
+
+| Key | Purpose | Private half held by | Public half or verifier | Format |
+|---|---|---|---|---|
+| Bundle signing key | Signs bundle manifests. | The signing authority, offline. | Trust roots in each policy service's `--trust-root-dir`. | Ed25519 seed for `apf-compile`, or a P-256 key in a signing service. Public keys as `.pub`, `.pem`, or `.p256`. |
+| Document signing key | Signs a provenance token on every document the policy service serves over gRPC. | The policy service, from `--document-signing-key`. | The policy service's `/.well-known/jwks.json`, read by the gateway. | Ed25519 seed. Its key ID is `--document-key-id`. |
+| OpenShell extension signing key | Signs the JWTs OpenShell sends to APF's listeners. | The OpenShell gateway. | The `public_key_pem` in each APF trust profile. | Ed25519. |
+| Listener TLS keys | Identify APF's interceptor and middleware listeners to OpenShell. | The policy gateway, from the TLS key files. | The CA in OpenShell's `tls_ca_cert_path`. | PEM certificate chain and private key. |
+| HTTP bearer token | Gates the policy service's document and refresh routes. | The policy service and authorized callers. | Compared in constant time. | Opaque string. |
+| Bundle source token | Authenticates the policy service to the artifact store. | The policy service. | The artifact store. | Opaque string. |
+
+<Warning>
+The repository's `examples/dev-keys/apf-dev.seed` is a committed private key. Development setups use it as both the bundle signing key and the document signing key. It has no security value. Do not install `apf-dev.pub` as a trust root on any host that governs real agents.
+</Warning>
+
+## Custody
+
+- **Bundle signing keys never touch an APF host.** A host that holds a bundle signing key can sign policy for every host that trusts it.
+- **Host secrets are root-owned and delivered as systemd credentials.** The shipped units load the document signing key, the TLS keys, and optionally the HTTP token with `LoadCredential`, so the `apf` account reads per-service copies under `$CREDENTIALS_DIRECTORY` and has no path to the originals in `/etc/apf`.
+- **Generated key files are not locked down for you.** `apf-policy-service keygen` and `apf-compile genfixture --generate-key` write key files with the process umask. Run `chmod 0600` on each seed as soon as it is written.
+- **Each key has one job.** Do not reuse the bundle signing key as the document signing key, or one trust profile for both listeners.
+
+## Separation of Duties
+
+| Party | Can | Cannot |
+|---|---|---|
+| Policy authors | Propose policy changes for review. | Sign bundles, unless they also hold the signing authority's key. |
+| Signing authority | Sign bundles. | Change what a host trusts. |
+| Host administrators | Install trust roots and configuration. | Produce a bundle a host accepts without a trusted key. |
+| APF services | Verify, serve, and enforce. | Author or modify a bundle. |
+
+Whoever both holds a bundle signing key and can merge policy changes is, in effect, the policy authority. Keep those roles apart where you can, and enforce review in your source control.
+
+## Rotation
+
+| Key | Procedure |
+|---|---|
+| Bundle signing key | Install the new public key next to the old one on every host and restart. Sign the next bundle with the new key and a higher revision. Remove the old public key and restart once every host runs the new bundle. |
+| Document signing key | Replace the seed and restart the policy service. The gateway re-fetches the JWKS every 60 seconds by default, and provenance verification fails until it has the new key. The JWKS publishes only the current key, so sandboxes admitted earlier keep tokens that only the old public key verifies. Keep the old public key for investigations. |
+| OpenShell extension signing key | Follow OpenShell's rotation procedure, update `kid` and `public_key_pem` in both APF trust profiles, and restart the gateway. |
+| Listener TLS keys | Replace the certificate and key files and restart the gateway. Update OpenShell's CA if the issuer changed. |
+| Tokens | Replace the token file and restart the service. Update every caller. |
+
+## If a Key Is Compromised
+
+| Key | Response |
+|---|---|
+| Bundle signing key | Sign a replacement bundle with a new key at a higher revision. On each host, put the replacement where the policy service loads it at startup, install the new key's trust root, and remove the compromised one, then restart the policy service. Do not remove the trust root while the bundle the service loads at startup is still signed by that key: the service would refuse it and not start. APF has no revocation list, so until a host restarts with the compromised trust root removed, it still accepts bundles signed by that key. |
+| Document signing key | Replace it and restart the policy service. An attacker with it could mint provenance tokens the interceptor accepts. |
+| OpenShell extension signing key | Rotate it in OpenShell and update the trust profiles. An attacker with it could call APF's listeners as OpenShell. |
+| Listener TLS key | Replace the key and certificate, and revoke the certificate with its issuer. |
+
+## Next Steps
+
+- To set up a signing authority, refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority).
+- To configure the extension trust profiles, refer to [Configure Service Authentication](/deployment/configure-service-authentication).

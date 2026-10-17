@@ -1,0 +1,155 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Policy Model"
+sidebar-title: "Policy Model"
+description: "The APF policy model from the author's perspective: control families, document kinds, decisions, rule ordering, defaults, and why APF uses Cedar."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Model, Cedar, PolicyRule, SandboxPolicy, Annotators, Effects, Findings, Policy Information Providers"
+position: 1
+---
+
+APF policy is a set of YAML documents, each with one concern and usually one owning team. Together they express three things: what an agent can reach at all, which tools and actions it may use, and what content may flow through those actions. This page explains the model. The pages that follow cover each document kind.
+
+## A First Example
+
+This rule lets an agent post to Slack only in one approved channel and only short messages:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: slack-grants
+spec:
+  language: cedar
+  role: capability
+  data:
+    approved_channel: "C0123456789"
+    max_text_len: 500
+  definition: |
+    @id("slack-grants/slack_chat_post")
+    permit (
+      principal,
+      action == APF::Action::"slack_chat_post",
+      resource
+    )
+    when {
+      context.args.channel == context.data.approved_channel &&
+      context.args.text_len <= context.data.max_text_len
+    };
+```
+
+The Cedar statement decides. `text_len` is derived by APF from the `text` argument's length. The demo bundle's copy of this rule reads `textLen` instead, which only a caller can supply. The `data` block holds the values an operator tunes, so changing the approved channel is a data change, not a logic change. The `role: capability` marks the rule as a grant for a tool. Any `role` other than exactly `control`, including a misspelling or `Control`, also makes the rule a grant, so validate rules against the [JSON Schemas](/reference/policy-schemas).
+
+## Three Control Families
+
+| Family | Question it answers | Documents | Where it is enforced |
+|---|---|---|---|
+| Containment | What can the sandbox attempt at all? Which hosts, files, and processes? | `SandboxPolicy` | OpenShell, from the projection, at Layer 1. |
+| Capability | Which tools, methods, and resources may the agent use? | `SandboxPolicy` endpoint access and L7 rules, `Provider` profiles, and `PolicyRule` documents with `role: capability`. | OpenShell at Layer 1 for endpoints and methods. APF at Layer 2 for tool calls. |
+| Content and context | Does this call, with these arguments and this body, hold up? | `PolicyAnnotator`, `PolicyRule` with `role: control`, `PolicyEffect`, `PolicyFinding`. | APF at Layer 2. |
+
+## Document Kinds
+
+| Kind | `apiVersion` | Concern | When it runs | Typical owner |
+|---|---|---|---|---|
+| `SandboxPolicy` | `nvidia.agent-policy-fabric.sandbox/v1alpha1` | Perimeter: network, filesystem, process, Landlock. | At sandbox admission, and again when a running sandbox is refreshed. | Platform or security. |
+| `Provider` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Reachable services and their credentials. | Projected into OpenShell provider profiles. | Platform or tool owners. |
+| `PolicyAnnotator` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Detection: derive signals from request content. | Stage 2, every request. | Security or compliance. |
+| `PolicyRule` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Decision: permit or forbid, in Cedar. | Stage 3, every request. | Tool owners and platform. |
+| `PolicyEffect` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Enforcement: rewrite the body, set headers, raise the verdict. | Stage 4, when a permit that references it fires. | Security or compliance. |
+| `PolicyFinding` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Observability: a named audit signal. | Alongside any decision that references it. | Security or compliance. |
+
+A bundle may also carry OpenShell-native provider profiles. Refer to [Sandbox Policies](/author-policies/sandbox-policies#providers).
+
+Policy information providers are not documents. They are registered with the gateway, and their facts reach rules through the context in Stage 1. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+
+Every document shares the same envelope. `metadata.name` is required and identifies the document within its kind. `metadata.title`, `metadata.description`, and `metadata.version` are optional. The authoring schemas reject `metadata.namespace`.
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: <Kind>
+metadata:
+  name: <name>
+spec:
+  ...
+```
+
+## Principal, Action, Resource, and Context
+
+Cedar evaluates each request as a principal performing an action on a resource, in a context.
+
+| Slot | Populated from | Example |
+|---|---|---|
+| `principal` | The user subject the caller asserts, when it supplies one. | `APF::User::"alice@example.com"` |
+| `action` | The tool, and the capability when the caller supplies one. | `APF::Action::"github_repo_read"` |
+| `resource` | The tool being called. | `APF::Tool::"github_repo_read"` |
+| `context` | Body, target, arguments, annotations, provider facts, and the rule's data. | `context.args.channel` |
+
+On the OpenShell middleware path, the action and resource come from the MCP tool name, and the principal subject is empty. Refer to [Request Evaluation](/how-it-works/request-evaluation#cedar-request-mapping) for the exact mapping and every context attribute.
+
+### Provider Context
+
+Facts from policy information providers appear as `context.<domain>`, one record per registered domain. The record holds the provider's claims and a `_meta` record with `provider`, `verified`, `age_seconds`, `degraded`, `cached`, `status`, and `evidence_ref`. Policies name domains, not providers.
+
+The roots `args`, `annotations`, `data`, `body_text`, `has_tool_name`, `target_host`, `target_method`, `target_path`, and `target_scheme` belong to the request and the engine. A domain can never use one of them.
+
+```cedar
+@id("change-grants/github_merge_pull_request")
+permit (
+  principal,
+  action == APF::Action::"github_merge_pull_request",
+  resource
+)
+when {
+  context.change has approval &&
+  context.change.approval == "approved"
+};
+```
+
+Guard a permit with `has`. When the provider degraded or holds nothing for the request, the record carries only `_meta`, and the guard keeps the grant off. A forbid that reads a missing provider fact fails to evaluate and denies the request. Providers are registered with the gateway, not in the bundle. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+
+## Decisions
+
+Every evaluation ends in one of three outcomes.
+
+| Outcome | How it happens | What OpenShell does |
+|---|---|---|
+| Allow | No `forbid` fired, and, if the request is an MCP tool call, a capability grant permitted it. A request that is not a tool call needs no grant. | Forwards the request unchanged. |
+| Allow with obligations | A `permit` that references `@apf_effect` or `@apf_finding` fired. | Applies the body and header changes, records the findings, then forwards the request. |
+| Deny | A `forbid` fired, an MCP tool call received no grant, or evaluation failed on the OpenShell path. | Blocks the request. |
+
+An allow can also carry an advisory verdict of `warn` or `escalate` from an effect. The verdict is recorded but does not block the request. No component acts on `escalate` with a review step yet.
+
+## Ordering, Conflicts, and Defaults
+
+- **Manifest order is semantic.** Rules are evaluated in the order the bundle manifest lists them. The first `forbid` that fires stops evaluation and determines the deny reason.
+- **Default deny is a skip.** A rule in which no statement matches does not deny the request. Evaluation continues with the next rule.
+- **Grants are required for tool calls.** An MCP tool call is denied unless at least one `capability` rule fires a `permit`. A `control` rule's permit does not count.
+- **Plain HTTP requests are allowed by default.** A request that is not a tool call and that reaches APF is allowed unless a rule forbids it. Use the sandbox policy to keep the perimeter deny-by-default.
+- **Effects aggregate deterministically.** Patches apply in firing order, but any body replacement discards them and the last replacement wins. Headers accumulate, and the strongest verdict wins.
+
+## Evaluation Errors
+
+APF fails closed at both load time and request time.
+
+- **Load time.** A Cedar syntax error, a schema type error, an `@apf_effect` on a `forbid`, an unresolved effect or finding reference, an invalid annotator pattern, or a duplicate annotation name stops the evaluator from being built. The gateway refuses to start with that policy, or keeps its current evaluator when the bad policy arrives as an update.
+- **Request time.** On the OpenShell path, an evaluation error, a missing annotation that an effect reads with `source`, or an effect that cannot be applied denies the request. `EvaluationService` returns an `INTERNAL` error for an evaluation error instead. A Cedar error inside a `permit`, such as reading a missing attribute, means that permit grants nothing. The same error inside a `forbid` denies the request, because a forbid that silently stops applying would turn a missing attribute into a grant. A policy information provider registered to fail closed that cannot answer denies the request with the reason `pip_<status>:<provider>` before any rule runs.
+
+Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies) to catch load-time errors before you sign.
+
+## Why Cedar
+
+APF uses [Cedar](https://www.cedarpolicy.com) as its decision language because governance policy must be auditable by the teams it affects, not only by the team that wrote it. Cedar trades expressiveness for auditability. Its deliberate constraints of no recursion, no side effects, and no I/O keep that guarantee as bundles grow.
+
+- **Readable decisions.** A `permit` or `forbid` statement can be reviewed by security, legal, and compliance teams without policy-engineering expertise.
+- **Static type checking.** When a rule supplies `spec.schema`, every policy in the rule is validated against it when the evaluator is built, so a misspelled field fails before any request is evaluated.
+- **Analyzable policy sets.** Cedar's analysis tooling can reason about a policy set's coverage and conflicts. APF does not ship that tooling.
+- **Safe composition.** Each `PolicyRule` is its own policy set with its own data, so one team's rule cannot change how another team's rule evaluates.
+
+Cedar alone cannot express detection, such as regular expressions, length checks, or numeric coercion, or mutation, such as body redaction or header injection. APF adds an annotator stage before Cedar and an effect stage after it for those concerns. `spec.language` is the extension point for other languages. Cedar is the only language registered today, and any other value fails compilation.
+
+## Next Steps
+
+- To divide ownership across teams, refer to [Federated Authoring](/author-policies/federated-authoring).
+- To write the perimeter, refer to [Sandbox Policies](/author-policies/sandbox-policies).
+- To write tool grants, refer to [Capability Grants](/author-policies/capability-grants).

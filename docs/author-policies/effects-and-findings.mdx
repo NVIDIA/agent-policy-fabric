@@ -1,0 +1,146 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Effects and Findings"
+sidebar-title: "Effects and Findings"
+description: "Write PolicyEffect documents that rewrite allowed requests and raise verdicts, and PolicyFinding documents that record what policy observed."
+keywords: "Generative AI, Cybersecurity, AI Agents, Effects, Findings, Redaction, JSON Patch, Headers, Verdict, Audit"
+position: 7
+---
+
+Effects say what happens to a request that policy allows. Findings say what policy observed, whether the request was allowed or denied. Both are named documents that any rule in the bundle can reference.
+
+| Document | Referenced with | Valid on | Changes the decision |
+|---|---|---|---|
+| `PolicyEffect` | `@apf_effect("<name>")` | `permit` only | No. It changes the request and may raise the advisory verdict. An effect that cannot be applied denies the request. |
+| `PolicyFinding` | `@apf_finding("<name>")`, or an effect's `finding` field | `permit` and `forbid` | No. It is recorded with the decision. A finding that cannot be resolved denies the request. |
+
+## A First Example
+
+This effect replaces the whole body of a request that carries a secret, tags the request with the kind of secret, and records a finding:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyEffect
+metadata:
+  name: redact-wholesale
+spec:
+  description: Replace full body with a redaction notice and emit a secret finding.
+  verdict: allow
+  reason: secret_pattern_redacted
+  body:
+    replace: '{"apf_redacted": true, "reason": "credential pattern detected"}'
+  headers:
+    - name: x-openshell-middleware-apf-event
+      action: set
+      source: context.annotations.secret_kind
+  finding: secret-detected
+```
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyFinding
+metadata:
+  name: secret-detected
+spec:
+  description: Credential material observed in outbound content.
+  type: secret_detected
+  severity: critical
+  label_source: context.annotations.secret_kind
+```
+
+A control rule attaches them:
+
+```cedar
+@apf_effect("redact-wholesale")
+@id("redact-secret-rest")
+permit (principal, action, resource)
+when { !context.has_tool_name && context.annotations.secret_detected };
+```
+
+## PolicyEffect
+
+| Field | Meaning |
+|---|---|
+| `verdict` | `allow`, `warn`, or `escalate`. An advisory signal recorded with the allow. The strongest verdict across all fired effects wins. |
+| `reason` | Machine-readable reason for a non-default verdict. |
+| `message` | Human-readable message for a non-default verdict. |
+| `body.replace` | A string that replaces the whole request body. |
+| `body.patches` | A list of RFC 6902 operations: `op` of `replace`, `add`, or `remove`, a JSON Pointer `path`, and a `value` or `source`. |
+| `headers` | A list of header mutations: `name`, `action` of `set`, `add`, or `remove`, and a `value` or `source`. |
+| `finding` | The name of a `PolicyFinding`, or an inline finding. |
+
+The `body` block is optional, so an effect can change only headers, the verdict, or findings. If you set `body`, set exactly one of `body.replace` and `body.patches`. A `replace` or `add` patch, and a `set` or `add` header, takes exactly one of `value` and `source`. A `remove` takes neither.
+
+### Reading Values from Annotations
+
+`source` copies an annotation's value into a patch or header at evaluation time. It must start with `context.annotations.`, for example `context.annotations.secret_kind`. If the annotation was not produced for the request, the whole evaluation fails closed and the request is denied with the reason `runtime_error:missing_annotation_source:<source>`.
+
+### Header Rules on OpenShell
+
+The OpenShell middleware enforces extra rules on header mutations. A mutation that breaks them denies the request.
+
+- `set` and `add` may only write headers whose names start with `x-openshell-middleware-`.
+- `remove` may not remove `authorization`, `proxy-authorization`, `proxy-authenticate`, `cookie`, `host`, `content-length`, `transfer-encoding`, `connection`, `proxy-connection`, `keep-alive`, `te`, `trailer`, or `upgrade`, or any header that starts with `x-amz-` or `x-openshell-credential`.
+- Header values must be printable text.
+
+### Patches
+
+Patches apply to the parsed JSON body in firing order. A patch on a request whose body is not JSON, or a `replace` or `remove` on a path the body does not contain, denies the request. `add` creates the target member where RFC 6902 allows it.
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyEffect
+metadata:
+  name: redact-pii-body
+spec:
+  description: Replace the JSON body's text field on PII detection.
+  verdict: allow
+  body:
+    patches:
+      - op: replace
+        path: /text
+        value: "[APF sanitized: PII detected in message. Original content withheld.]"
+  finding:
+    type: pii_redacted
+    label: pii_in_body_text
+    severity: medium
+```
+
+### Aggregation
+
+When several permits with effects fire, APF combines them deterministically: patches accumulate in firing order, the last body replacement wins and takes precedence over patches, header mutations accumulate in order, and the strongest verdict wins. The `reason` and `message` come from the first fired effect that carries the final verdict.
+
+## PolicyFinding
+
+| Field | Meaning |
+|---|---|
+| `type` | Finding category, such as `secret_detected`. Recorded as `kind` in audit events. Required. |
+| `severity` | `low`, `medium`, `high`, or `critical`. Required. |
+| `label` | A static label within the category. |
+| `label_source` | An annotation path, such as `context.annotations.secret_kind`, whose value becomes the label. It takes precedence over `label`. |
+
+An inline finding inside an effect has the same fields plus an optional `confidence` from 0 to 100.
+
+A finding with `label_source` fails closed: if the annotation is absent when the finding is resolved, the request is denied, even if `label` is also set. Keep the patterns of a detection flag and its classification label aligned so the label is always produced when the flag is.
+
+## Load-Time Checks
+
+The evaluator refuses to build, and the gateway keeps or refuses the policy, when:
+
+- `@apf_effect` appears on a `forbid`.
+- `@apf_effect` or `@apf_finding` names an effect or finding that is not in the bundle.
+- An effect's `finding` names a finding that is not in the bundle.
+- A `source` or `label_source` does not start with `context.annotations.`.
+- An effect sets both or neither of `body.replace` and `body.patches`, or a patch or header has the wrong operands.
+
+Two effects or two findings with the same name are rejected earlier, when the policy service loads the bundle.
+
+## Where Findings Go
+
+Findings travel with the decision to OpenShell and into the `findings` array of the `authorization` audit record. A finding does not change the decision, unless it cannot be resolved, as with a missing `label_source` annotation, or the request exceeds the finding limits. Both deny the request. Refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+
+## Next Steps
+
+- To check effects and findings before you sign, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+- To see effects applied end to end, refer to [Protect Sensitive Data](/tutorials/protect-sensitive-data).

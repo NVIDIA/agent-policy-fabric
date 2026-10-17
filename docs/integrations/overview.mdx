@@ -1,0 +1,83 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Integrations and Extensibility Overview"
+sidebar-title: "Overview"
+description: "APF's stable integration contracts and extension points, the integrations available today, and the compatibility rules every integration must follow."
+keywords: "Generative AI, Cybersecurity, AI Agents, Extensibility, Integration, Contracts, Projector, Adapter, Evaluator, Signing"
+position: 1
+---
+
+APF separates stable integration contracts from the individual implementations that use them. A contract is a wire format, a schema, or a Rust trait that APF commits to. An implementation, such as the OpenShell adapters, plugs into a contract. This page lists both and the rules that keep them compatible.
+
+## Integration Contracts
+
+| Contract | Kind | Defined in | Used for |
+|---|---|---|---|
+| Policy authoring schemas | JSON Schema 2020-12 | `contracts/jsonschema/` | Validating authored documents. |
+| Policy intermediate representation | Protobuf | `contracts/proto/nvidia/agent_policy_fabric/policy/v1alpha1/` | The canonical form of every document kind and of the bundle envelope. |
+| `PolicyService` | gRPC | `contracts/proto/.../policy_service/v1alpha1/policy_service.proto` | Fetching projected documents from the policy service. |
+| `EvaluationService` | gRPC | `contracts/proto/.../pdp/v1alpha1/pdp.proto` | Asking the gateway for a decision. |
+| `RuntimeContext` | Protobuf | `contracts/proto/.../runtime/v1alpha1/runtime.proto` | Caller identity and audit context on every request. |
+| `PolicyInformationService` | gRPC | `contracts/proto/.../pip/v1alpha1/pip.proto` | Supplying attested facts to the gateway's Enrichment stage. Providers implement it, and the gateway calls it. |
+| `apf.audit.event.v1` | JSON Schema | `contracts/audit/apf.audit.event.v1.schema.json` | Every audit record APF emits. |
+
+Refer to [Service APIs](/reference/service-apis) and [Audit Event Schema](/reference/audit-event-schema).
+
+## Extension Points
+
+| Extension point | Interface | Lets you |
+|---|---|---|
+| Runtime projection | `Projector` trait in `apf-compiler` | Lower APF policy into another runtime's native configuration. |
+| Enforcement point | `apf-<name>-*` adapter crates | Connect another enforcement point to APF. Refer to [APF Adapter](/integrations/apf-adapter). |
+| Signing | `BundleSigner` and `BundleVerifier` traits in `apf-types`, plus the trust-root key formats | Bring your own signing authority. |
+| Policy language | `Evaluator` trait in `apf-policy-eval`, and `spec.language` | Add a decision engine. Only `cedar` is registered today. |
+| Context enrichment | `ContextEnricher` trait in `apf-policy-eval`, and the `PolicyInformationService` contract | Supply attested facts to decisions from an external system. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| Bundle source | `PolicySource` trait in `apf-policy-service` | Load bundles from another kind of store. Local files and HTTP are provided. |
+| Policy name resolution | `PolicyResolver` trait in `apf-policy-service` | Choose a bundle variant per caller. |
+| Anti-rollback storage | `CounterStore` in `apf-bundle` | A concrete file-backed store, not a trait. Replacing it with a shared store means changing `apf-bundle`. |
+
+Refer to [Adapter Contracts](/reference/adapter-contracts) for each interface.
+
+## Available Integrations
+
+| Integration | Status | Page |
+|---|---|---|
+| NVIDIA OpenShell gateway interceptor and supervisor middleware | Available | [OpenShell](/integrations/openshell) |
+| Bring your own signing authority | Available | [External Policy Authorities](/integrations/external-policy-authorities) |
+| An adapter for another enforcement point | Available as an extension point, no second adapter ships | [APF Adapter](/integrations/apf-adapter) |
+| Policy information providers | Available | [Policy Information Providers](/integrations/policy-information-providers) |
+
+## Compatibility Rules
+
+The repository follows these conventions. Some are enforced in CI, and the exceptions that exist today are listed.
+
+- **Wire contracts evolve compatibly.** A breaking change to a protobuf contract needs a new package, and a breaking change to a JSON Schema needs a new `$id`. CI runs `buf breaking` against the default branch. The JSON Schema rule has no automated check.
+- **Dependencies flow one way.** Library crates do not depend on service or adapter crates, services do not depend on each other, and an adapter may depend only on a leaf adapter that has no adapter dependencies of its own. Services link the adapters they host. `cargo xtask dag-guard` checks these rules.
+- **Runtime types stay at the edges.** OpenShell-specific logic lives in the `apf-openshell-*` adapter crates. The exceptions are `apf-proto`, which generates the OpenShell protobuf types, and the two service binaries, which wire in the OpenShell adapters.
+- **Signing stays behind one seam.** Bundle verification goes through `BundleVerifier`, and only `apf-bundle`'s signing backend and the `apf-compile` tool import the yaml-sigil crates. `apf-compile genfixture` signs with yaml-sigil directly.
+- **Public binaries stay public.** The service binaries compile without private organization dependencies. Organization-specific behavior belongs in a separate composition binary built on APF's traits.
+- **Licenses are checked.** New dependencies must pass the `cargo-deny` license allowlist, which admits MIT and Apache-2.0 and per-crate exceptions only.
+
+## Validating an Integration
+
+For an integration in the repository, run the repository checks:
+
+```shell
+cargo build
+cargo nextest run
+cargo xtask dag-guard
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo deny check
+buf lint contracts/
+```
+
+For a runtime integration, also run the runtime's own extension protocol negotiation against the adapter. For OpenShell, a gateway that cannot negotiate the extension protocol refuses to start. Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility).
+
+A conformance suite for third-party runtimes and signing authorities is not yet in the repository.
+
+## Next Steps
+
+- To integrate with OpenShell, refer to [OpenShell](/integrations/openshell).
+- To connect another enforcement point, refer to [APF Adapter](/integrations/apf-adapter).

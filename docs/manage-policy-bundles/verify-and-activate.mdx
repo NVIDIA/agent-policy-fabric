@@ -1,0 +1,83 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Verify and Activate Bundles"
+sidebar-title: "Verify and Activate"
+description: "Every check the policy service runs before it serves a bundle, each rejection reason, and how to tell whether a bundle is published, delivered, verified, or active."
+keywords: "Generative AI, Cybersecurity, AI Agents, Bundle Verification, Activation, Rejection Reasons, Signature, Validity Window, Counter"
+position: 5
+---
+
+A bundle takes effect only after the policy service verifies it, compiles it, and records its revision. Verification runs once, when the policy service ingests the bundle: at startup, on a refresh, or when the HTTP source fetches a newer archive. Nothing downstream verifies the bundle signature again.
+
+## Bundle States
+
+Distinguish these states when you track a rollout. Each one leaves its own evidence.
+
+| State | Meaning | Evidence |
+|---|---|---|
+| Published | The signed bundle is in your artifact store or on the host's filesystem. | Your artifact store. |
+| Delivered | The policy service read or fetched it. | Policy service logs. |
+| Verified | Every check below passed. | A `policy_verification` audit record with `outcome` `success` and `reason_code` `policy.bundle_verified`. |
+| Active in the policy service | The bundle's projections are being served and its revision is recorded in the counter store. | A `policy_activation` record with `policy.bundle_loaded` at startup or after `POST /v1/refresh`, or `policy.bundle_hot_swapped` after an HTTP source poll. |
+| Active in the gateway | The gateway built an evaluator from the served policy set and uses it for decisions. | A `policy_activation` record in the gateway audit file with `policy.bundle_activated` or `policy.bundle_hot_swapped`. |
+| Applied to a sandbox | The sandbox was admitted or refreshed with the bundle's sandbox projection. | A `policy_injection` record for an admission, or a `config_governance` record with `interceptor.policy_injected.unverified` for a refresh, and the sandbox's `apf.nvidia.com/policy-version` annotation. |
+
+## Verification Checks
+
+The signature is checked first. If it fails, or if the signed payload does not parse, verification stops. Every later check runs and reports its own failure, so one rejection can list several reasons.
+
+| Order | Check | Rejection reasons |
+|---|---|---|
+| 1 | The artifact is signed in the yaml-sigil format, its `keyid` names a key in the trust-root directory, the algorithm is supported, and the signature verifies over the payload. | `signature_invalid` |
+| 2 | The verified payload parses as a bundle manifest. | `bundle_parse_failed` |
+| 3 | Each manifest member exists, has a digest, and its bytes on disk hash to that digest. | `manifest_member_unreadable`, `manifest_hash_unset`, `manifest_hash_mismatch` |
+| 4 | `not_before` and `expires_at` parse as RFC 3339 times, and the current time is inside the window. | `not_before_invalid`, `expires_at_invalid`, `bundle_not_yet_valid`, `bundle_expired` |
+| 5 | Each `runtime_compatibility` entry is well formed and satisfied. | `runtime_compat_invalid`, `runtime_compat_mismatch` |
+| 6 | The revision is newer than the last accepted one, or the same revision with the same payload. | `counter_regression`, `counter_content_mismatch` |
+
+`signature_invalid` carries a detail that explains the cause: a malformed or unsigned artifact, a signature with no `keyid`, `trust_root_unknown: <keyid>`, an unsupported algorithm, or a failed cryptographic check.
+
+With the HTTP source, the policy service picks the manifest from the archive by trying each `.yaml` file until one verifies and parses. If none does, for example because the signature is invalid or the signing key is not trusted, it never reaches the verification step: no `policy_verification` record is written, and the only message is `find bundle manifest: no bundle manifest (.yaml) found in extracted archive at <path>` in the service log.
+
+`manifest_hash_unset` means the manifest still carries an empty digest or the `REPLACE_WITH_DIGEST` placeholder. Sign the template before you publish it.
+
+Refer to [Error Reference](/reference/error-reference#bundle-rejection-reasons) for every reason.
+
+### Runtime Compatibility
+
+`runtime_compatibility` maps a runtime adapter name to a version range:
+
+```yaml
+runtime_compatibility:
+  openshell:
+    min_version: "0.1.0"
+```
+
+The verifier checks `min_version` against a version presented by the verifying component, and rejects an entry whose version is not valid semantic versioning. In this release the policy service does not present any runtime versions, so only malformed entries are rejected and the range itself is not enforced. `max_version` is accepted and not checked.
+
+## Activation
+
+After verification succeeds, the policy service compiles the bundle into its surfaces. Only if compilation succeeds does it persist the revision in the counter store and start serving the new projections. A bundle that fails compilation never consumes a revision.
+
+| Outcome | Audit record |
+|---|---|
+| Activated at startup or by `POST /v1/refresh` | `policy_activation`, `policy.bundle_loaded` |
+| Activated by an HTTP source poll | `policy_activation`, `policy.bundle_loaded`, then `policy.bundle_hot_swapped` |
+| Loaded by an HTTP source poll, but its revision is not newer than the active one | `policy_activation`, `policy.bundle_loaded`, then `outcome` `refused` with `policy.bundle_rejected.counter_not_newer`. The active bundle stays in force. |
+| Revision could not be persisted | `policy_activation` with `outcome` `refused`, `policy.bundle_rejected.counter_persist_failed` |
+| Verification failed | `policy_verification` with `outcome` `refused`, `reason_code` `policy.bundle_rejected.<first reason>`, the reason codes in `rejection_reasons`, and the full detail in `error.message` |
+
+What happens to a rejected bundle depends on when it arrives:
+
+- **At startup**, the policy service exits. With the HTTP source, the same is true for the first fetch.
+- **On a refresh or poll**, the policy service keeps serving the bundle it already has.
+
+## Expiry While Active
+
+The validity window is checked when the bundle is ingested. A bundle that expires while it is active keeps being served and enforced until it is replaced. The next restart or reload rejects it with `bundle_expired`, and a policy service that is restarted with only an expired bundle does not start. Publish a replacement well before `expires_at`. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+
+## Next Steps
+
+- To publish a new revision, refer to [Update Policies](/manage-policy-bundles/update-policies).
+- To find these records, refer to [Access Audit Events](/observability/access-audit-events).

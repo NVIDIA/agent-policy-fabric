@@ -1,0 +1,126 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Policy Service"
+sidebar-title: "Policy Service"
+description: "How apf-policy-service, the APF Policy Administration Point, loads, verifies, projects, and serves signed policy bundles."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Service, PAP, Bundle Verification, Projection, Provenance"
+position: 1
+---
+
+`apf-policy-service` is APF's Policy Administration Point (PAP). It loads a signed bundle, verifies it, compiles it into the documents each enforcement surface consumes, and serves those documents with a signed provenance token. It never evaluates requests, and it does not author or sign bundles.
+
+## Startup Sequence
+
+The service checks its configuration before it accepts any connection. Every step fails closed: if one fails, the process exits and serves nothing.
+
+1. **Load trust roots.** Read every `*.pub`, `*.pem`, and `*.p256` file in `--trust-root-dir`. The service refuses to start if the directory holds no keys.
+2. **Load the document signing key.** Read the Ed25519 seed from `--document-signing-key`. If none is configured, the service generates an ephemeral key, logs its public half, and records the weakened control.
+3. **Load the counter store.** Read the anti-rollback high-water mark from `--counter-store`. A corrupt counter file stops startup.
+4. **Open the audit log.** Create `apf-policy-service-audit.jsonl` in `--audit-log-dir`. The service refuses to start without an audit directory.
+5. **Check the HTTP surface.** If `--http-addr` is set, the service requires `--http-bearer-token-file`.
+6. **Record the startup posture.** Write one `policy_service_startup` audit record with `security_state` `secure` or `degraded` and the list of weakened controls.
+7. **Load the bundle.** Read the bundle from the configured policy source, verify it, compile it, and advance the counter. A bundle that fails any check stops startup.
+8. **Bind the socket.** Create the `PolicyService` Unix socket with mode `0600` and accept only peers whose UID matches `--allowed-uid`, which defaults to the service's own UID.
+
+## Policy Sources
+
+The `--policy-source` flag selects where the bundle comes from. The two sources are mutually exclusive.
+
+### Local Source
+
+The default source reads a signed manifest from `--bundle-path`. Member paths in the manifest resolve relative to the manifest's directory. An operator can load a new bundle without restarting the service by calling `POST /v1/refresh` on the HTTP surface with a `bundle_path` in the JSON body. The refreshed bundle goes through the same verification and counter checks as the startup bundle.
+
+### HTTP Source
+
+With `--policy-source http`, the service fetches a gzipped tarball of the bundle directory from `--bundle-source-url`.
+
+- **Authentication.** The service sends `Authorization: Bearer <token>` when `--bundle-source-token-file` or `--bundle-source-token` is set. An empty token is an error. With neither set, the service fetches anonymously and records the weakened control.
+- **Manifest discovery.** After unpacking, the service looks for the first `.yaml` file whose signature verifies against the trust roots and whose payload parses as a bundle. It tries `manifest.yaml` first, then files whose name contains `bundle`.
+- **Initial load.** The first fetch happens at startup and fails closed.
+- **Polling.** A background task polls every `--bundle-source-poll-interval-secs` seconds, 30 by default. It sends a `HEAD` request first, and a failed `HEAD` request fails the poll. It skips the download when the `x-checksum-sha256` or `ETag` header equals the hex SHA-256 of the archive it already has, so a quoted or opaque `ETag` never skips. A polling download is retried up to three times with backoff.
+- **Hot swap.** A fetched bundle replaces the served projections only if it verifies and its revision passes the counter check. A failed poll leaves the current bundle in place.
+- **Variants.** The source code supports a `{variant}` placeholder in the URL for per-caller bundles, but the service does not load variants in this release. Use a literal URL. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants).
+
+<Warning>
+The service accepts a plain `http://` bundle source URL without a warning. Use `https://`. A compromised or misconfigured origin cannot get an unsigned bundle accepted, but the transport and its token are still part of the trust boundary.
+</Warning>
+
+## Verification
+
+The service verifies a bundle once, when it ingests it. It checks the signature first and stops if the signature fails or the payload does not parse. It then checks every manifest member's digest, the validity window, the syntax of the `runtime_compatibility` entries, and the anti-rollback counter, and reports every failure at once. The service presents no runtime versions, so no compatibility comparison happens in this release. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate) for each check and its rejection reason.
+
+The counter advances only after the bundle compiles, so a bundle that fails compilation never consumes a revision. Compilation here parses the documents and produces the projections. It does not build the Cedar evaluator, so a Cedar or annotator error passes the policy service and consumes the revision. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+
+## Compilation and Projection
+
+A verified bundle is compiled into surfaces. Each surface is a document kind that one consumer understands.
+
+| Surface | Name | Encoding | Consumer |
+|---|---|---|---|
+| `apf.policy.v1` | `default` | Protobuf `PolicySet` with every rule, annotator, effect, and finding in manifest order. | Policy gateway evaluator. |
+| `openshell.sandbox.v1` | The `SandboxPolicy` name, for example `default` | Protobuf OpenShell `SandboxPolicy`. | OpenShell, through the interceptor at admission. |
+| `openshell.provider-profile.v1` | `default` and one per profile | One OpenShell provider profile YAML document per `Provider` or `ProviderProfile` member, plus a protobuf `ProviderProfileSet` at `default` that aggregates the `ProviderProfile` members. | Interceptor provider snapshots and reconciliation. |
+| `apf.policy-rules.v1`, `apf.policy-annotators.v1`, `apf.policy-effects.v1`, `apf.policy-findings.v1` | `default` | JSON arrays of the compiled documents, served only when the bundle has a document of that kind. The rules array omits `role`. | Inspection only. No APF component consumes them. |
+
+`--surfaces` limits which surface kinds the service serves. A request for any other kind is refused with `kind '<kind>' is not served by this instance`. The policy gateway needs `apf.policy.v1`, and the interceptor needs `openshell.sandbox.v1` and `openshell.provider-profile.v1`.
+
+Refer to [Policy Projection](/how-it-works/policy-projection) for how each surface is built.
+
+## Serving Documents
+
+The policy gateway calls `GetDocument` with a surface kind and a document name. The response carries:
+
+- `body`: the projected document bytes.
+- `digest`: the hex SHA-256 of `body`.
+- `version`: the bundle's `policy_revision`.
+- `valid_until_ms`: zero unless `--document-ttl-secs` is set, in which case it is the time after which the caller should re-fetch.
+- `provenance_token`: a compact EdDSA JWT minted for this response.
+
+The provenance token is signed with the document signing key and has the key ID as its `kid` header. Its claims bind the document to the bundle:
+
+| Claim | Value |
+|---|---|
+| `jti` | A new UUID for each response. The interceptor uses it as the admission correlation ID. |
+| `sub` | The document signing key ID. |
+| `iat` | Issue time in Unix seconds. |
+| `exp` | Present only when a document TTL is configured. |
+| `apf/document-digest` | The SHA-256 of `body`. |
+| `apf/version` | The bundle revision. |
+| `apf/spec-digest` | A canonical digest of the body decoded as a sandbox policy. Meaningful for `openshell.sandbox.v1`. Empty when the body does not decode as one. |
+| `apf/bundle-id` | The `id` of the bundle loaded at startup. It is not updated by a later refresh or poll. |
+
+The service publishes the document signing public key at `/.well-known/jwks.json` on its HTTP surface, so the gateway can verify every token it receives.
+
+## Policy Name Resolution
+
+`--resolver` controls how a requested document name maps to a bundle variant.
+
+| Resolver | Behavior |
+|---|---|
+| `passthrough` (default) | Returns the requested name unchanged. |
+| `claims` | Maps the caller's `user_subject` to a variant using the JSON `role_map` in `--claims-config`. Unknown subjects use the default variant. The local source ignores the variant, and the HTTP source cannot serve mapped variants in this release, so use `passthrough`. |
+
+## HTTP Surface
+
+The HTTP surface is off by default. Enable it with `--http-addr` and `--http-bearer-token-file`.
+
+| Route | Authentication | Purpose |
+|---|---|---|
+| `GET /health`, `GET /healthz` | None | Liveness. `/healthz` returns the service version. |
+| `GET /readyz` | None | Readiness. Returns `503` until a bundle is loaded. |
+| `GET /.well-known/jwks.json` | None | Document signing public key. |
+| `GET /v1/documents/{kind}` | Bearer token | List document names for a surface kind. |
+| `GET /v1/documents/{kind}/{name}` | Bearer token | Fetch a document. The body is base64 encoded. |
+| `POST /v1/refresh` | Bearer token | Reload the bundle. |
+
+The token is compared in constant time. A missing or wrong token returns `401` and writes an `authentication` audit record.
+
+## Audit Events
+
+The policy service writes `policy_service_startup`, `policy_verification`, `policy_activation`, `policy_distribution`, `policy_refresh`, `provenance_signing`, and `authentication` records. Refer to [Audit Event Schema](/reference/audit-event-schema).
+
+## Next Steps
+
+- To see how the gateway consumes these documents, refer to [Policy Gateway](/how-it-works/policy-gateway).
+- For every flag and environment variable, refer to [CLI Commands](/reference/cli-commands#apf-policy-service).

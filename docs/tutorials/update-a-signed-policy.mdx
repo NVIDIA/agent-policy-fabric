@@ -1,0 +1,170 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Update a Signed Policy"
+sidebar-title: "Update a Signed Policy"
+description: "Add a rule, publish it as a new signed revision, watch it take effect on a running sandbox without restarts, and see why an old revision cannot come back."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Policy Update, Hot Swap, policy_revision, Refresh, Rollback"
+position: 7
+---
+
+This tutorial changes policy the only way APF allows: a new signed bundle with a higher revision. You add a content rule, publish it, and watch a sandbox that is already running start obeying it.
+
+After completing it, you understand:
+
+- Why every change needs a higher `policy_revision`.
+- How an update reaches the gateway without a restart.
+- Which parts of a running sandbox change and which do not.
+- Why an older revision cannot be republished.
+
+## Prerequisites
+
+- The setup from [Your First Signed Policy](/get-started/your-first-signed-policy): native services running with your `$WORK/bundle` active, your key in `$WORK/trust-roots`, and the policy service HTTP surface on `127.0.0.1:19200`. This page calls the active revision `N`. It is `2` if you have followed only that walkthrough.
+- APF registered with OpenShell as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell), a workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group, and terminals set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal).
+
+<Steps toc={true}>
+
+## Create a Sandbox
+
+```shell
+openshell sandbox create \
+  --name update-demo \
+  --from registry.example.com/team/agent-tools:1.0 \
+  --no-auto-providers
+```
+
+Keep the sandbox shell open and run host commands in another terminal.
+
+## Observe the Current Behavior
+
+In the sandbox, send a body that contains the word `CLASSIFIED`:
+
+```shell
+curl -s https://httpbin.org/anything -H 'content-type: application/json' \
+  -d '{"text":"CLASSIFIED briefing notes"}'
+```
+
+The request is allowed. Nothing in revision `N` looks for that word.
+
+## Add a Rule
+
+Keep a copy of the active revision for the rollback step at the end:
+
+```shell
+rm -rf "$WORK/previous"
+cp -r "$WORK/bundle" "$WORK/previous"
+```
+
+Create `$WORK/bundle/rules/keyword-gate.yaml`:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: keyword-gate
+spec:
+  description: Deny outbound content marked classified.
+  language: cedar
+  role: control
+  definition: |
+    @id("keyword-gate/deny-classified")
+    forbid (principal, action, resource)
+    when { context.body_text like "*CLASSIFIED*" };
+```
+
+Add it to the manifest in `$WORK/bundle/demo-bundle.template.yaml`, after `security-content-gate`, and set `policy_revision` to `N+1`:
+
+```yaml
+  - path: rules/security-content-gate.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: rules/keyword-gate.yaml
+    sha256: REPLACE_WITH_DIGEST
+```
+
+## Sign the New Revision
+
+```shell
+./target/release/apf-compile genfixture \
+  --template "$WORK/bundle/demo-bundle.template.yaml" \
+  --base-dir "$WORK/bundle" \
+  --key "$WORK/keys/my-signer.seed" \
+  --out "$WORK/bundle/demo-bundle.yaml"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/bundle/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+```
+
+```text
+verified  digest=<sha256> counter=<N+1>
+```
+
+## Activate It Without a Restart
+
+Ask the policy service to reload the bundle:
+
+```shell
+curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+  -H "Authorization: Bearer $(cat examples/dev-keys/http-bearer-token.dev)" \
+  -H 'content-type: application/json' \
+  -d "{\"bundle_path\": \"$WORK/bundle/demo-bundle.yaml\"}"
+```
+
+```text
+{"status":"refreshed","policy_digest":"<digest>","version":<N+1>}
+```
+
+Within the gateway's refresh interval, 10 seconds by default, the gateway notices that the served policy set changed, builds a new evaluator, and swaps it in. Confirm it:
+
+```shell
+grep '"reason_code":"policy.bundle_hot_swapped"' "$APF_AUDIT_LOG_DIR/apf-policy-gateway-audit.jsonl" | tail -n 1
+```
+
+The record carries the new `policy_revision`.
+
+## Observe the New Behavior
+
+In the same sandbox, without recreating it, repeat the request:
+
+```shell
+curl -s https://httpbin.org/anything -H 'content-type: application/json' \
+  -d '{"text":"CLASSIFIED briefing notes"}'
+```
+
+The request is denied. Its `authorization` record carries `keyword-gate/deny-classified` in `error.message` and the new `policy_revision`.
+
+Rules, annotators, effects, and findings reach every sandbox as soon as the gateway swaps its evaluator. The sandbox's admission annotations are different: `openshell sandbox get update-demo` still shows `apf.nvidia.com/policy-version` at `N`, the revision the sandbox was admitted at. The annotations change only when a running sandbox is refreshed, and the gateway in this setup runs without `--openshell-gateway-url`, so its sandbox policy refresher is off. A sandbox created now is admitted at `N+1`. Refer to [How Far a Change Reaches](/manage-policy-bundles/update-policies#how-far-a-change-reaches).
+
+## Try to Roll Back
+
+Ask the policy service to load the copy of revision `N` you saved:
+
+```shell
+curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+  -H "Authorization: Bearer $(cat examples/dev-keys/http-bearer-token.dev)" \
+  -H 'content-type: application/json' \
+  -d "{\"bundle_path\": \"$WORK/previous/demo-bundle.yaml\"}"
+```
+
+The refresh fails:
+
+```text
+refresh failed: bundle verification failed: ["counter_regression: bundle counter <N> <= high-water-mark <N+1>"]
+```
+
+The policy service keeps serving revision `N+1` and records the refusal as a `policy_verification` record with `"reason_code":"policy.bundle_rejected.counter_regression"`. To undo a change, sign the old content as revision `N+2`.
+
+## Clean Up
+
+```shell
+openshell sandbox delete update-demo
+rm -rf "$WORK/previous"
+```
+
+</Steps>
+
+## Next Steps
+
+- To see how tampering is refused, continue with [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+- For the full procedure, refer to [Update Policies](/manage-policy-bundles/update-policies).

@@ -1,0 +1,82 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Trust Boundaries"
+sidebar-title: "Trust Boundaries"
+description: "Where trust changes hands in an APF deployment, what each component trusts, and which control protects each boundary."
+keywords: "Generative AI, Cybersecurity, AI Agents, Trust Boundaries, Threat Model, Signing, Verification, Extension Authentication"
+position: 2
+---
+
+APF's security rests on a small number of boundaries. At each one, a component accepts input from another and either verifies it or trusts it for a stated reason. Knowing which is which tells you what an attacker would have to compromise.
+
+```mermaid
+flowchart LR
+  subgraph offline["Authoring and signing"]
+    author["Policy authors"] --> signer["Signing authority"]
+  end
+  signer -- "1. signed bundle<br/>(untrusted transport)" --> svc
+  subgraph host["APF host"]
+    cfg["<b>Host configuration</b><br/>(root-owned)"] -. "6" .-> svc
+    svc["apf-policy-service"] -- "2. Unix socket,<br/>peer UID" --> gw["apf-policy-gateway"]
+  end
+  osgw["OpenShell gateway"] -- "3. extension JWT + TLS" --> gw
+  sup["Sandbox supervisor"] -- "3. extension JWT + TLS,<br/>sandbox-bound" --> gw
+  gw -- "4. decision" --> sup
+  agent["<b>Agent workload</b><br/>(untrusted)"] -- "5. requests" --> sup
+
+  classDef pap fill:#FFFFFF,stroke:#7CB342,stroke-width:1.5px,color:#1F2328
+  classDef pdp fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1F2328
+  classDef green fill:#EEF6DF,stroke:#7CB342,stroke-width:1.5px,color:#2E5A00
+  classDef orange fill:#FDF1E3,stroke:#C7843A,stroke-width:1.5px,color:#6B3A00
+  classDef gray fill:#F3F4F6,stroke:#9CA3AF,stroke-width:1.5px,color:#1F2328
+  classDef red fill:#FDECEC,stroke:#D9534F,stroke-width:1.5px,color:#7A1414
+  class author,signer green
+  class cfg gray
+  class svc pap
+  class gw pdp
+  class osgw,sup orange
+  class agent red
+  style offline fill:#6B728014,stroke:#9CA3AF,stroke-width:1.5px
+  style host fill:#6B728014,stroke:#9CA3AF,stroke-width:1.5px
+  linkStyle default stroke-width:1.5px
+  linkStyle 1,7 stroke:#D9534F,stroke-width:1.5px,stroke-dasharray:5 4
+```
+
+## The Boundaries
+
+| # | Boundary | What crosses it | Control |
+|---|---|---|---|
+| 1 | Signing authority to policy service | The signed bundle, over any transport. | The policy service verifies the signature against its trust roots, every member digest, the validity window, and the revision counter. The transport is not trusted for integrity. |
+| 2 | Policy service to policy gateway | Projected documents and provenance tokens, and the provenance verifying key. | Documents travel over an owner-only Unix socket with a peer UID check. The gateway trusts the policy service's responses and does not re-verify the bundle. The verifying key is fetched over plain HTTP from `--jwks-url`, which must stay on loopback. |
+| 3 | OpenShell to policy gateway | Admission operations and per-request evaluations. | OpenShell extension JWTs verified against a static trust profile per listener, over TLS. Supervisor requests are bound to the sandbox in the token. |
+| 4 | Policy gateway to OpenShell | Decisions, patches, and header mutations. | OpenShell enforces them. APF depends on OpenShell to block the request, apply changes, and inject credentials only afterward. |
+| 5 | Agent workload to OpenShell | Every request the agent makes. | OpenShell's sandbox and supervisor. Request bodies and arguments are attacker-controlled input to APF's annotators and rules. |
+| 6 | Host configuration to the services | Settings, trust roots, keys, and the local bundle. | Root-owned files that the `apf` account can read but not write. |
+
+## What Each Component Trusts
+
+| Component | Trusts | Verifies |
+|---|---|---|
+| Policy service | Its trust-root directory, its document signing key, its counter store. | Every bundle it ingests. Every caller's UID on its socket, and the bearer token on its HTTP routes. |
+| Policy gateway | The policy service's socket and JWKS. Its trust profiles. | Every OpenShell caller's JWT. Provenance tokens on every document the interceptor injects or vends. |
+| OpenShell | Its interceptor and middleware registrations and their CA. | Protocol compatibility at startup. |
+
+## Assumptions
+
+APF's guarantees hold only when these assumptions hold. Each one is an operator responsibility.
+
+- **Configuration integrity.** The bundle file and trust roots are the real authorization root. Anyone who can write them controls policy. Keep them root-owned and watched.
+- **No policy side door.** OpenShell's agent policy proposals stay disabled. Otherwise OpenShell can accept policy that was never signed.
+- **Complete mediation.** The agent cannot reach the network except through OpenShell's supervisor, and every destination that needs content decisions is routed to APF's middleware.
+- **Fail-closed configuration.** OpenShell uses APF's per-binding fail-closed policies, which the default `dynamic` binding policy does, and the sandbox policy's middleware entry uses `on_error: fail_closed`. APF being unavailable then stops governed operations instead of skipping them.
+- **Root is trusted.** A process running as root on the host is inside every boundary. APF's controls stop other accounts, not a compromised root.
+
+## Identity at the Boundaries
+
+Boundary 3 authenticates the OpenShell component that calls APF, not the human or agent behind the request. The sandbox ID in a supervisor's request is bound to its token. The caller subject at admission and any user subject on the decision API are taken from the caller and recorded, not attested by APF. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation).
+
+## Next Steps
+
+- To manage the keys at boundaries 1 and 2, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+- To configure boundary 3, refer to [Configure Service Authentication](/deployment/configure-service-authentication).

@@ -1,0 +1,101 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "APF Gateway Interceptor for OpenShell"
+sidebar-title: "Gateway Interceptor"
+description: "The OpenShell gateway operations APF intercepts, what it decides for each, how it vends provider profiles, and how it fails."
+keywords: "Generative AI, Cybersecurity, AI Agents, OpenShell, Gateway Interceptor, Bindings, Governance, Provider Profiles, Fail Closed"
+position: 1
+---
+
+APF's gateway interceptor puts OpenShell's control plane under signed policy. It injects the signed sandbox policy at admission, refreshes it on running sandboxes, and refuses direct policy edits, agent-authored proposals, draft approvals, and provider and profile changes outside the bundle. It does not bind every OpenShell RPC that can affect a sandbox. Refer to [Enforcement Coverage and Limitations](/security/enforcement-coverage-and-limitations). It runs inside `apf-policy-gateway` and implements OpenShell's `openshell.gateway_interceptor.v1.GatewayInterceptor` service.
+
+## Manifest
+
+APF returns this manifest from `Describe`:
+
+| Field | Value |
+|---|---|
+| `name` | `apf/policy-adapter` |
+| `failure_policy` | `fail_closed` |
+| `provider_profiles` | `true`. APF implements `SnapshotProviderProfiles`. |
+| `expected_audience` | The audience in the listener's trust profile, or empty in insecure mode. |
+| Extension protocol | `1.0`, requiring `openshell.gateway-interceptor.contract`. |
+
+## Bindings
+
+APF declares 14 bindings. Every governance binding fails closed. The two post-commit bindings are observational and fail open, as OpenShell requires.
+
+| Binding | RPC | Phase | Failure policy | APF behavior |
+|---|---|---|---|---|
+| `sandbox-policy-inject` | `CreateSandbox` | Modify | Fail closed | Injects the signed sandbox policy and provenance annotations. |
+| `sandbox-policy-verify` | `CreateSandbox` | Validate | Fail closed | Re-verifies provenance and the spec digest. |
+| `sandbox-policy-post-commit` | `CreateSandbox` | Post-commit | Fail open | Logs the committed admission. No audit record is written. |
+| `sandbox-policy-refresh` | `UpdateConfig` | Modify | Fail closed | Injects the current signed policy into a refresh, and denies direct policy edits and approval-mode changes. |
+| `config-policy-verify` | `UpdateConfig` | Validate | Fail closed | Verifies the injected provenance and rejects post-injection changes. |
+| `config-policy-post-commit` | `UpdateConfig` | Post-commit | Fail open | Logs the committed configuration change. No audit record is written. |
+| `provider-instance-create-verify` | `CreateProvider` | Validate | Fail closed | Allows only provider types the bundle manages. |
+| `provider-instance-update-verify` | `UpdateProvider` | Validate | Fail closed | Allows only provider types the bundle manages. |
+| `provider-profile-import-verify` | `ImportProviderProfiles` | Validate | Fail closed | Allows only bundle-managed profiles whose content matches the bundle. |
+| `provider-profile-update-verify` | `UpdateProviderProfiles` | Validate | Fail closed | Allows only a bundle-managed profile whose content matches the bundle. |
+| `provider-profile-delete-verify` | `DeleteProviderProfile` | Validate | Fail closed | Always denies. |
+| `policy-analysis-verify` | `SubmitPolicyAnalysis` | Validate | Fail closed | Denies agent-authored proposals. Allows mechanistic proposals so OpenShell can collect denial telemetry. |
+| `draft-chunk-approve-verify` | `ApproveDraftChunk` | Validate | Fail closed | Always denies. |
+| `draft-chunk-approve-all-verify` | `ApproveAllDraftChunks` | Validate | Fail closed | Always denies. |
+
+Every RPC uses the `openshell.v1.OpenShell/` service prefix. Register APF with OpenShell's default `binding_policy = "dynamic"`. OpenShell's `allowlist` and `exact` policies accept only one binding per configured RPC, and APF declares three each on `CreateSandbox` and `UpdateConfig`, so `exact` stops the OpenShell gateway from starting and `allowlist` cannot include admission. Refer to [OpenShell gateway interceptors](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors).
+
+## Governance Decisions
+
+Governance decisions write an audit record to `apf-policy-gateway-interceptor-audit.jsonl`. A few outcomes write none: a refresh denied because the served projection has no provenance token, a sandbox creation or refresh that fails because the policy service is unreachable, a successful configuration validation, an allowed settings-only update, and post-commit calls. Provider operations do record an unreachable policy service, as `interceptor.govern_denied.policy_service_unavailable`. Admission decisions are listed on [Sandbox Admission](/how-it-works/sandbox-admission#admission-outcomes). The others are:
+
+| Reason code | Operation | Message returned to OpenShell |
+|---|---|---|
+| `interceptor.govern_denied.direct_policy_mutation` | `UpdateConfig` with a policy or merge operations | `direct policy mutation not permitted; policy is managed by APF` |
+| `interceptor.govern_denied.approval_mode_change` | `UpdateConfig` that changes the proposal approval mode | `approval mode is managed by APF` |
+| `interceptor.govern_denied.body_digest_mismatch` | Refresh where the served body does not match its token | `policy body digest mismatch` |
+| `interceptor.govern_denied.policy_identity_mismatch` | Refresh where the response disagrees with its token | `response policy identity disagrees with the token` |
+| `interceptor.validate_denied.post_injection_mutation` | Refresh that gained merge operations or approval settings after APF injected policy, or a settings-only update that still carries APF's provenance annotation | `config policy integrity check failed` |
+| `interceptor.validate_denied.spec_digest_mismatch` | Refresh whose policy changed or was removed after APF injected it | `config policy integrity check failed` |
+| `interceptor.validate_denied.provenance_missing`, `interceptor.validate_denied.provenance_invalid` | Refresh whose provenance annotations are missing or do not verify | `config policy integrity check failed` |
+| `interceptor.validate_denied.approval_mode_change` | Settings-only update that changes the approval mode, in the validate phase | `approval mode is managed by APF` |
+| `interceptor.govern_denied.unmanaged_provider_type` | `CreateProvider`, `UpdateProvider` | `provider type '<type>' is not a bundle-managed profile` |
+| `interceptor.govern_denied.unmanaged_provider_profile` | `ImportProviderProfiles`, `UpdateProviderProfiles` | `provider profile '<id>' is not managed by the APF bundle` |
+| `interceptor.govern_denied.profile_content_mismatch` | `ImportProviderProfiles`, `UpdateProviderProfiles` | `provider profile '<id>' content does not match the APF bundle` |
+| `interceptor.govern_denied.profile_delete` | `DeleteProviderProfile` | `provider profiles are bundle-managed; delete is not permitted` |
+| `interceptor.govern_denied.agent_authored_proposal` | `SubmitPolicyAnalysis` | `agent-authored policy proposals are not permitted; policy is managed by APF` |
+| `interceptor.govern_denied.draft_approval` | `ApproveDraftChunk`, `ApproveAllDraftChunks` | `policy proposal approval is not permitted; policy is managed by APF` |
+| `interceptor.govern_denied.policy_service_unavailable` | Provider operations when the bundle's profiles cannot be read | `... governance check failed: policy service unavailable` |
+
+Allowed governance operations are recorded too, for example with `interceptor.provider_type_allowed`, `interceptor.provider_profiles_allowed`, and `interceptor.policy_analysis_allowed`. Every denial also carries the correlation ID in OpenShell's log annotations under `apf.nvidia.com/correlation-id`, so OpenShell's log entry and APF's audit record join on it.
+
+## Provider Profile Snapshots
+
+When OpenShell lists APF's interceptor in `provider_profile_sources`, it calls `SnapshotProviderProfiles` to read the bundle's provider catalog. APF builds the snapshot from the policy service's `openshell.provider-profile.v1` documents and verifies each one:
+
+- The provenance token's signature verifies, and its signer is the configured document key ID.
+- The token names a bundle and a non-zero version, and the version and digest match the response.
+- The body hashes to the digest.
+- Every document comes from the same bundle and version. If the policy changes during the snapshot, the snapshot fails rather than mix identities.
+
+The snapshot revision is a hash of the verified content, the bundle identity and version, and the verifier identity, so it changes when the catalog, the bundle revision, or the verifying key changes. Any invalid profile fails the whole snapshot.
+
+## Caller Authentication
+
+Only the OpenShell gateway may call the interceptor. In authenticated mode, every call must carry a valid OpenShell extension JWT for the interceptor's audience, and APF rejects supervisor credentials. Refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+
+The interceptor accepts gRPC messages up to 8 MiB.
+
+## Failure Behavior
+
+| Failure | Result |
+|---|---|
+| The policy service is unreachable during admission or refresh. | APF returns an error, and OpenShell applies the binding's failure policy. APF declares these bindings fail-closed, so the operation is refused. |
+| APF is unreachable. | OpenShell applies each binding's failure policy. Governance bindings are fail-closed, so governed operations are refused. Post-commit bindings are fail-open. |
+| A provenance or digest check fails. | APF returns a deny with a reason. A deny always refuses the operation, regardless of failure policy. |
+| A post-commit observation fails. | Logged. The committed operation stands. |
+
+## Next Steps
+
+- To register the interceptor, refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell).
+- To see the admission flow in detail, refer to [Sandbox Admission](/how-it-works/sandbox-admission).

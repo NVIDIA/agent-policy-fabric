@@ -1,0 +1,67 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Deployment Models"
+sidebar-title: "Deployment Models"
+description: "The supported co-located topology for APF and the packaging options for it."
+keywords: "Generative AI, Cybersecurity, AI Agents, Deployment, Topology, Co-located, systemd, Containers, Kubernetes"
+position: 1
+---
+
+APF runs as two services on the same host as the OpenShell gateway it governs. This page describes the supported topology and the packaging options for it.
+
+## Co-Located Deployment
+
+`apf-policy-service` and `apf-policy-gateway` run on the same host and share a Unix domain socket. The policy service verifies, projects, and serves bundles over that socket, and the gateway fetches from it locally. When the interceptor is enabled, the gateway also fetches the policy service's provenance verifying key from its JWKS endpoint over loopback HTTP. The bundle source, a local directory or a remote artifact store, is independent of the topology.
+
+```mermaid
+flowchart LR
+  src["<b>Bundle source</b><br/>(local files or HTTPS)"] --> svc
+  subgraph host["Host"]
+    svc["apf-policy-service"] -- "Unix socket, and JWKS over loopback HTTP" --> gw["apf-policy-gateway"]
+    osgw["OpenShell gateway"] -- "interceptor (TCP, loopback)" --> gw
+    sup["Sandbox supervisors"] -- "middleware (TCP)" --> gw
+  end
+
+  classDef pap fill:#FFFFFF,stroke:#7CB342,stroke-width:1.5px,color:#1F2328
+  classDef pdp fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1F2328
+  classDef green fill:#EEF6DF,stroke:#7CB342,stroke-width:1.5px,color:#2E5A00
+  classDef orange fill:#FDF1E3,stroke:#C7843A,stroke-width:1.5px,color:#6B3A00
+  class src green
+  class svc pap
+  class gw pdp
+  class osgw,sup orange
+  style host fill:#6B728014,stroke:#9CA3AF,stroke-width:1.5px
+  linkStyle default stroke-width:1.5px
+  linkStyle 0,2 stroke:#7CB342,stroke-width:1.5px,stroke-dasharray:5 4
+  linkStyle 3 stroke:#3B82F6,stroke-width:1.5px,stroke-dasharray:5 4
+```
+
+This is the supported topology in this release. The gateway fetches documents from the policy service only through a Unix socket, so the two must share a host, and in a container deployment they must share the socket volume.
+
+## Packaging Options
+
+| Option | Status | Use it for | Reference |
+|---|---|---|---|
+| systemd services on a Linux host | Available | Workstations and hosts that run OpenShell natively. | [Host and Workstation Deployment](/deployment/host-and-workstation-deployment) |
+| Container images | Available | Building your own container deployment. Each Dockerfile has a minimal `runtime` target. | `deploy/docker/apf-policy-service/Dockerfile`, `deploy/docker/apf-policy-gateway/Dockerfile` |
+| Local container stack | Development only | Local development with Docker Compose. | [Installation](/get-started/installation) |
+| Kubernetes | Limited | Cluster deployments with the Helm chart at `deploy/helm/apf`. You build and load the images yourself. | [Kubernetes](/deployment/kubernetes) |
+
+The policy service image also has a `demo` target that adds `apf-compile` for signing bundles inside the container.
+
+## Placement Rules
+
+- **One policy service per gateway.** Each policy service keeps its own anti-rollback counter on local disk, and each gateway reads one policy service socket.
+- **Same account on systemd hosts.** Both daemons create their sockets with mode `0600` and check the peer's UID, so they run as the same `apf` account.
+- **Loopback for OpenShell surfaces on a host.** In the co-located host topology, bind the interceptor and middleware listeners to loopback unless OpenShell's supervisors run in a separate network namespace that cannot reach loopback. On Kubernetes the chart binds the listeners it enables on all pod interfaces and exposes them through the APF Service, because the OpenShell gateway and the supervisors run in other pods; limit the callers with the chart's `networkPolicy` values.
+- **Reachability for supervisors.** The middleware listener must be reachable from every sandbox supervisor, which depends on the OpenShell compute driver. Choose the bind address to match. On systemd hosts the gateway unit also sets `IPAddressAllow=localhost` and `IPAddressDeny=any`, so change the unit as well if supervisors connect from outside loopback.
+
+## Shared Policy Service
+
+The policy service is yours to run, and in this release it runs beside each gateway. A shared `apf-policy-service` that many gateways fetch from over the network is not in the repository: the gateway fetches documents only over a Unix socket, and each policy service keeps its anti-rollback counter on local disk, so every host runs its own policy service alongside its gateway.
+
+## Next Steps
+
+- To install on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+- To review the boundaries in this topology, refer to [Trust Boundaries](/security/trust-boundaries).

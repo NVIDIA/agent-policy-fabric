@@ -1,0 +1,134 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Bundle Structure"
+sidebar-title: "Bundle Structure"
+description: "The layout of an APF policy bundle: the signed manifest, its envelope fields, member documents, the signature document, and the tarball used for distribution."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Bundle, Manifest, Signature, yaml-sigil, policy_revision, SHA-256"
+position: 1
+---
+
+A bundle is APF's unit of authority. It is a signed manifest that lists every policy document by path and SHA-256 digest, plus the documents themselves. The signature covers the manifest, and the manifest covers each document, so one signature makes the whole bundle tamper-evident.
+
+## Directory Layout
+
+A bundle is a directory. The manifest sits at the root, and member paths resolve relative to the manifest's directory.
+
+```text
+my-bundle/
+├── my-bundle.template.yaml     # manifest template, digests not yet filled in
+├── my-bundle.yaml              # signed manifest
+├── sandbox/default-policy.yaml
+├── provider-profiles/github.yaml
+├── annotators/secret-detector.yaml
+├── findings/secret-detected.yaml
+├── effects/redact-wholesale.yaml
+└── rules/github-grants.yaml
+```
+
+Subdirectory names are a convention. APF routes each member by its `kind`, not by its location.
+
+## The Manifest
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyBundle
+metadata: {}
+
+id: cedar-demo-bundle
+description: "APF Cedar policy engine demo bundle"
+policy_revision: 1
+not_before: "2026-01-01T00:00:00Z"
+expires_at: "2099-12-31T00:00:00Z"
+
+manifest:
+  - path: sandbox/default-policy.yaml
+    sha256: f4b9bb6abcc89c2e0800b71f29fd961f793ab152653e958a661da72827b71c5e
+  - path: rules/github-grants.yaml
+    sha256: c6abdb3a3b4225b505973759eb7765c18268ef8581c08be2e086f050b65bc320
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `apiVersion` | Yes, by the schema | `nvidia.agent-policy-fabric.policy/v1alpha1`. The runtime does not check it. |
+| `kind` | Yes, by the schema | `PolicyBundle`. The runtime does not check it. |
+| `metadata` | No | Reserved for future envelope fields. |
+| `id` | Yes | Stable identifier for the bundle. Recorded as `bundle_id` in the policy service's audit events and as `apf/bundle-id` in provenance tokens. Start with a letter or digit, use only letters, digits, and `. _ : @ / + - =`, and stay within 512 characters, because the policy service refuses a bundle whose `id` it cannot record. |
+| `description` | No | Human-readable purpose of the bundle. |
+| `policy_revision` | Yes | Monotonic revision. It must increase with every published change. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection). |
+| `not_before` | Yes | RFC 3339 time before which the bundle is not valid. |
+| `expires_at` | Yes | RFC 3339 time after which the bundle is not valid. |
+| `manifest` | No | Ordered list of members, each with a relative `path` and the hex `sha256` of the file's bytes on disk. A bundle without members carries no policy. |
+| `runtime_compatibility` | No | Map of runtime adapter name to `min_version` and `max_version`. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate#runtime-compatibility). |
+
+The verifying key ID is not a manifest field. It travels in the signature document.
+
+### Manifest Order
+
+The manifest order is the evaluation order for rules and the attribution order for annotators. List members in this order:
+
+1. `SandboxPolicy` and provider documents.
+2. `PolicyAnnotator` documents.
+3. `PolicyFinding` and `PolicyEffect` documents.
+4. `PolicyRule` documents. The first `forbid` that fires decides the deny reason.
+
+## The Signature Document
+
+A signed manifest is the manifest payload followed by a YAML document separator and a signature document in the yaml-sigil format:
+
+```yaml
+---
+schema: YamlSigilSignature.v1alpha1
+alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
+keyid: apf-dev
+signature: WKcrHb_rkSIy_lXV_oiNhZ71Lj1r-XM0sBq0Qa9-Osmd3eAW-2A60rH7JjR2w0Y977nMnXxF0oor5edQXbhkBg
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | The signature format version. |
+| `alg` | The signature algorithm. `apf-compile` produces `ED25519_PUREEDDSA_RAW_RS64_CANONICAL`. |
+| `keyid` | The trust-root key that verifies this signature. It must match a `.pub`, `.pem`, or `.p256` file stem in the verifier's trust-root directory. |
+| `signature` | The base64url-encoded signature over the payload. |
+
+## Member Documents
+
+Every member is a YAML document with a `kind`. APF recognizes these kinds:
+
+| Kind | Used for |
+|---|---|
+| `SandboxPolicy` | Sandbox perimeter, projected to OpenShell. |
+| `Provider` | Provider declaration, composed into an OpenShell provider profile. |
+| `ProviderProfile` | OpenShell-native provider profile, passed through. |
+| `PolicyRule`, `PolicyAnnotator`, `PolicyEffect`, `PolicyFinding` | The request evaluation pipeline. |
+| `HostTool` | Recognized, not projected in this release. |
+
+A YAML document with no `kind` but with a top-level `id` and `endpoints` is treated as an OpenShell-native provider profile. A member with any other `kind` is ignored. Every member of a recognized kind needs a name, and names must be unique within their kind.
+
+A member may itself be signed in the yaml-sigil format. APF uses the member's payload in that case. The manifest digest is always taken over the file's raw bytes, so the bundle signature covers a signed member's signature too.
+
+## Two Digests
+
+Verification reports two digests, and they mean different things.
+
+| Digest | Computed over | Use |
+|---|---|---|
+| Artifact digest | The signed manifest file, including the signature document. | Recorded as `bundle_digest` in the policy service's verification and load records, and printed by `apf-compile compile`. Changes when the signature changes, for example when a different key signs the same content. |
+| Payload digest | The verified manifest payload only. | Stable across re-signing. The anti-rollback counter binds an accepted revision to this digest and stores it in `<counter-store>.digest`. No command or audit record reports it. |
+
+To check whether two bundles carry the same policy, compare their manifest payloads, the part of each file before the signature document.
+
+## The Distribution Tarball
+
+The HTTP policy source expects a gzipped tar archive of the bundle directory. After unpacking, the policy service finds the manifest by trying `.yaml` files in this order until one verifies against its trust roots and parses as a bundle: `manifest.yaml`, then files whose name contains `bundle`, then the rest.
+
+Create the archive from inside the bundle directory, so member paths stay relative to the manifest:
+
+```shell
+(cd my-bundle && tar czf ../my-bundle.tar.gz *)
+```
+
+## Next Steps
+
+- To sign a bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+- For the protobuf and JSON Schema definitions, refer to [Bundle Specification](/reference/bundle-specification).

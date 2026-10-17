@@ -1,0 +1,95 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Configure a Signing Authority"
+sidebar-title: "Configure a Signing Authority"
+description: "Choose who signs APF bundles, create or obtain signing keys, and install the matching trust roots on every policy service."
+keywords: "Generative AI, Cybersecurity, AI Agents, Signing Authority, Trust Root, Ed25519, ECDSA P-256, Key Rotation, yaml-sigil"
+position: 2
+---
+
+The signing authority is whoever holds the private key that signs your bundles. Every policy service that should accept those bundles holds the matching public key in its trust-root directory. APF does not prescribe a signing service. It verifies standard signatures in the yaml-sigil format against the keys you install.
+
+## Roles
+
+| Role | Holds | Lives |
+|---|---|---|
+| Signing authority | The bundle signing private key. | Offline, in your authoring and publish path, ideally in a signing service or hardware security module. Never on an APF host. |
+| Policy service | Trust-root public keys in `--trust-root-dir`. | On every APF host. |
+
+The policy service's document signing key, which signs provenance tokens on served documents, is a different key with a different job. Do not reuse the bundle signing key for it. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+
+## Supported Keys
+
+The trust store loads every file with a recognized extension from `--trust-root-dir`. The file stem is the key ID, which must equal the `keyid` in a bundle's signature document.
+
+| Extension | Key type | Format |
+|---|---|---|
+| `.pub` | Ed25519 | One line, `ed25519:<base64 of the 32-byte public key>`. Lines starting with `#` are ignored. |
+| `.pem`, `.p256` | ECDSA P-256 | A SubjectPublicKeyInfo PEM public key. |
+
+An Ed25519 key and a P-256 key may share a key ID. The signature's algorithm selects which one verifies it. The policy service refuses to start if the directory contains no keys.
+
+## Development Signing with apf-compile
+
+`apf-compile genfixture` signs bundles with an Ed25519 private key stored as a seed file:
+
+```text
+# DEV-ONLY Ed25519 signing key. Do not use in production.
+ed25519:<base64 of the 32-byte seed>
+```
+
+Create a key pair while you sign by passing `--generate-key`. The command writes the seed to `--key` and the public key next to it with a `.pub` extension, or to `--pubkey-out`:
+
+```shell
+mkdir -p keys
+./target/release/apf-compile genfixture \
+  --template bundle/my-bundle.template.yaml \
+  --key keys/team-signer.seed --generate-key \
+  --out bundle/my-bundle.yaml
+```
+
+`apf-policy-service keygen --key-id <id> --output-dir <dir>` produces a key pair in the same format, as `<id>.seed` and `<id>.pub`. Both commands write the files with your umask, so run `chmod 0600` on the seed.
+
+<Warning>
+A seed file on disk is suitable for development and testing only. The repository's `examples/dev-keys/apf-dev.seed` is committed publicly, so any host that trusts `apf-dev.pub` accepts bundles anyone can sign.
+</Warning>
+
+## Production Signing
+
+For production, sign bundles with a signing service that keeps the private key in hardware and produces yaml-sigil signatures. The trust store accepts ECDSA P-256 public keys, so a service that signs with P-256 works without changes to APF. Publish the service's public key to your APF hosts as a `.pem` file named after the key ID the service writes into `keyid`.
+
+APF's signing seam is the pair of traits `BundleSigner` and `BundleVerifier` in the `apf-types` crate. Organization-specific signing integrations belong in a separate composition binary built on those traits, so the public service binaries compile without private dependencies. Refer to [External Policy Authorities](/integrations/external-policy-authorities).
+
+## Install Trust Roots
+
+Copy each public key into the trust-root directory of every policy service:
+
+```shell
+sudo install -o root -g apf -m 0640 team-signer.pub /etc/apf/trust-roots/team-signer.pub
+```
+
+| Path | Owner and group | Mode |
+|---|---|---|
+| `/etc/apf/trust-roots/` | `root:apf` | `0750` |
+| `/etc/apf/trust-roots/*.pub` | `root:apf` | `0640` |
+
+The trust-root directory is part of the authorization trust boundary. Anyone who can write a key there controls which bundles the host accepts. Restart the policy service after changing trust roots, because they are read at startup.
+
+## Rotate a Signing Key
+
+The trust-root directory holds any number of keys, so old and new keys can coexist during a rollover.
+
+1. Create the new key pair and install its public key on every policy service.
+2. Restart each policy service.
+3. Sign the next bundle with the new key and a higher `policy_revision`, and publish it.
+4. Once every host runs a bundle signed with the new key, remove the old public key and restart the policy services.
+
+## Stop Trusting a Key
+
+Trust in a key ends when its public key leaves the trust-root directory; there is no revocation list to publish. First make sure the bundle each policy service loads at startup is signed by another trusted key. Then remove the key's public key from the trust-root directory and restart the policy service. If the startup bundle is still signed by the removed key, the service refuses it and does not start.
+
+## Next Steps
+
+- To sign a bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+- To review key custody and separation of duties, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).

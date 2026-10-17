@@ -1,0 +1,87 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Expiry and Rollback Protection"
+sidebar-title: "Expiry and Rollback Protection"
+description: "How the policy revision counter stops older bundles from being reintroduced, how validity windows bound a bundle's life, and how to operate both safely."
+keywords: "Generative AI, Cybersecurity, AI Agents, Anti-Rollback, Monotonic Counter, policy_revision, Validity Window, Expiry, Replay"
+position: 7
+---
+
+A signature proves a bundle is authentic. It does not prove the bundle is current. APF adds two freshness controls: a monotonic revision counter that refuses older bundles, and a validity window that bounds when a bundle may be accepted.
+
+## The Revision Counter
+
+Every bundle carries a `policy_revision`. The policy service keeps the highest revision it has accepted, called the high-water mark, and the digest of the payload it accepted at that revision.
+
+| Candidate bundle | Result |
+|---|---|
+| Revision higher than the high-water mark | Accepted. The new revision and payload digest are recorded. |
+| Same revision, same payload | Accepted. This lets a restart reload the bundle the service was already serving, even if the artifact was re-signed. |
+| Same revision, different payload | Rejected with `counter_content_mismatch`. |
+| Lower revision | Rejected with `counter_regression`. |
+
+The counter binds to the payload digest, not the artifact digest, so re-signing identical content does not look like a change. A revision is recorded only after the bundle verifies and compiles.
+
+<Note>
+On a fresh counter store the high-water mark is `0`, and revision `0` is rejected as a regression. Start every bundle at revision `1` or higher.
+</Note>
+
+### The Counter Store
+
+The default counter store is a pair of files at `--counter-store`, `/var/lib/apf/counter` by default:
+
+- `<path>` holds the high-water mark as a single decimal line.
+- `<path>.digest` holds `<revision> <sha256>` for the accepted payload.
+
+Writes go to a temporary file that is then renamed, so a crash leaves either the old or the new value. If the two files disagree after a crash, or the digest file is missing, the digest is treated as unknown rather than causing a spurious rejection. The next bundle accepted at the current revision is then accepted whatever its content, normally the reload at startup, and its digest is recorded again.
+
+| Store state | Behavior |
+|---|---|
+| Missing | The high-water mark is `0`, as on a fresh install. |
+| Present and valid | Loaded at startup. |
+| Corrupt | The policy service refuses to start. An operator must intervene. |
+
+The file store suits one policy service per host. It is not shared between policy services.
+
+### Counter Scope
+
+- Each policy service has its own counter. Two hosts can accept the same revision independently.
+- All bundles a policy service loads share one counter, whatever their `id`. Use one revision sequence per policy service.
+- `apf-compile compile` uses a temporary counter, so it cannot detect a revision that a running service would reject.
+- The policy gateway keeps no counter. It trusts the policy service.
+
+### Resetting the Counter
+
+Removing the counter files resets the high-water mark to `0` and lets any revision load again. That reopens the window for rollback, so treat it as a privileged recovery action, for example when you rebuild a host for a new environment. The counter directory should be writable only by the `apf` account.
+
+## The Validity Window
+
+`not_before` and `expires_at` bound when a bundle may be accepted. Both are RFC 3339 times.
+
+| Situation | Result |
+|---|---|
+| Ingested before `not_before` | Rejected with `bundle_not_yet_valid`. |
+| Ingested after `expires_at` | Rejected with `bundle_expired`. |
+| Expires while active | Keeps being served until it is replaced. The next restart or reload rejects it. |
+
+Because expiry is checked at ingest, plan renewals ahead of time: publish a re-signed bundle with a higher revision and a later `expires_at` well before the current one expires. If a policy service restarts after its only bundle has expired, it does not start, and with `fail_closed` registrations OpenShell refuses the operations APF governs.
+
+## Document Validity
+
+Separately from the bundle's validity window, the policy service can limit how long a served document may be cached. With `--document-ttl-secs` set, each `GetDocument` response carries `valid_until_ms`, and the provenance token carries a matching `exp`. The interceptor rejects an expired provenance token. APF's sandbox policy refresher arms a single refresh 30 seconds before the deadline it learns from a policy set change. It does not arm one at gateway startup, and it fires once, so do not rely on it to keep long-running sandboxes refreshed. The default, `0`, sets no document expiry.
+
+## What These Controls Stop
+
+| Threat | Control |
+|---|---|
+| Replaying an older, superseded bundle | The counter rejects a lower revision. |
+| Swapping different content in at an accepted revision | The counter rejects a different payload at the same revision. |
+| Using a bundle before it was meant to take effect | `not_before`. |
+| Accepting a bundle long after it was meant to retire | `expires_at`, checked at ingest. |
+| Keeping a superseded bundle in service | Publish a higher revision; the counter refuses the lower one on the next load. A running policy service keeps serving its current bundle until it loads a replacement or restarts, so deliver the new revision to every host and reload. |
+
+## Next Steps
+
+- To publish a new revision, refer to [Update Policies](/manage-policy-bundles/update-policies).
+- To see how these checks fail in practice, refer to [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).

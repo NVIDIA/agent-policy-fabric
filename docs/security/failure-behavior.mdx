@@ -1,0 +1,66 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Failure Behavior"
+sidebar-title: "Failure Behavior"
+description: "What APF and OpenShell do when a service is unavailable, a bundle is invalid or expired, evaluation fails, or evidence cannot be recorded."
+keywords: "Generative AI, Cybersecurity, AI Agents, Fail Closed, Failure Modes, Availability, Evaluation Errors, Resilience"
+position: 4
+---
+
+APF is designed to fail closed. When it cannot verify, decide, or record, it refuses rather than let an operation through ungoverned. This page lists each failure and its effect, including the few places where the behavior is not a refusal.
+
+## Unavailable Services
+
+| Failure | Effect |
+|---|---|
+| The policy service is down when the gateway starts. | The gateway does not start. |
+| The policy service stops while the gateway runs. | Per-request decisions continue with the gateway's current evaluator. New admissions and refreshes fail, because the interceptor cannot fetch the projection. Provider governance checks deny with `policy service unavailable`. Provider profile snapshots fail. |
+| The policy gateway is down. | OpenShell applies each binding's failure policy. APF declares its governance bindings fail-closed, so governed control-plane operations are refused. With middleware `on_error: fail_closed`, routed requests are blocked. |
+| The JWKS endpoint is unreachable when the gateway starts. | The gateway does not start. |
+| The OpenShell gateway is unreachable from APF's background tasks. | Provider reconciliation and sandbox refresh log a warning and try again on the next bundle change. |
+
+## Policy Problems
+
+| Failure | Effect |
+|---|---|
+| A bundle fails verification at startup. | The policy service does not start. |
+| A bundle fails verification on a refresh or poll. | The policy service keeps serving its current bundle. |
+| The active bundle expires. | It keeps being served and enforced until replaced. The next restart or reload rejects it, and a policy service with no valid bundle does not start. |
+| The revision cannot be persisted. | The bundle is not activated. |
+| A policy set fails to compile in the gateway at startup. | The gateway does not start. |
+| A policy set fails to compile in the gateway on update. | The gateway keeps its previous evaluator. The policy service already serves the new projections, so admissions use the new sandbox policy while decisions use the old rules until a fixed bundle is published. |
+
+## Evaluation Problems
+
+| Failure | Effect |
+|---|---|
+| The evaluator returns an error. | On the OpenShell path, deny with `middleware.evaluation_failed`. `EvaluationService` returns `INTERNAL` and writes no record, leaving the deny to its caller. |
+| Evaluation panics or cannot complete. | Deny, with `evaluation_failed`. |
+| An effect or finding reads an annotation that was not produced. | Deny with `middleware.policy_denied`, and the reason `runtime_error:missing_annotation_source:<path>`. |
+| A body patch or header mutation cannot be applied. | Deny. The unmodified request is never forwarded. |
+| A Cedar condition errors inside one statement, for example by reading a missing attribute. | That statement does not apply. A permit grants nothing, and a forbid does not fire. Guard optional attributes with `has`. |
+
+The last row is the one place an error does not become a deny on its own. Write forbids so that their conditions cannot error.
+
+## Admission and Provenance Problems
+
+| Failure | Effect |
+|---|---|
+| The policy service cannot mint a provenance token. | It serves the document unsigned and writes a `provenance_signing` record. The interceptor then denies the admission because there is no token. |
+| A provenance token, digest, or spec check fails. | The admission or refresh is denied. |
+| An extension JWT fails verification. | The call is refused before policy is consulted, and an `authentication` record is written. |
+
+## Evidence Problems
+
+| Failure | Effect |
+|---|---|
+| The audit directory is not configured, or cannot be created or written, at startup. | The service does not start. A missing directory is created. |
+| The policy service cannot record its startup posture or a successful bundle verification, or the gateway cannot record its initial activation. | The service does not start, or the bundle is not loaded. A failure to record `policy.bundle_loaded` is only logged. |
+| A gateway hot swap cannot be recorded. | The gateway exits. The new evaluator was already active when the write failed, so requests decided in that interval use the new policy without a matching activation record. |
+| A per-request or other lifecycle record cannot be written. | The operation continues and the failure is logged. |
+
+## Next Steps
+
+- To configure OpenShell's side of fail-closed behavior, refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell).
+- To recover from each failure, refer to [Troubleshooting](/deployment/troubleshooting).

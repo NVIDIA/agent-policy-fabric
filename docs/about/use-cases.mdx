@@ -1,0 +1,80 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Use Cases"
+sidebar-title: "Use Cases"
+description: "Representative governance scenarios for APF, the policy controls each one uses, and the walkthrough that sets it up."
+keywords: "Generative AI, Cybersecurity, AI Agents, Use Cases, Coding Agents, Sensitive Data, Data Loss Prevention, Governance"
+position: 4
+---
+
+APF is built for scenarios where an organization, not the person running the agent, decides what the agent may reach, which tool calls it may make, and what content may leave the sandbox. This page introduces representative scenarios. Each one links to a walkthrough in [Tutorials](/tutorials) that covers setup, policy configuration, expected behavior, and audit verification.
+
+## Who Uses APF
+
+APF separates who writes policy, who distributes it, and who enforces it.
+
+| Role | What they do with APF |
+|---|---|
+| Security teams | Author detectors such as secret and PII annotators, control rules that deny or redact content, and findings that flag what was observed. |
+| Compliance teams | Author data-handling controls and review every policy change as a document diff. |
+| Tool owners | Author capability grants that say which agent tool calls are allowed and under which argument constraints. |
+| Platform operators | Author the sandbox perimeter, sign and publish bundles, and run the policy service and policy gateway next to the runtime. |
+| Developers and agent builders | Run agents inside sandboxes that APF governs. They do not change the policy their agents run under. |
+| Integration partners | Implement projectors and runtime adapters, or supply signing, credential, and identity services through APF's extension points. |
+
+## Scenarios at a Glance
+
+| Scenario | Governance goal | APF controls | Walkthrough |
+|---|---|---|---|
+| Governed coding agents | A coding agent can read repositories and call approved inference endpoints, but cannot write to source control or reach anything else. | `SandboxPolicy` egress allowlist with a read-only GitHub endpoint, `Provider` profiles, a capability grant for read tools. | [Govern a Coding Agent](/tutorials/govern-a-coding-agent) |
+| Sensitive-data workflows | Credentials never leave the sandbox, and personal data is withheld from outbound requests. | Secret and PII annotators, a control rule that denies or redacts, redaction effects, and a critical finding. | [Protect Sensitive Data](/tutorials/protect-sensitive-data) |
+| Approved-channel posting | An agent can post messages only to an approved channel and only within a length limit. | A data-driven capability grant on the posting tool. | [Approved-Channel Posting](#approved-channel-posting) |
+| Research agents | A research agent can read internal sources but can never write, send, or publish. | Read-only access presets in the sandbox policy and grants that permit only read tools. | [Sandbox Policies](/author-policies/sandbox-policies) and [Capability Grants](/author-policies/capability-grants) |
+| Enterprise automation | An automated workflow acts on a system only while an approved change request covers it. | Capability grants that read a change request's approval state from a policy information provider. | [Policy Information Providers](/integrations/policy-information-providers) |
+
+## Governed Coding Agents
+
+Coding agents need source control and model access to be useful, and those same paths are where code and credentials can leak. The demo bundle in the APF repository shows the pattern:
+
+- The sandbox policy allows `api.github.com:443` with the `read-only` access preset, so only read methods reach GitHub at Layer 1.
+- The `github-grants` rule permits only the `github_repo_read` tool call. There is no permit for a write tool, so an MCP write call is denied by default.
+- Provider profiles name the inference and GitHub endpoints and declare how OpenShell injects each credential.
+
+## Sensitive-Data Workflows
+
+The security team owns detection and the content gate. Other teams' rules benefit without coordinating with them.
+
+- The `secret-detector` annotator flags known credential shapes and labels the kind, for example `github_pat` or `aws_access_key`.
+- The `security-content-gate` control rule denies an MCP tool call that carries a secret and replaces the body of a plain HTTP request that carries one.
+- The `pii-detector` annotator and the `redact-pii-body` effect withhold personal data from plain HTTP requests by replacing the top-level `text` field of an outbound JSON body. A plain request with personal data but no `text` field is denied, because the redaction cannot be applied. The demo does not redact or deny personal data in MCP tool calls.
+- The `secret-detected` finding records each detection with `critical` severity in the audit trail, whether the request was allowed or denied.
+
+## Approved-Channel Posting
+
+The `slack-grants` rule in the demo bundle permits the `slack_chat_post` tool only when the `channel` argument equals an approved channel and a `textLen` argument stays under a limit. The caller must supply `textLen`. Rules of your own can use the `text_len` attribute APF derives from a `text` argument. Both values live in the rule's `data` block, so an operator changes the approved channel by editing data, not Cedar.
+
+## Policy Lifecycle Scenarios
+
+Two scenarios apply to every deployment, regardless of agent type.
+
+- **Change policy safely.** Edit a document, increase `policy_revision`, re-sign, and reload the policy service with `POST /v1/refresh`, a restart, or the HTTP source's next poll. The gateway then swaps its evaluator. Refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
+- **Refuse tampered policy.** Any change to a signed member, the manifest, or the signature causes the whole bundle to be rejected. Refer to [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+
+## Common Risks and Controls
+
+Each row is a way an agent can go wrong and the control that answers it. Every row is available on the `main` branch of the repository.
+
+| Risk | Without APF | With APF |
+|---|---|---|
+| A secret leaves in a request | An agent posts a credential in a message body or tool call, and nothing inspects the content. | A detector flags the credential. A control rule denies the tool call or replaces the body of a plain HTTP request before it leaves. |
+| An agent reaches an unapproved destination | Each host carries its own hand-built allowlist. | The signed bundle projects one sandbox policy into OpenShell, which allows only the listed destinations. |
+| An agent uses a tool it was never granted | Any tool the agent can reach is callable. | An MCP tool call is denied unless a capability rule permits it, and the rule can constrain the arguments. |
+| Someone edits a sandbox's policy directly | A local edit quietly widens what one agent may do. | The gateway interceptor refuses direct policy changes, auto-approval, and unmanaged provider changes. |
+| A tampered or superseded policy takes effect | A stale or modified file is loaded without a check. | The policy service verifies the signature, member digests, and validity window, and refuses a revision older than one it already accepted. |
+| You cannot show which policy was in force | Behavior is explained from memory or from a host's current configuration. | Each sandbox carries the digest and signer of the bundle it was admitted under, and each decision records the bundle digest and revision. |
+
+## Next Steps
+
+- To see where each control runs, refer to [The Governed Path](/about/governed-path).
+- To write your own rules, refer to [Policy Model](/author-policies/policy-model).

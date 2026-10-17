@@ -1,0 +1,42 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Helm Configuration"
+sidebar-title: "Helm Configuration"
+description: "APF Helm chart values and deployment inputs."
+keywords: "Generative AI, Cybersecurity, AI Agents, Helm, Kubernetes, Values, Configuration"
+position: 6
+---
+
+The chart at `deploy/helm/apf` documents every value in its `values.yaml`; this page is the map of its top-level groups. The chart's `README.md` carries the install and operations narrative, and [Kubernetes](/deployment/kubernetes) the topology and install order. Install the chart from the repository checkout, or package it and push it to a registry you control as the README describes.
+
+Run `helm show values deploy/helm/apf` for the annotated defaults. Each key carries a one-line comment, and keys that name a Secret or ConfigMap created outside the chart are marked `(prerequisite)`. `values.schema.json` rejects unknown keys, wrong types, out-of-range ports and counters, and malformed image digests, so a misspelled value fails `helm lint` instead of being ignored.
+
+The chart is version `0.6.0`, and its `appVersion` is `0.1.0`, the version of the policy service and policy gateway it deploys. When `global.image.tag` and the component `image.tag` values are empty, the image tag is the `appVersion`, so set a tag or digest that matches the images you built and loaded.
+
+## Value Groups
+
+| Group | Configures | Prerequisite keys |
+|---|---|---|
+| `global` | Shared image registry, tag, and pull policy; image pull Secrets for every container. Per-component `image` blocks override the shared values. An empty tag falls back to the chart `appVersion`, so images built locally as `apf-policy-service:dev` and `apf-policy-gateway:dev` need `global.image.tag: dev`; on kind, where the images are loaded into the node rather than pulled, also set `global.image.pullPolicy: Never`. | `global.imagePullSecrets` |
+| `nameOverride`, `fullnameOverride` | Resource naming. | |
+| `policyService` | The policy service (PAP) container and the `prepare` init container: image, resources, loopback HTTP port and token, document signing, document TTL, projection surfaces, bundle source (`local` ConfigMap or polled `http` URL), bundle trust root, and extra args, env, and mounts. | `http.tokenSecret`, `signing.existingSecret`, `bundle.local.existingConfigMap`, `bundle.http.tokenSecret`, `trustRoot.existingConfigMap` |
+| `policyGateway` | The policy gateway (PDP) container: image, resources, the signed document it requests, the sandbox admission listener (an OpenShell gateway interceptor, `openshell.admission`) and the egress request policy listener (OpenShell supervisor middleware, `openshell.egress`) with their TLS Secrets, the OpenShell gateway callback endpoint, provider enrichment (`pip`), and extra args, env, and mounts. | `openshell.admission.tlsSecret`, `openshell.egress.tlsSecret`, `pip.configMap` |
+| `persistence` | The `state` volume for antirollback counters (PVC, retained on uninstall by default) and the `audit` volume (emptyDir by default, PVC when enabled). | |
+| `serviceAccount` | The dedicated ServiceAccount; the pod never mounts its token. | `serviceAccount.name` when `create` is false |
+| `service` | Service type and annotations. | |
+| `networkPolicy` | Ingress to the sandbox admission port (`admissionFrom`) and the egress request policy port (`egressFrom`) from listed `NetworkPolicyPeer` entries. Enabling it with an empty applicable list fails the render. | The OpenShell gateway and supervisor peers |
+| `rollout` | The pod annotation that restarts the pod after an external Secret or ConfigMap changes. | |
+| `openshift`, `podSecurityContext` | Pod UID, GID, and fsGroup. `openshift: true` leaves them unset so the platform assigns them under its own security policy. | |
+| `podAnnotations`, `podLabels`, `nodeSelector`, `tolerations`, `affinity` | Pod scheduling and metadata. | |
+| `extraVolumes`, `extraContainers` | Additional pod volumes and sidecars, such as a loopback policy information provider. | |
+
+## Render-Time Checks
+
+Beyond the schema, the templates fail when the sandbox admission port equals the policy-service HTTP port, when the egress request policy port collides with either while that feature is enabled, when egress request policy is enabled without a TLS Secret, when sandbox admission has no TLS Secret and insecure transport is off, when the bundle URL is empty in HTTP mode, when no local bundle input is given, or when `networkPolicy` is enabled with no peers for an exposed listener. The signing Secret and the HTTP token Secret are always required.
+
+## Related Pages
+
+- [Kubernetes](/deployment/kubernetes)
+- [CLI Commands](/reference/cli-commands)
+- [Configure Service Authentication](/deployment/configure-service-authentication)

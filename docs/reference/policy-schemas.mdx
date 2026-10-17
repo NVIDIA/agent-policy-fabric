@@ -1,0 +1,278 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Policy Schemas"
+sidebar-title: "Policy Schemas"
+description: "Field-by-field reference for every APF policy document kind, the JSON Schemas that describe them, and where the runtime is stricter or looser than the schemas."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Schema, SandboxPolicy, Provider, PolicyRule, PolicyAnnotator, PolicyEffect, PolicyFinding, JSON Schema"
+position: 1
+---
+
+This page lists every field of every document kind a bundle can contain. For the bundle manifest itself, refer to [Bundle Specification](/reference/bundle-specification). For how to write each kind, refer to [Author Policies](/author-policies/policy-model).
+
+## Schema Files
+
+The repository publishes a JSON Schema for each authored kind in `contracts/jsonschema/`.
+
+| Kind | `apiVersion` | Schema file |
+|---|---|---|
+| `PolicyBundle` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-bundle.v1alpha1.schema.json` |
+| `SandboxPolicy` | `nvidia.agent-policy-fabric.sandbox/v1alpha1` | `sandbox-policy.v1alpha1.schema.json` |
+| `Provider` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `provider.v1alpha1.schema.json` |
+| `PolicyRule` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-rule.v1alpha1.schema.json` |
+| `PolicyAnnotator` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-annotator.v1alpha1.schema.json` |
+| `PolicyEffect` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-effect.v1alpha1.schema.json` |
+| `PolicyFinding` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-finding.v1alpha1.schema.json` |
+
+APF's services do not load these schemas. They describe the documents for authors and tooling, and the runtime applies its own checks, which differ in places. Validate against the schemas before you sign, as described in [Validate and Test Policies](/author-policies/validate-and-test-policies), and read [Schema and Runtime Differences](#schema-and-runtime-differences).
+
+## Common Envelope
+
+Every member document has the same four top-level fields.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `apiVersion` | string | Yes | The kind's API group and version from the table above. Not checked at runtime. |
+| `kind` | string | Yes | The document kind. The loader uses it to route the member. A member with an unknown `kind` is hash-checked, must still be valid YAML, and is then ignored. |
+| `metadata.name` | string | Yes | Unique name within the kind. Rules, effects, and findings are referenced by it. A missing or duplicate name rejects the bundle. |
+| `metadata.title` | string | No | Display name. Projected as a provider profile's `display_name`. |
+| `metadata.description` | string | No | Description. |
+| `metadata.version` | integer | No | Author's own version number. Not used for rollback protection. |
+| `spec` | object | Yes | The kind-specific body. Unknown keys in `spec` are rejected at compile time. Only `metadata` allows unknown keys. |
+
+The schemas forbid `metadata.namespace`. The runtime accepts it and ignores it.
+
+## SandboxPolicy
+
+The sandbox perimeter. APF projects it into OpenShell's `SandboxPolicy` and injects it at admission. The projection is served as `openshell.sandbox.v1/<metadata.name>`.
+
+| Field | Type | Description |
+|---|---|---|
+| `spec.filesystem.include_workdir` | boolean | Include the sandbox working directory. |
+| `spec.filesystem.read_only` | string list | Paths the sandbox can read. |
+| `spec.filesystem.read_write` | string list | Paths the sandbox can read and write. |
+| `spec.landlock.compatibility` | string | Landlock mode. Passed to OpenShell unchanged. OpenShell 0.1.x accepts only `best_effort` and `hard_requirement`. The schema lists `best_effort`, `required`, and `disabled`. Use `best_effort`. |
+| `spec.process.run_as_user` | string | User the workload runs as. |
+| `spec.process.run_as_group` | string | Group the workload runs as. |
+| `spec.network_policies.<key>` | map of network policy | Egress allowlist entries. The key names the entry. |
+| `spec.network_middlewares.<key>` | map of middleware entry | Middleware that OpenShell calls for matching hosts. APF's entry routes traffic to its content policy. |
+
+### Network Policy Entry
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Entry name. Defaults to the map key. |
+| `endpoints` | list of [endpoints](#network-endpoint) | Destinations the entry allows. |
+| `binaries[].path` | string | Executables allowed to use the entry. |
+| `binaries[].harness` | boolean | Accepted by the schema and the parser, but not projected. |
+
+### Network Middleware Entry
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Display name. |
+| `middleware` | string | Registered middleware name. APF's is `apf-content-policy`. |
+| `on_error` | string | `fail_closed` or `fail_open`. Use `fail_closed` for APF. |
+| `order` | integer | Position among middleware. OpenShell runs them in ascending order. |
+| `endpoints.include` | string list | Hosts the middleware applies to. |
+| `endpoints.exclude` | string list | Hosts excluded from it. |
+
+There is no `config` field, because APF's middleware takes no configuration. The schema allows up to 10 middleware entries and 32 hosts in each list. OpenShell allows 32 include and exclude patterns combined and requires each entry's `order` to be unique. APF checks none of these limits.
+
+### Network Endpoint
+
+Endpoints are shared by `SandboxPolicy` network policy entries and `Provider` documents. Their semantics are OpenShell's. Refer to the [OpenShell policy schema reference](https://docs.nvidia.com/openshell/latest/how-it-works/policies/schema) for enforcement details.
+
+| Field | Type | Description |
+|---|---|---|
+| `host` | string | Host name or pattern. Required on provider endpoints. |
+| `port` | integer | Port, 1 to 65535. |
+| `ports` | integer list | Several ports. Takes precedence over `port`. |
+| `path` | string | HTTP path glob that scopes the endpoint on a shared host and port. It starts with `/`, or is `**`. |
+| `protocol` | string | `tcp`, `rest`, `websocket`, `graphql`, `sql`, `json-rpc`, or `mcp`. |
+| `tls` | string | Omit it for automatic TLS termination, or set `skip`. OpenShell 0.1.x rejects `terminate` and `passthrough`, which the schema lists, and the schema rejects `skip`. OpenShell also refuses a fail-closed middleware entry that selects a `skip` host. On a `SandboxPolicy`, an unknown value fails the projection. On a `Provider`, it fails provider profile reconciliation and snapshots. |
+| `enforcement` | string | `enforce` or `audit`. When omitted, OpenShell audits violations without blocking them. OpenShell rejects `enforce` for `protocol: sql`. |
+| `access` | string | Access preset: `read-only`, `read-write`, or `full`. |
+| `rules[].allow` | object | Layer 7 allow rule. Refer to [Layer 7 Rules](#layer-7-rules). |
+| `deny_rules[]` | object | Layer 7 deny rule, with the same fields as an allow rule. |
+| `allowed_ips` | string list | Allowed resolved addresses. |
+| `allow_encoded_slash` | boolean | Allow `%2F` in paths. |
+| `websocket_credential_rewrite` | boolean | Rewrite credentials in WebSocket traffic. |
+| `request_body_credential_rewrite` | boolean | Rewrite credential placeholders in request bodies. |
+| `persisted_queries` | string | `deny` or `allow_registered`, for GraphQL. |
+| `graphql_persisted_queries` | map | Registered GraphQL operations: `operation_type`, `operation_name`, `fields`. |
+| `graphql_max_body_bytes` | integer | GraphQL body limit. |
+| `json_rpc_max_body_bytes` | integer | JSON-RPC body limit. Defaults to `mcp.max_body_bytes` when zero. |
+| `mcp.max_body_bytes` | integer | Not projected as its own field. Used as `json_rpc_max_body_bytes` when that is zero. |
+| `mcp.strict_tool_names` | boolean | Require strict MCP tool names. |
+| `mcp.allow_all_known_mcp_methods` | boolean | Allow every known MCP method. |
+| `credential_binding.provider` | string | Accepted, but never projected. OpenShell receives no binding. |
+| `allow_uninspected_credentials` | boolean | Accepted, but OpenShell always receives `false`. The sandbox projection clears it. On a `Provider`, the profile YAML keeps it, and APF's interceptor drops it when it converts the profile for OpenShell. |
+
+### Layer 7 Rules
+
+| Field | Type | Description |
+|---|---|---|
+| `method` | string | HTTP method. |
+| `path` | string | Path pattern. |
+| `command` | string | SQL command. |
+| `query` | map | Query parameter matchers. A string is a glob. `{any: [...]}` matches any listed glob. |
+| `params` | map | MCP parameter matchers, with the same form as `query`. OpenShell supports only `params.name` for `tools/call`, and rejects `params` on plain `json-rpc` endpoints. |
+| `operation_type` | string | GraphQL `query`, `mutation`, or `subscription`. Required on GraphQL rules. The schema also allows `*`, which OpenShell rejects. |
+| `operation_name` | string | GraphQL operation name. |
+| `fields` | string list | GraphQL fields. |
+
+The schemas express some of OpenShell's cross-field endpoint rules, such as requiring `access` or `rules` for `rest` endpoints and forbidding them for `tcp`. OpenShell enforces more of them at admission. APF does not check these rules, so validate against the schema or rely on OpenShell to reject an invalid policy at admission.
+
+## Provider
+
+A provider profile: the endpoints, binaries, and credentials for one external service. APF projects each `Provider` into an OpenShell provider profile, served as `openshell.provider-profile.v1/<metadata.name>`, and reconciles it to the OpenShell gateway.
+
+| Field | Type | Description |
+|---|---|---|
+| `metadata.name` | string | Becomes the profile `id`. OpenShell accepts only lowercase letters and digits in hyphen-separated parts, such as `github` or `nvidia-inference`, and APF does not check this. Provider types created on OpenShell must match a bundle-managed profile `id`. |
+| `metadata.title` | string | Becomes the profile's `display_name`. |
+| `spec.type` | string | Category. `inference`, `agent`, `messaging`, `data`, `knowledge`, and `source-control` map to OpenShell categories. Any other value becomes `other`. `inference` and `agent` are marked inference-capable. |
+| `spec.endpoints` | list of [endpoints](#network-endpoint) | Destinations the provider uses. Each needs a `host`. |
+| `spec.binaries` | list | Executables, as path strings or `{path: ...}` objects. |
+| `spec.credentials` | list | Credentials OpenShell injects. |
+
+### Credential
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Credential name. Defaults to the provider name, so give each credential a name when a provider has more than one. |
+| `envVars` | string list | Environment variables the credential is read from. |
+| `style` | string | Injection style. The schema allows `bearer`, `header`, `query`, `path`, `basic`, and `cookie`, but OpenShell rejects `cookie`. An empty value means `bearer`. |
+| `header` | string | Header name. The schema requires it when `style` is `bearer` or `header`. OpenShell also requires it when `style` is omitted, because APF projects an empty style as `bearer`. |
+| `queryParam` | string | Query parameter. The schema requires it for `query`. |
+| `pathTemplate` | string | Path template. The schema requires it for `path`. |
+| `discoverable` | boolean | Listed for discovery unless set to `false`. |
+| `required` | boolean | Whether the credential is required. |
+| `description` | string | Description. |
+| `source.kind` | string | How the credential is obtained. Refer to the table below. |
+
+### Credential Sources
+
+| `source.kind` | Fields |
+|---|---|
+| `host-env` | `name` |
+| `oauth2` | `grant` (`client-credentials` or `refresh-token`), `tokenUrl`, `scopes`, `refreshBeforeSeconds`, `maxLifetimeSeconds`, `parameters`, `additionalOutputs` |
+| `external` | `name`, `tokenUrl`, `scopes`, `refreshBeforeSeconds`, `maxLifetimeSeconds` |
+| `google-service-account-jwt` | `refreshBeforeSeconds`, `maxLifetimeSeconds`, `material`, `additionalOutputs` |
+| `aws-sts-assume-role` | `refreshBeforeSeconds`, `maxLifetimeSeconds`, `material`, `additionalOutputs` |
+| `token-grant` | `tokenEndpoint` (required at compile time), `audience`, `jwtSvidAudience`, `scopes`, `cacheTtlSeconds`, `audienceOverrides`, `clientAssertionType` |
+
+`material` entries have `name`, `description`, `required`, and `secret`. `additionalOutputs` entries have `output` and `credential`. For `oauth2`, each `parameters` key is projected as a required material entry, marked secret when its name contains `secret`, `token`, or `key`. The parameter values and the `name` of `host-env` and `external` sources are not projected. Refer to [Credential Integration](/how-it-works/credential-integration).
+
+## ProviderProfile
+
+A `ProviderProfile` member is an OpenShell provider profile in OpenShell's own YAML format. APF passes it through unchanged as `openshell.provider-profile.v1/<metadata.name>`. A member without a `kind` that has a top-level `id` and `endpoints` is also treated as a provider profile. There is no APF schema for this kind. A `Provider` with the same name replaces it.
+
+## PolicyRule
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.description` | string | No | Description. |
+| `spec.language` | string | Yes | `cedar`. Other languages are rejected at compile time. |
+| `spec.definition` | string | Yes | Cedar policy text. |
+| `spec.schema` | string | No | Cedar schema in human-readable syntax. Policies are validated against it when the evaluator is built. |
+| `spec.data` | mapping | No | Values exposed to the rule as `context.data`. |
+| `spec.role` | string | No | `capability` or `control`. Exactly `control` makes a control rule. Any other value, or none, makes a capability grant. |
+
+### Cedar Request
+
+| Element | Value |
+|---|---|
+| Principal | `APF::User::"<user subject>"`. The subject is empty on the OpenShell middleware path. |
+| Action | `APF::Action::"<tool>::<capability>"` when both are known, `APF::Action::"<tool>"` for an MCP tool call from OpenShell, and `APF::Action::"invoke"` for a request that is not a tool call. |
+| Resource | `APF::Tool::"<tool>"`, or `APF::Tool::"__none__"`. |
+| `context.body_text` | The request body as text. |
+| `context.has_tool_name` | `true` for an MCP tool call, and for an `EvaluationService` request that names a resource. |
+| `context.target_host`, `target_method`, `target_path`, `target_scheme` | The request target, when known. |
+| `context.args.<name>` | MCP tool arguments, or `EvaluationService` request arguments. For each string argument, APF adds `<name>_len` with its length in characters, and `<name>_num` when it parses as an integer. |
+| `context.annotations` | Annotator outputs. |
+| `context.data` | The rule's `spec.data`. |
+
+### APF Annotations
+
+| Annotation | Allowed on | Effect |
+|---|---|---|
+| `@id("<label>")` | Any statement | Names the statement in deny reasons as `<rule>/<label>`, or `<label>` verbatim when it contains `/`. |
+| `@apf_effect("<name>")` | `permit` only | Applies the named `PolicyEffect` when the statement fires. |
+| `@apf_finding("<name>")` | `permit` or `forbid` | Records the named `PolicyFinding` with the allow or the deny. |
+
+## PolicyAnnotator
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.description` | string | No | Description. |
+| `spec.annotations[].name` | string | Yes | Key under `context.annotations`. Unique across all annotators in the bundle. |
+| `spec.annotations[].output` | string | Yes | `bool`, `string`, or `integer`. |
+| `spec.annotations[].set_true_if` | string | No | `any` (default) or `all`. For `bool` outputs. |
+| `spec.annotations[].set_value_from` | string | No | `first_match`, the only value. For `string` outputs. |
+| `spec.annotations[].rules[].field` | string | Yes | Field selector. |
+| `spec.annotations[].rules[].op` | string | Yes | Operation. |
+| `pattern`, `value`, `prefix`, `suffix`, `substring`, `threshold` | string or integer | Per operation | Operands. A `string` output also uses `value` as the output value. |
+
+`threshold_from` is rejected. Every annotation needs at least one rule. For field selectors and operations, refer to [Annotators](/author-policies/annotators).
+
+## PolicyEffect
+
+| Field | Type | Description |
+|---|---|---|
+| `spec.description` | string | Description. |
+| `spec.verdict` | string | `allow` (default), `warn`, or `escalate`. Advisory. |
+| `spec.reason` | string | Machine-readable reason for the verdict. |
+| `spec.message` | string | Human-readable message for the verdict. |
+| `spec.body.replace` | string | Replacement for the whole body. |
+| `spec.body.patches[]` | list | `op` (`replace`, `add`, or `remove`), `path` (JSON Pointer), and `value` or `source`. |
+| `spec.headers[]` | list | `name`, `action` (`set`, `add`, or `remove`), and `value` or `source`. |
+| `spec.finding` | string or object | A `PolicyFinding` name, or an inline finding with `type`, `severity`, `label`, `label_source`, and `confidence`. |
+
+Set exactly one of `body.replace` and `body.patches`. `source` must have the form `context.annotations.<key>`. Refer to [Effects and Findings](/author-policies/effects-and-findings).
+
+## PolicyFinding
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.description` | string | No | Description. |
+| `spec.type` | string | Yes | Finding category, recorded as `kind` in audit records. |
+| `spec.severity` | string | Yes | `low`, `medium`, `high`, or `critical`. |
+| `spec.label` | string | No | Static label. |
+| `spec.label_source` | string | No | `context.annotations.<key>`. Its value becomes the label. If the annotation is absent, the request is denied. |
+
+## Other Kinds
+
+The loader also collects `HostTool` members, but no component uses them in this release.
+
+## Schema and Runtime Differences
+
+The runtime checks some things the schemas do not, and skips some things the schemas require.
+
+| Topic | Schema | Runtime |
+|---|---|---|
+| `apiVersion`, `kind` constants | Required and fixed. | Not checked. `kind` only routes the member. |
+| `metadata.namespace` | Forbidden. | Accepted and ignored. |
+| Unknown `kind` | Not applicable. | Hash-checked, then ignored. |
+| `PolicyRule.spec.role` | `capability` or `control`. | `control` is a control rule. Anything else is a grant. |
+| Annotator `rules` | Optional. | At least one rule is required. |
+| Annotator `string` output | `value` optional. | Every rule needs a `value`. |
+| Effect `body` | `replace` and `patches` both allowed. | Exactly one is required. |
+| Effect `source` | Any string. | Must be `context.annotations.<key>`. |
+| Header names | Any string. | On OpenShell, `set` and `add` require the `x-openshell-middleware-` prefix. |
+| Inline finding `confidence` | 0 to 100. | 0 to 255 is parsed. Audit records clamp it to 100. |
+| `landlock.compatibility` | `best_effort`, `required`, or `disabled`. | Any string is passed through. OpenShell accepts only `best_effort` and `hard_requirement`. |
+| Endpoint `tls` | `terminate` or `passthrough`. | `skip`, `terminate`, and `passthrough` are passed to OpenShell, which accepts only `skip` or an omitted value. |
+| Endpoint cross-field rules | Enforced by `allOf` conditions. | Not checked by APF. |
+| `network_middlewares` limits | 10 entries, 32 hosts per list. | Not checked by APF. |
+| Provider `credentials[].style` | Enumerated, with required companion fields. | Any string is passed through. |
+| Provider `token-grant.tokenEndpoint` | Optional. | Required. |
+| Provider endpoint `host` | Required. | Not checked by APF. |
+
+Several checks run only when the policy gateway builds its evaluator, not when the policy service loads the bundle, so a bundle that fails them still loads and consumes its revision: Cedar syntax and schema validation, `@apf_effect` and `@apf_finding` placement and references, effect `finding` references, annotator field selectors, operands, patterns, output types, rule counts, and key uniqueness, effect body and operand combinations, and `source` and `label_source` forms. Duplicate document names are caught earlier, when the policy service loads the members.
+
+## Next Steps
+
+- For the manifest that binds these documents, refer to [Bundle Specification](/reference/bundle-specification).
+- To check documents before signing, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).

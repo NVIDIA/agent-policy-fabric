@@ -1,0 +1,14 @@
+{
+  "config": {
+    // MDX pages get their title from Fern frontmatter, not a top-level H1.
+    "MD041": false,
+    // MDX uses JSX components (<Note>, <Steps>, <Cards>, ...) that look like HTML.
+    "MD033": false,
+    // Pages keep one paragraph per line, so line length is not limited.
+    "MD013": false,
+    // Reference pages repeat headings such as "Core Options" under different parents.
+    "MD024": { "siblings_only": true },
+    // Published docs should label fenced code blocks for rendering and copy UX.
+    "MD040": true
+  }
+}

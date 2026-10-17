@@ -1,0 +1,130 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Host and Workstation Deployment"
+sidebar-title: "Host and Workstation Deployment"
+description: "Install APF as hardened systemd services on a Linux host or workstation next to an OpenShell gateway, with the files, permissions, and settings each service needs."
+keywords: "Generative AI, Cybersecurity, AI Agents, systemd, Host Deployment, Workstation, Hardening, polkit, Installation"
+position: 4
+---
+
+The `deploy/systemd/` directory runs `apf-policy-service` and `apf-policy-gateway` as hardened systemd services under the unprivileged `apf` account, co-located with an OpenShell gateway and its supervisors on one Linux host. Read `deploy/systemd/SECURITY.md` in the repository before you deploy. It is the checklist a reviewer signs off against, and it covers host controls that a unit file cannot express.
+
+## Files
+
+| Path | Owner and group | Mode | Purpose |
+|---|---|---|---|
+| `/etc/apf` | `root:apf` | `0750` | Configuration directory. The `apf` account can read it and cannot write it. |
+| `/etc/apf/policy-service.env`, `/etc/apf/policy-gateway.env` | `root:root` | `0644` | Non-secret settings. |
+| `/etc/apf/bundle/bundle.yaml` and members | `root:apf` | `0640` | The signed bundle, for the local policy source. |
+| `/etc/apf/trust-roots/*.pub` | `root:apf` | `0640` | Bundle trust roots. |
+| `/etc/apf/document-signing-key` | `root:root` | `0600` | Ed25519 seed for provenance tokens, delivered as a systemd credential. |
+| `/etc/apf/http-bearer-token` | `root:root` | `0600` | Token for the policy service HTTP surface, delivered as a systemd credential. |
+| `/etc/apf/openshell-interceptor-auth.toml`, `/etc/apf/openshell-middleware-auth.toml` | `root:apf` | `0640` | OpenShell extension trust profiles, one per surface. |
+| `/etc/apf/tls/{interceptor,middleware}-cert.pem` | `root:apf` | `0640` | TLS certificates the gateway presents to OpenShell. |
+| `/etc/apf/tls/{interceptor,middleware}-key.pem` | `root:root` | `0600` | Matching private keys, delivered as systemd credentials. |
+| `/var/lib/apf/policy-service/` | `apf:apf` | `0700` | Policy service state: the counter store. |
+| `/var/lib/apf/policy-gateway/` | `apf:apf` | `0700` | Gateway state. |
+| `/run/apf/policy-service.sock`, `/run/apf/policy-gateway.sock` | `apf` | `0600` | Unix sockets, created by the services. |
+
+Both services run as the same `apf` account because each binds its socket owner-only and checks the peer's UID.
+
+<Steps toc={true}>
+
+## Build and Install the Binaries and Units
+
+```shell
+cargo build --release -p apf-policy-service -p apf-policy-gateway
+
+sudo install -D -m 0755 target/release/apf-policy-service /usr/local/bin/apf-policy-service
+sudo install -D -m 0755 target/release/apf-policy-gateway /usr/local/bin/apf-policy-gateway
+sudo install -D -m 0644 deploy/systemd/apf.sysusers.conf /etc/sysusers.d/apf.conf
+sudo systemd-sysusers /etc/sysusers.d/apf.conf
+sudo install -d -o root -g apf -m 0750 /etc/apf /etc/apf/bundle /etc/apf/trust-roots /etc/apf/tls
+sudo install -D -m 0644 deploy/systemd/apf-policy-service.service /etc/systemd/system/apf-policy-service.service
+sudo install -D -m 0644 deploy/systemd/apf-policy-gateway.service /etc/systemd/system/apf-policy-gateway.service
+sudo install -o root -g root -m 0644 deploy/systemd/apf-policy-service.env /etc/apf/policy-service.env
+sudo install -o root -g root -m 0644 deploy/systemd/apf-policy-gateway.env /etc/apf/policy-gateway.env
+sudo install -D -m 0644 deploy/systemd/49-apf-service-lockdown.rules /etc/polkit-1/rules.d/49-apf-service-lockdown.rules
+```
+
+## Install Policy and Keys
+
+Install the signed bundle, the trust roots, and the document signing key with the ownership and modes in the table above. Use your own keys. Refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority) and [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+
+Set `APF_DOCUMENT_KEY_ID` to the same value in both env files. The shipped files use `apf-prod`.
+
+## Set the Audit Directory
+
+Both services refuse to start without an audit directory, and the shipped env files do not set one. The units use `ProtectSystem=strict`, so the directory must be inside each unit's writable state directory. Add one line to each env file:
+
+```shell
+# /etc/apf/policy-service.env
+APF_AUDIT_LOG_DIR=/var/lib/apf/policy-service/audit
+
+# /etc/apf/policy-gateway.env
+APF_AUDIT_LOG_DIR=/var/lib/apf/policy-gateway/audit
+```
+
+## Enable the Policy Service HTTP Surface
+
+The gateway's interceptor verifies provenance tokens with the key from the policy service's JWKS endpoint, and the shipped gateway env file enables the interceptor and sets `APF_JWKS_URL=http://127.0.0.1:19200/.well-known/jwks.json`. The gateway refuses to start if it cannot fetch the JWKS, so enable the policy service's HTTP surface on loopback:
+
+1. In `/etc/apf/policy-service.env`, set `APF_HTTP_ADDR=127.0.0.1:19200`.
+2. In `apf-policy-service.service`, uncomment `LoadCredential=http-bearer-token:/etc/apf/http-bearer-token`.
+3. In the same unit, add `AF_INET` to `RestrictAddressFamilies`, and record why in a comment. The shipped unit allows only Unix sockets.
+4. Create the token:
+
+   ```shell
+   openssl rand -hex 32 | sudo tee /etc/apf/http-bearer-token >/dev/null
+   sudo chmod 0600 /etc/apf/http-bearer-token
+   sudo chown root:root /etc/apf/http-bearer-token
+   ```
+
+The service refuses to start with `APF_HTTP_ADDR` set and no token. `/healthz`, `/readyz`, and the JWKS route stay reachable without the token. Add a host firewall rule that drops inbound traffic to the port from anything but loopback.
+
+## Configure the OpenShell Surfaces
+
+The shipped gateway env file enables both OpenShell listeners on loopback, `127.0.0.1:18202` for the interceptor and `127.0.0.1:9099` for the middleware, in authenticated mode. For each enabled surface, install its trust profile, certificate, and private key. The unit loads both private keys as credentials, so both key files must exist. If you do not use a surface, remove its address and file settings from the env file and its `LoadCredential` line and `--openshell-*-tls-key-file` argument from the unit.
+
+Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile format and how to obtain its values.
+
+## Validate and Start
+
+```shell
+sudo systemd-analyze verify /etc/systemd/system/apf-policy-service.service
+sudo systemd-analyze verify /etc/systemd/system/apf-policy-gateway.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now apf-policy-service.service
+sudo systemctl enable --now apf-policy-gateway.service
+```
+
+The gateway connects to the policy service's socket and fetches its JWKS at startup without retrying. If it starts before the policy service is listening, it exits and systemd restarts it. The units allow five starts in 60 seconds, counting the first. If systemd gives up, run `sudo systemctl reset-failed apf-policy-gateway.service` and then `sudo systemctl restart apf-policy-gateway.service` once the policy service is ready.
+
+Confirm both services are running and writing audit records:
+
+```shell
+systemctl status apf-policy-service apf-policy-gateway
+curl -s http://127.0.0.1:19200/readyz
+sudo ls /var/lib/apf/policy-service/audit /var/lib/apf/policy-gateway/audit
+```
+
+</Steps>
+
+## Hardening in the Units
+
+The units run each service with no capabilities, no new privileges, a read-only view of the system, a private `/tmp`, hidden processes, and a system call filter. `MemoryDenyWriteExecute`, namespace restrictions, and realtime restrictions are on. The gateway unit also restricts IP traffic to loopback with `IPAddressAllow=localhost`, as a backstop against a misconfigured bind address. Both units cap restarts at five in 60 seconds.
+
+## Operating the Services
+
+- **Restart through your deploy pipeline only.** The polkit rule denies interactive `systemctl start`, `stop`, `restart`, and `reload` of both units to every local session. It does not restrict `root`. Restrict how administrators reach `root` with a sudoers wrapper, as described in `deploy/systemd/SECURITY.md`.
+- **Configuration is read at startup.** Restart the policy service after changing its env file, trust roots, or keys. The gateway picks up a new bundle through hot swap without a restart.
+- **Bundle updates.** With the local source, replace the bundle files and restart the policy service, or call `POST /v1/refresh` with the bundle path in the JSON body, `{"bundle_path": "/etc/apf/bundle/bundle.yaml"}`. Refer to [Update Policies](/manage-policy-bundles/update-policies).
+- **HTTP bundle source.** Requires more unit changes. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#systemd-hosts).
+- **Detect tampering.** Add auditd watches on the unit files, `/etc/apf`, and both binaries, and ship them with the units.
+- **Keep OpenShell's agent policy proposals off.** Refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell#turn-off-agent-policy-proposals).
+
+## Next Steps
+
+- To configure caller authentication, refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+- To review the full security checklist, refer to [Security Best Practices](/security/best-practices).

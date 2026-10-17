@@ -1,0 +1,206 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Adapter Contracts"
+sidebar-title: "Adapter Contracts"
+description: "The Rust interfaces and OpenShell wire contracts that projectors and enforcement adapters implement, with their types, error semantics, and dependency rules."
+keywords: "Generative AI, Cybersecurity, AI Agents, Adapter, Projector, Evaluator, EvalInput, EvalResult, OpenShell, Extension Protocol"
+position: 5
+---
+
+This page lists the contracts an APF adapter is written against. For the design and a walkthrough, refer to [APF Adapter](/integrations/apf-adapter).
+
+| Contract | Kind | Defined in | Implemented by |
+|---|---|---|---|
+| [`Projector`](#projector) | Rust trait | `apf-compiler` | `apf-openshell-projector` |
+| [`Evaluator`](#evaluator) | Rust trait | `apf-policy-eval` | `CedarEvaluator` |
+| [`apply_effects`](#apply-effects) | Rust function | `apf-policy-eval` | Used by request adapters |
+| [`ActivePolicy`](#activepolicy) | Rust type | `apf-policy-eval` | Published by the gateway |
+| [Policy client](#policy-client) | Rust client | `apf-policy-client` | Used by admission adapters |
+| [Audit](#audit) | Rust library | `apf-audit` | Used by every component |
+| [OpenShell gateway interceptor](#openshell-gateway-interceptor) | gRPC service | OpenShell `v0.1.3` protobufs | `apf-openshell-interceptor` |
+| [OpenShell supervisor middleware](#openshell-supervisor-middleware) | gRPC service | OpenShell `v0.1.3` protobufs | `apf-openshell-middleware` |
+| [Extension authentication](#extension-authentication) | Bearer JWT and TLS | OpenShell extension protocol `1.0` | `apf-openshell-auth` |
+
+## Projector
+
+A projector lowers the bundle's canonical policy into a runtime's native documents when the policy service loads a bundle.
+
+```rust
+/// A projector lowers `CanonicalPolicy` IR to one substrate's native surfaces.
+pub trait Projector: Send + Sync {
+    /// Stable substrate identifier, e.g. `"openshell"`.
+    fn target(&self) -> &str;
+
+    /// Project `p` to this substrate's native surfaces.
+    fn project(&self, p: &CanonicalPolicy) -> Result<Vec<CompiledSurface>, ProjectError>;
+}
+
+pub struct CompiledSurface {
+    pub kind: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+```
+
+| `CanonicalPolicy` field | Contents |
+|---|---|
+| `sandbox_policies` | `SandboxPolicy` documents by name. |
+| `sandbox_middleware` | Each sandbox policy's `network_middlewares`, by sandbox policy name. |
+| `providers` | `Provider` documents by name. |
+| `provider_profiles` | Raw `ProviderProfile` YAML, keyed by `metadata.name`, or by `id` for a profile without a `kind`. |
+| `policy_rules`, `policy_annotators`, `policy_effects`, `policy_findings` | The evaluation documents in manifest order. |
+
+The policy service serves each surface through `GetDocument` under its `kind` and `name`. A projection error fails the bundle load, so a projector should reject what its runtime cannot represent rather than drop it silently. APF does not yet follow this fully: the compiler drops binary `harness` flags, and the OpenShell projector drops `credential_binding` and `allow_uninspected_credentials`.
+
+## Evaluator
+
+```rust
+pub trait Evaluator: Send + Sync {
+    fn evaluate(&self, input: EvalInput) -> Result<EvalResult, EvalError>;
+}
+```
+
+### EvalInput
+
+| Field | Type | Meaning |
+|---|---|---|
+| `tool` | `Option<String>` | Tool name. Set for MCP tool calls. |
+| `capability` | `Option<String>` | Capability name. Set by `EvaluationService` from `verb`. |
+| `user_subject` | `String` | The subject the agent acts for. Empty when the runtime supplies none. |
+| `args` | JSON map | Tool arguments. |
+| `body_text` | `String` | The body as text. Adapters may decode lossily. |
+| `body_json` | `Option<Value>` | The parsed body when it is JSON. |
+| `target` | `Option<RequestTarget>` | `host`, `method`, `path`, and `scheme` of an HTTP request. |
+| `has_tool_name` | `bool` | Derived from `tool`. Tool calls need a capability grant. |
+
+`EvalInput::for_tool_call(tool, capability, user_subject, args)` builds an input with no body or target.
+
+### EvalResult
+
+| Field | Type | Meaning |
+|---|---|---|
+| `allow` | `bool` | The decision. |
+| `deny_reason` | `String` | Why it was denied. Empty on allow. |
+| `verdict` | `Verdict` | `Allow`, `Warn`, or `Escalate`. Advisory, and meaningful only on allow. |
+| `reason`, `message` | `Option<String>` | Detail for a non-default verdict. |
+| `body_patches` | `Vec<JsonPatch>` | RFC 6902 operations in firing order. |
+| `body_replacement` | `Option<String>` | Whole-body replacement. Takes precedence over patches. |
+| `header_mutations` | `Vec<HeaderMutation>` | Each has a `name`, an `action` of `Set`, `Add`, or `Remove`, and a `value` for the first two. |
+| `findings` | `Vec<Finding>` | `kind`, `label`, `severity` (`Low` to `Critical`), and optional `confidence`. |
+
+`EvalError::Engine` is displayed as `evaluator engine error: <detail>`. A request adapter must deny when evaluation returns an error. `EvaluationService` returns gRPC `INTERNAL` instead, and leaves the deny to its caller.
+
+## Apply Effects
+
+```rust
+pub fn apply_effects(
+    body: &[u8],
+    body_json: Option<&Value>,
+    result: &EvalResult,
+) -> Result<AppliedRequest, ApplyError>;
+
+pub struct AppliedRequest {
+    /// The new body bytes; `None` when the body is unchanged.
+    pub body: Option<Vec<u8>>,
+    /// Header mutations to execute, in decision order.
+    pub headers: Vec<HeaderMutation>,
+}
+```
+
+| `ApplyError` | Cause |
+|---|---|
+| `DeniedResult` | The result is a deny. |
+| `NonJsonBody` | Patches were produced for a body that is not JSON. |
+| `MissingPath` | A `replace` or `remove` targets a path the body does not have, or an `add` targets a missing parent. |
+| `InvalidPath` | A patch path is not a valid JSON Pointer for its operation. |
+| `MissingValue` | A `replace` or `add` has no value. |
+
+Use this function rather than applying effects yourself, so every enforcement point mutates requests the same way. Deny the request on any error. Runtime-specific rules, such as OpenShell's header restrictions, are the adapter's to enforce on top.
+
+## ActivePolicy
+
+```rust
+pub struct ActivePolicy {
+    pub evaluator: std::sync::Arc<dyn Evaluator>,
+    /// Digest of the document this evaluator was built from.
+    pub bundle_digest: String,
+    /// Ordering signal; identity is the digest.
+    pub policy_revision: u64,
+}
+```
+
+The gateway publishes the active policy on a watch channel. Read it once per request and use the same value for the decision and its audit record, so a hot swap between two reads cannot attribute a decision to the wrong policy.
+
+## Policy Client
+
+`apf-policy-client` wraps the `PolicyService` gRPC API over the policy service's Unix socket.
+
+| Method | Purpose |
+|---|---|
+| `PolicyClientHandle::connect(socket_path)` | Connect, with a 2 second connect timeout and a 5 second request timeout. |
+| `health()` | Call `Health`. |
+| `get_document(kind, name, runtime_context)` | Call `GetDocument`. |
+| `list_documents(kind)` | Call `ListDocuments`. |
+
+An admission adapter should check the response `digest` against the body and verify the `provenance_token` against the policy service's JWKS before it hands a document to the runtime. APF's interceptor does both at sandbox creation. On a configuration refresh it checks the body digest against the token's claims without verifying the token's signature, and relies on the validate phase to verify it. Refer to [Sandbox Admission](/how-it-works/sandbox-admission).
+
+## Audit
+
+Each component writes its own JSONL file through `apf-audit`. `ComponentAudit::to_jsonl_in(dir, identity)` opens `<dir>/<component>-audit.jsonl`. `emit_required` returns an error the caller must treat as fatal for the operation, and `emit_best_effort` returns an error the caller may log. Every record is validated against the `apf.audit.event.v1` schema and scanned for credential-like strings before it is written. Refer to [Audit Event Schema](/reference/audit-event-schema).
+
+## OpenShell Gateway Interceptor
+
+`apf-openshell-interceptor` implements OpenShell's gateway interceptor service on the gateway's `--openshell-interceptor-addr` listener.
+
+| RPC | Allowed caller | APF behavior |
+|---|---|---|
+| `Describe` | OpenShell gateway | Returns the manifest with 14 bindings and validates protocol metadata. |
+| `Evaluate` | OpenShell gateway | Runs the bound handler for the RPC and phase, and returns an `InterceptorResult` with `allowed`, `reason`, `patches`, and `log_annotations`. |
+| `SnapshotProviderProfiles` | OpenShell gateway | Returns the bundle-managed provider profiles after verifying their provenance. |
+
+A governance denial returns gRPC `OK` with `allowed: false`. On `CreateSandbox` and `UpdateConfig` modify, infrastructure failures return a gRPC status: `INVALID_ARGUMENT` for a `CreateSandbox` operation with no `name`, `UNAVAILABLE` when the policy service cannot be reached, and `INTERNAL` when patch generation fails. Provider bindings report an unreachable policy service as a denial instead. APF's manifest declares every governance binding fail-closed and the two post-commit bindings fail-open, so with OpenShell's default `dynamic` binding policy, OpenShell refuses the operation in all of these cases. `Describe` and `SnapshotProviderProfiles` are RPCs, not bindings: a `Describe` failure stops the OpenShell gateway from starting, and a snapshot failure returns `FAILED_PRECONDITION` or `INTERNAL`. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor) for the bindings and their checks.
+
+## OpenShell Supervisor Middleware
+
+`apf-openshell-middleware` implements OpenShell's supervisor middleware service on the `--openshell-middleware-addr` listener, under the name `apf-content-policy`.
+
+| RPC | Allowed caller | APF behavior |
+|---|---|---|
+| `Describe` | Gateway, supervisor | Returns one binding, `HTTP_REQUEST` at `PRE_CREDENTIALS`, and a 4 MiB payload limit. |
+| `ValidateConfig` | Gateway | Accepts only an empty configuration. |
+| `EvaluateHttpRequest` | Supervisor | Returns `HttpRequestResult` with `decision`, `reason`, `reason_code`, `findings`, and the rewritten body and headers. |
+| `EvaluateWebSocketSession` | Any authenticated caller | Returns `UNIMPLEMENTED`. |
+
+Every decision returns gRPC `OK`. A supervisor whose token is bound to a different sandbox than the request gets `PERMISSION_DENIED`. Refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware) for the request mapping, limits, and reason codes.
+
+## Extension Authentication
+
+Both OpenShell listeners use the same contract unless they run in insecure mode.
+
+| Element | Requirement |
+|---|---|
+| Transport | TLS with the listener's certificate and key. |
+| Credential | Exactly one `authorization: Bearer <JWT>` metadata value. |
+| Token header | `alg` `EdDSA`, `typ` `openshell-ext+jwt`, `kid` equal to the trust profile's. |
+| Token claims | Exact `iss` and `aud`, non-empty `sub` and `jti`, valid `iat`, `nbf`, and `exp`, a lifetime no longer than `max_lifetime_secs`, and a `caller_kind` of `gateway` or `supervisor`. |
+| Gateway caller | `caller_kind` `gateway`, `sub` equal to `iss`, and no `sandbox_id`. |
+| Supervisor caller | `caller_kind` `supervisor`, `sub` of `spiffe://openshell/sandbox/<sandbox_id>`, and a matching `sandbox_id` claim. |
+| Protocol metadata | `Describe` requires OpenShell extension protocol metadata with major version `1` and the capability `openshell.gateway-interceptor.contract` or `openshell.supervisor-middleware.contract`. Missing or incompatible metadata fails with `FAILED_PRECONDITION`. |
+
+Failures are recorded as `extension_auth.*` `authentication` events in the surface's audit file. Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile.
+
+## Dependency Rules
+
+`cargo xtask dag-guard` checks these rules:
+
+- Library crates do not depend on service or adapter crates.
+- Service crates do not depend on each other.
+- An adapter depends on another adapter only if that adapter is a leaf.
+- Runtime-specific code belongs in `apf-<runtime>-*` crates. This check is a text search for `openshell_` that runs only when `rg` is installed. Service and adapter crates are exempt, but `apf-proto`, which generates OpenShell's protobuf types, is not, so on `main` the check fails wherever `rg` is available.
+- Only `apf-bundle`'s signing backend and `apf-compile` import the yaml-sigil crates.
+
+## Next Steps
+
+- For the APIs adapters call, refer to [Service APIs](/reference/service-apis).
+- For the existing adapters, refer to [OpenShell Integration](/integrations/openshell).

@@ -1,0 +1,66 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Glossary"
+sidebar-title: "Glossary"
+description: "Definitions of the terms used throughout the NVIDIA Agent Policy Fabric documentation."
+keywords: "Generative AI, Cybersecurity, AI Agents, Glossary, Terminology, Definitions, Policy"
+position: 1
+---
+
+Terms marked **In Development** describe capabilities that are not yet on the `main` branch.
+
+| Term | Definition |
+|---|---|
+| Admission | OpenShell's creation of a sandbox. APF's interceptor injects the signed sandbox policy during admission and validates it before the sandbox starts. Refer to [Sandbox Admission](/how-it-works/sandbox-admission). |
+| Annotator | A `PolicyAnnotator` document. It inspects a request and writes named values, called annotations, that Cedar rules read from `context.annotations`. Refer to [Annotators](/author-policies/annotators). |
+| APF | NVIDIA Agent Policy Fabric. Lets an organization author agent policy once, sign it, distribute it, and have it enforced and audited wherever its agents run. |
+| Artifact digest | The SHA-256 of a signed manifest file, including its signature. It changes when the signature changes, for example when another key signs the same content. Compare with payload digest. |
+| Audit record | One JSON line in the `apf.audit.event.v1` format, written by an APF component for a lifecycle step or a decision. Refer to [Audit Event Schema](/reference/audit-event-schema). |
+| Bundle | APF's unit of authority: a signed manifest that lists policy documents by path and digest, together with those documents. Refer to [Bundle Structure](/manage-policy-bundles/bundle-structure). |
+| Capability grant | A `PolicyRule` with `role: capability` that permits specific tool calls. Every MCP tool call needs one. Refer to [Capability Grants](/author-policies/capability-grants). |
+| Cedar | The policy language APF evaluates. Rules are written in Cedar and evaluated with the `cedar-policy` library. |
+| Content control | A `PolicyRule` with `role: control` that inspects content and denies, rewrites, or flags a request. It cannot grant a tool call. Refer to [Content Controls](/author-policies/content-controls). |
+| Counter store | The policy service's record of the highest accepted `policy_revision`, the high-water mark, and the payload it accepted. It prevents rollback. |
+| Document signing key | The Ed25519 key the policy service uses to sign provenance tokens. Separate from the bundle signing key. |
+| Domain | The namespace a policy information provider's facts are exposed under, as `context.<domain>`. The registration file writes it as `context`, after the Cedar path it fills; the wire contract and audit records carry it as `domain`. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| Effect | A `PolicyEffect` document. It rewrites an allowed request's body or headers, sets an advisory verdict, or records a finding. Refer to [Effects and Findings](/author-policies/effects-and-findings). |
+| Enforcement point | A component that applies a decision. With OpenShell, the gateway enforces admission and governance decisions and the sandbox supervisor enforces request decisions. |
+| Enrichment stage | The first stage of request evaluation. The gateway consults registered policy information providers and writes their facts to `context.<domain>` before any rule runs. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `EvaluationService` | The policy gateway's gRPC API for direct decisions over its Unix socket. Refer to [Service APIs](/reference/service-apis#evaluationservice). |
+| Extension protocol | OpenShell's versioned contract for gateway interceptors and supervisor middleware. APF implements version `1.0`. |
+| Finding | A `PolicyFinding`, or an inline finding: a typed, labeled observation with a severity, recorded with a decision. A finding never changes the decision. |
+| Gateway interceptor | An OpenShell extension called on gateway RPCs. APF's interceptor injects signed policy at admission and governs policy and provider changes. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor). |
+| Governed path | The sequence of controls every governed agent passes through, from admission to each request. Refer to [The Governed Path](/about/governed-path). |
+| High-water mark | The highest `policy_revision` the policy service has accepted. |
+| Hot swap | Replacing the active policy without a restart. The policy service swaps bundles on refresh or poll, and the gateway swaps its evaluator when the served policy set changes. |
+| JWKS | JSON Web Key Set. The policy service publishes its document signing public key at `/.well-known/jwks.json` so the gateway can verify provenance tokens. |
+| Layer 1, Layer 2 | Layer 1 is OpenShell's own enforcement of the sandbox policy: hosts, ports, methods, paths, and binaries. Layer 2 is APF's per-request decision on content and context. |
+| Manifest | The `PolicyBundle` document. It carries the bundle's identity, revision, validity window, and the path and digest of every member. |
+| MCP | Model Context Protocol. APF recognizes MCP `tools/call` requests in HTTP bodies and evaluates them as tool calls. |
+| PAP | Policy Administration Point. In APF, the policy service. |
+| Payload digest | The SHA-256 of a manifest's verified payload, without the signature. It stays the same when identical content is re-signed. |
+| PDP | Policy Decision Point. In APF, the policy gateway. |
+| PEP | Policy Enforcement Point. In APF's OpenShell integration, the OpenShell gateway and sandbox supervisor. |
+| PIP | Policy Information Point. In APF, the policy information providers registered with the policy gateway. |
+| Policy gateway | `apf-policy-gateway`. Evaluates requests against the active policy set and hosts the OpenShell interceptor and middleware. Refer to [Policy Gateway](/how-it-works/policy-gateway). |
+| Policy information provider | A service that supplies attested facts about a request's subject, tool, or target. The gateway consults it in the Enrichment stage and exposes its facts as `context.<domain>` with a `_meta` provenance record. It attests facts and never decides. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `policy_revision` | A bundle's monotonic revision number. Every change needs a higher one. |
+| Policy service | `apf-policy-service`. Loads, verifies, and projects signed bundles and serves the projections with provenance tokens. Refer to [Policy Service](/how-it-works/policy-service). |
+| Policy set | The compiled rules, annotators, effects, and findings, served as `apf.policy.v1/default` and evaluated by the gateway. |
+| `PRE_CREDENTIALS` | The supervisor middleware phase at which APF evaluates a request, after Layer 1 checks and before credentials are injected. |
+| Projection | A runtime-native document compiled from a bundle, such as the OpenShell sandbox policy. Each projection is served under a surface kind. Refer to [Policy Projection](/how-it-works/policy-projection). |
+| Projector | The code that produces projections for one runtime. APF's is `apf-openshell-projector`. |
+| Provenance token | A signed JWT the policy service mints for each document served over gRPC, binding it to its digest, revision, and the bundle loaded at startup. The interceptor verifies it before using the document. |
+| Provider | A `Provider` document that declares an external service's endpoints and credentials. APF projects it into an OpenShell provider profile. |
+| `SandboxPolicy` | The document that declares a sandbox's filesystem, process, and network perimeter. Refer to [Sandbox Policies](/author-policies/sandbox-policies). |
+| Supervisor middleware | An OpenShell extension the sandbox supervisor calls for matching requests. APF's is `apf-content-policy`. Refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware). |
+| Surface | A document kind that one consumer understands, such as `openshell.sandbox.v1`. Served by the policy service. |
+| Trust profile | The TOML file that tells an APF listener how to verify OpenShell's extension tokens. |
+| Trust root | A public key a verifier trusts to sign bundles, stored as a file named after its key ID. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots). |
+| Verdict | An advisory signal on an allowed request: `allow`, `warn`, or `escalate`. It does not block the request. |
+| yaml-sigil | The signature format APF uses for bundles. The signature travels as a second YAML document after the signed payload. |
+
+## Next Steps
+
+- For how these pieces fit together, refer to [Architecture](/about/architecture).

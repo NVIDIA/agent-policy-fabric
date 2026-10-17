@@ -1,0 +1,39 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Why NVIDIA Agent Policy Fabric"
+sidebar-title: "Why APF"
+description: "Why an enterprise needs one signed source of agent policy: the gaps a sandbox leaves, what APF does about them, and where it fits with the agent runtime."
+keywords: "Generative AI, Cybersecurity, AI Agents, Agent Governance, Policy as Code, Signed Policy"
+position: 1
+---
+
+What an agent decides to do is hard to predict. What it is allowed to do should not be. NVIDIA Agent Policy Fabric (APF) puts those limits in one signed policy that your organization controls, so they do not change with the host, the developer, or the system an agent runs under.
+
+## The Problem
+
+Long-running AI agents can combine tools, credentials, and network access in ways existing controls were not designed to govern. Each control, such as the sandbox, the tool router, and the credential source, keeps its own policy in its own format, evaluates it with its own engine, and writes its own audit. Three problems follow:
+
+- **Fragmented policy.** The same intended rule is interpreted differently in each layer, so decisions drift apart, and no layer can prove the others enforced it.
+- **Deployment-specific requirements.** Default policy has to be adapted to each deployment's tools, environment, and operating limits.
+- **No accountability.** Policy is buried in per-runtime configuration that is not signed, so a reviewer cannot bind an approval to what was actually deployed, and an auditor cannot prove which policy was active at a given time.
+
+## What APF Does
+
+APF connects enterprise policy to runtime controls. Policy is signed at source and verified at admission.
+
+- **Unified, governed policy.** One governed source of enterprise policy that keeps its authority and provenance. It is signed by the authority and verified before it is served, and edits that bypass it are refused.
+- **The right policy for each deployment.** Policy is authored as reviewable documents, covering the sandbox perimeter, approved providers, and tool grants, tailored to each deployment's configuration and limits.
+- **Verifiable attribution.** Each governed action connects to the policy and evidence behind its authorization. Each sandbox carries the bundle digest, revision, and signer, and each decision records the revision.
+
+## Where APF Fits
+
+The agent runtime builds the boundary around the agent: filesystem, network, and credentials. APF connects enterprise policy to that boundary. It verifies the signed policy and projects it into the runtime's native controls. Where those controls are not enough, an optional decision layer evaluates each governed request against that policy. APF decides. The runtime enforces. [NVIDIA OpenShell](https://docs.nvidia.com/openshell/latest/about/overview) is the runtime APF is integrated with today.
+
+## Next Steps
+
+- To understand how policy flows from authoring to enforcement, refer to [Architecture](/about/architecture).
+- To follow one agent action end to end, refer to [The Governed Path](/about/governed-path).
+- To see the scenarios APF is built for, refer to [Use Cases](/about/use-cases).
+- To see which capabilities are available today, refer to [Support and Compatibility](/about/support-and-compatibility).
+- To run APF yourself, start with [Prerequisites](/get-started/prerequisites).

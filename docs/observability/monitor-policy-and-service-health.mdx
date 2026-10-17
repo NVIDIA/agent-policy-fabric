@@ -1,0 +1,71 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Monitor Policy and Service Health"
+sidebar-title: "Monitor Policy and Service Health"
+description: "Check APF service liveness and readiness, track policy freshness across hosts, and alert on the audit and log signals that indicate a problem."
+keywords: "Generative AI, Cybersecurity, AI Agents, Monitoring, Health Checks, Readiness, Policy Freshness, Alerting, Logs"
+position: 6
+---
+
+Monitoring APF means answering three questions: are the services up, is every host enforcing the policy you published, and is anything being refused that should not be. APF answers them through health endpoints, audit records, and logs.
+
+## Service Health
+
+| Check | Endpoint | Healthy response |
+|---|---|---|
+| Policy service liveness | `GET /healthz` on the HTTP surface | `200` with `{"status":"ok","version":"<version>"}` |
+| Policy service readiness | `GET /readyz` on the HTTP surface | `200` with `{"status":"ok"}`. `503` with `{"status":"not_ready","reason":"no bundle loaded"}` until a bundle is loaded. |
+| Policy service over the socket | `PolicyService.Health` gRPC on the Unix socket | `HEALTH_STATE_OK` |
+| Policy gateway | The `EvaluationService` socket and the OpenShell listener ports | The socket file exists and the listeners accept connections. |
+
+The HTTP surface is optional. Without it, use the gRPC `Health` RPC from a process running as the service account, or check that the socket exists. The policy gateway has no HTTP endpoint. The local container stack checks it with `test -S` on its socket.
+
+Health routes need no token. Keep the HTTP port bound to loopback, and do not expose it off the host for monitoring. Use a local agent or a narrow proxy that forwards only the health routes.
+
+## Policy Freshness
+
+A host is enforcing the policy you published when the same revision appears at every stage. Compare `policy_revision`:
+
+| Stage | Where to read the revision |
+|---|---|
+| Published | Your artifact store. |
+| Verified and active in the policy service | The latest `policy_activation` record with `outcome` `success` in `apf-policy-service-audit.jsonl`. |
+| Active in the gateway | The latest `policy_activation` record in `apf-policy-gateway-audit.jsonl`. |
+| Applied to a sandbox | The sandbox's `apf.nvidia.com/policy-version` annotation. |
+
+A gateway revision that stays lower than the policy service revision for longer than the gateway's refresh interval has several possible causes. The update changed no rules, annotators, effects, or findings, so the gateway saw no change, which is expected. The gateway could not fetch, decode, or build the new policy set; check its log for `get_document failed on hot-swap`, `PolicySet decode failed on hot-swap`, or `evaluator rebuild failed`. The change landed before the gateway's first poll after startup. Or bundle refresh is disabled with `--bundle-refresh-interval-secs 0`, or the gateway cannot reach the policy service; check its log for `digest watcher: get_document failed`. Refer to [Policy Updates Do Not Take Effect](/deployment/troubleshooting#policy-updates-do-not-take-effect). Sandboxes with a lower revision were admitted before the update and have not been refreshed.
+
+Also track `expires_at` for the active bundle. APF does not warn before a bundle expires. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+
+## Signals to Alert On
+
+### From Audit Records
+
+| Signal | Query | Meaning |
+|---|---|---|
+| Weakened startup | `event_type == "policy_service_startup"` and `security_state == "degraded"` | The policy service started with a weakened control, such as an ephemeral document key, an unauthenticated bundle source, a token in process arguments, or a non-loopback HTTP bind. |
+| Rejected bundle | `event_type == "policy_verification"` and `outcome == "refused"` | A delivered bundle failed verification. |
+| Activation refused | `event_type == "policy_activation"` and `outcome == "refused"` | A verified bundle's revision could not be persisted, or an HTTP source poll fetched a bundle that is not newer than the active one. |
+| Unsigned document served | `event_type == "provenance_signing"` | A document was served without a provenance token. |
+| Authentication refusals | `event_type == "authentication"` | Callers failing the trust boundary, such as `extension_auth.*`, `auth.uds_peer_rejected`, or `auth.http_bearer_invalid`. A spike can mean misconfiguration or probing. |
+| Evaluation failures | `reason_code == "middleware.evaluation_failed"` | Requests denied because evaluation could not complete. |
+| Admission refusals | `event_type == "policy_injection"` or `"admission_validation"` with `outcome == "refused"` | Sandboxes that could not be admitted. |
+
+### From Logs
+
+Some conditions appear only in the services' logs, which go to standard output and are filtered with `RUST_LOG`, `info` by default:
+
+- The gateway logs `evaluator rebuild failed`, `PolicySet decode failed on hot-swap`, or `get_document failed on hot-swap` when it keeps its previous evaluator after a bad update.
+- The gateway logs `digest watcher: get_document failed` when it cannot reach the policy service.
+- The policy service logs `poll failed for variant` when the HTTP source cannot fetch.
+- The gateway exits if it cannot record a policy hot swap. Alert on unexpected restarts.
+
+## Metrics and Capacity
+
+**In development.** APF does not expose a metrics endpoint in this release, and capacity and performance guidance is not yet in the repository. Use the health checks, audit records, and logs above.
+
+## Next Steps
+
+- To act on these signals, refer to [Troubleshooting](/deployment/troubleshooting).
+- To ship audit records to your monitoring system, refer to [Export Audit Events](/observability/export-audit-events).

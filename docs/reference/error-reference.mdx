@@ -1,0 +1,249 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Error Reference"
+sidebar-title: "Error Reference"
+description: "Every reason code, bundle rejection reason, deny reason, and status code APF produces, with the component that produces it, what triggers it, and what to do."
+keywords: "Generative AI, Cybersecurity, AI Agents, Error Codes, Reason Codes, Troubleshooting, Bundle Rejection, Deny Reason, Audit"
+position: 8
+---
+
+This page lists every code APF writes to its audit records or returns to a caller on the `main` branch. Search it for the code you see. For a diagnostic workflow, refer to [Troubleshooting](/deployment/troubleshooting) and [Investigate a Denied Request](/observability/investigate-a-denied-request).
+
+## Policy Service Startup
+
+Written once per start as `policy_service_startup`. The first weakened control becomes the `reason_code`, and `error.message` lists all of them.
+
+| `reason_code` | `security_state` | Cause | Fix |
+|---|---|---|---|
+| `startup.secure` | `secure` | No weakened controls. | None. |
+| `startup.token_in_process_args` | `degraded` | `--bundle-source-token` was passed on the command line, where other local processes can read it. | Use `--bundle-source-token-file`. |
+| `startup.ephemeral_signing_key` | `degraded` | No `--document-signing-key`, so a random key signs provenance tokens. It changes on every restart. | Configure a persistent document signing key. |
+| `startup.bundle_source_unauthenticated` | `degraded` | The HTTP source has no token. | Set `--bundle-source-token-file`. |
+| `startup.http_bind_non_loopback` | `degraded` | The HTTP surface listens on a non-loopback address. | Bind to `127.0.0.1`, or restrict the port with a firewall. |
+
+These failures stop the policy service. The message is printed on standard error. The first four occur before the startup record is written, so they leave no audit record. The others occur after it.
+
+| Message | Fix |
+|---|---|
+| `no audit log directory configured; set --audit-log-dir or APF_AUDIT_LOG_DIR (audit_log_dir in the config file)` | Set the audit directory. |
+| ``trust-root dir <dir> contains no `*.pub` keys`` | Install at least one trust root. `.pem` and `.p256` keys also count. |
+| `load counter store: ...` | Restore or remove the corrupt counter file. Refer to [Backup and Recovery](/deployment/backup-and-recovery). |
+| `--http-addr requires --http-bearer-token-file; ...` | Provide a token file, or remove `--http-addr`. |
+| `--bundle-path (or APF_BUNDLE_PATH) is required when --policy-source=local` | Set the bundle path. |
+| `--bundle-source-url required when --policy-source=http` | Set the bundle URL. |
+| `--bundle-source-token-file <path> is empty; unset it to fetch anonymously` | Write the token to the file, or remove the flag. |
+| `bundle verification failed: [...]` | The initial bundle was rejected. Refer to [Bundle Rejection Reasons](#bundle-rejection-reasons). |
+| `unknown --resolver: <value>` | Use `passthrough` or `claims`. |
+| `--claims-config required when --resolver=claims` | Provide the claims file. |
+
+## Bundle Rejection Reasons
+
+A rejected bundle produces a `policy_verification` record with `outcome` `refused`, `reason_code` `policy.bundle_rejected.<first reason>`, the reason codes in `rejection_reasons`, and the full detail in `error.message`. With the HTTP source, the policy service picks the manifest from the archive by trying each `.yaml` file until one verifies and parses. If none does, for example because the signature is invalid or the signing key is not trusted, it never reaches the verification step: no `policy_verification` record is written, and the only message is `find bundle manifest: no bundle manifest (.yaml) found in extracted archive at <path>` in the service log. The same text appears in `apf-compile` errors and in `POST /v1/refresh` responses.
+
+| Reason | Detail format | Cause | Fix |
+|---|---|---|---|
+| `signature_invalid` | `signature_invalid: <detail>` | The signature did not verify. Refer to the next table. Nothing else is checked. | Re-sign with a trusted key, and do not edit the signed file. |
+| `bundle_parse_failed` | `bundle_parse_failed: <error>` | The signed payload is not a valid manifest. | Fix the template and re-sign. |
+| `manifest_member_unreadable` | `manifest_member_unreadable: <manifest directory>/<path> (<error>)` | A member file is missing or unreadable. | Ship every member, at its manifest path relative to the manifest. |
+| `manifest_hash_unset` | ``manifest_hash_unset: <path> (declared `<value>`)`` | A digest is empty or still `REPLACE_WITH_DIGEST`. | Sign with `apf-compile genfixture`. |
+| `manifest_hash_mismatch` | `manifest_hash_mismatch: <path>: declared <digest>, actual <digest>` | A member changed after signing. | Re-sign, or restore the member. |
+| `not_before_invalid` | `not_before_invalid: <error>` | `not_before` is not RFC 3339. | Fix the timestamp. |
+| `expires_at_invalid` | `expires_at_invalid: <error>` | `expires_at` is not RFC 3339. | Fix the timestamp. |
+| `bundle_not_yet_valid` | `bundle_not_yet_valid: now <time> < not_before <time>` | The bundle is not valid yet. | Wait, or check the host clock. |
+| `bundle_expired` | `bundle_expired: now <time> > expires_at <time>` | The bundle has expired. | Publish a renewed bundle with a higher revision. |
+| `runtime_compat_invalid` | ``runtime_compat_invalid: <adapter>.min_version `<value>` is not semver (<error>)`` | A `min_version` is not a semantic version. | Fix the version string. |
+| `runtime_compat_mismatch` | `runtime_compat_mismatch: bundle requires <adapter> >= <version>, caller is <version>` | Not produced in this release, because no runtime versions are supplied. | |
+| `counter_regression` | `counter_regression: bundle counter <n> <= high-water-mark <n>` | The revision is lower than the accepted one, or is `0`. | Publish with a higher revision. |
+| `counter_content_mismatch` | `counter_content_mismatch: bundle counter <n> already accepted with a different artifact` | Different content at the accepted revision. | Increase `policy_revision`. |
+
+### Signature Details
+
+| Detail | Cause |
+|---|---|
+| `trust_root_unknown: <keyid> (loaded: [...])` | No trust root has the signature's key ID. |
+| `cryptographic verification failed` | The signed content changed, or the key does not match. |
+| `malformed or unsigned bundle artifact` | The file has no valid signature document. |
+| `signature carrier has no keyid` | The signature document lacks `keyid`. |
+| `artifact has no signing attempt` | The file is not signed. |
+| `malformed signing attempt` | The signature document is damaged. |
+| `unsupported algorithm <alg>` | The algorithm is not supported. |
+
+## Policy Service Records
+
+### Activation
+
+| `reason_code` | `outcome` | Meaning |
+|---|---|---|
+| `policy.bundle_verified` | `success` | Verification passed. Recorded as `policy_verification`. |
+| `policy.bundle_loaded` | `success` | The bundle verified, compiled, and its revision was recorded. |
+| `policy.no_projections` | `success` | Defined for a startup bundle that produces no projections. Not expected in practice, because every bundle produces the policy set and provider profile set. |
+| `policy.bundle_hot_swapped` | `success` | An HTTP source poll put a new bundle in force. |
+| `policy.bundle_rejected.counter_persist_failed` | `refused` | The counter store could not be written. The bundle is not activated. `retryable` is `true`. Check the counter store's disk and permissions. |
+| `policy.bundle_rejected.counter_not_newer` | `refused` | An HTTP source poll fetched a bundle whose revision is not newer than the active one. It follows `policy.bundle_verified` and `policy.bundle_loaded` records for the same bundle. The active bundle stays. |
+| `policy.bundle_rejected.unspecified` | `refused` | A `policy_verification` record. Verification failed with no recognizable reason. Read `error.message`. |
+
+A bundle that verifies but fails to load its members or compile produces no activation record. The refresh response or the service log carries the error, such as `compile bundle: ...`.
+
+### Documents and Refresh
+
+| `reason_code` | `outcome` | Meaning |
+|---|---|---|
+| `policy.document_vended` | `success` | A document was served. Recorded once per document and revision for each run of the service. |
+| `policy.document_not_found` | `refused` | No document of that kind and name. |
+| `policy.document_request_invalid` | `refused` | The kind is empty or not in `--surfaces`. |
+| `policy.refresh_triggered` | `success` | An authenticated `POST /v1/refresh` arrived. A successful local refresh is then recorded as `policy.bundle_loaded`, and a verification failure as a refusal. A counter store write failure is recorded as `policy.bundle_rejected.counter_persist_failed`. Other failures write no further record: a missing `bundle_path`, an HTTP fetch failure, or a compilation error, which follows a successful `policy.bundle_verified` record. |
+| `policy.provenance_mint_failed` | `failure` | A provenance token could not be signed. The document was served without one, and the interceptor will deny admissions that use it. |
+
+### Authentication
+
+| `reason_code` | Meaning |
+|---|---|
+| `auth.http_bearer_invalid` | An HTTP request to a protected route had a missing or wrong bearer token. |
+| `auth.uds_peer_rejected` | A Unix socket peer's UID did not match `--allowed-uid`. |
+| `auth.uds_peer_cred_failed` | A Unix socket peer's credentials could not be read. |
+| `auth.uds_refusals_dropped` | Refusals arrived faster than they could be recorded. The record gives the count. |
+
+## Gateway Records
+
+| `reason_code` | Event type | Meaning |
+|---|---|---|
+| `policy.bundle_activated` | `policy_activation` | The gateway built its first evaluator at startup. |
+| `policy.bundle_hot_swapped` | `policy_activation` | The gateway swapped in a new evaluator. |
+| `policy.request_allowed` | `authorization` | `EvaluationService` allowed a request. |
+| `policy.request_denied` | `authorization` | `EvaluationService` denied a request. `error.message` holds the [deny reason](#deny-reasons). |
+
+If the gateway cannot fetch, decode, or build a new policy set, it logs `get_document failed on hot-swap`, `PolicySet decode failed on hot-swap`, or `evaluator rebuild failed`, keeps its current evaluator, and writes no record. At startup the same failures stop the gateway, with `fetch apf.policy.v1 PolicySet`, `decode PolicySet`, or `build initial Cedar evaluator` followed by the cause, for example `build Cedar evaluator: evaluator engine error: rule '<name>': policy parse: ...`.
+
+## Interceptor Records
+
+The interceptor answers OpenShell with `allowed: false` and the reason in the table. OpenShell refuses the operation.
+
+### Sandbox Creation
+
+| `reason_code` | Reason returned | Cause |
+|---|---|---|
+| `interceptor.policy_injected` | | The signed sandbox policy was injected. |
+| `interceptor.inject_denied.no_provenance_token` | `policy service vended no provenance token` | The policy service served the projection without a token. |
+| `interceptor.inject_denied.invalid_jwt` | `provenance JWT invalid`, or a specific claim error | The token's signature, expiry, or claims failed. Check that `--jwks-url` points at the running policy service. The gateway fetches the key at startup and then every `--jwks-refresh-interval-secs`, so a policy service restarted with an ephemeral key invalidates tokens until the next fetch. |
+| `interceptor.inject_denied.policy_identity_mismatch` | `response policy identity disagrees with the signed token` | The served digest or version does not match the token. |
+| `interceptor.inject_denied.body_digest_mismatch` | `policy body digest mismatch` | The served body does not hash to the token's digest. |
+| `interceptor.inject_denied.unsigned_projection` | `policy projection has no provenance token` | Defensive check. Not expected. |
+| `interceptor.validate_allowed` | | Validation passed. |
+| `interceptor.validate_allowed.no_spec_digest` | | Validation passed. The token carried no spec digest to compare. |
+| `interceptor.validate_denied.provenance_missing` | `sandbox policy integrity check failed` | The admission lost its provenance annotation. |
+| `interceptor.validate_denied.provenance_invalid` | `sandbox policy integrity check failed` | The provenance token or annotations do not verify. |
+| `interceptor.validate_denied.spec_digest_mismatch` | `sandbox policy integrity check failed` | The sandbox policy changed between injection and validation. |
+
+Infrastructure failures return a gRPC status instead and write no record: `INVALID_ARGUMENT` with `operation missing name (sandbox_id)`, `UNAVAILABLE` with `policy service unavailable: ...`, or `INTERNAL` with `patch generation failed: ...`. The last two also apply to configuration refreshes.
+
+### Configuration Changes
+
+| `reason_code` | Reason returned | Cause |
+|---|---|---|
+| `interceptor.policy_injected.unverified` | | The current signed policy was injected into a configuration refresh. |
+| No record | `policy projection has no provenance token` | A refresh found no provenance token on the served projection. |
+| `interceptor.govern_denied.direct_policy_mutation` | `direct policy mutation not permitted; policy is managed by APF` | The request tried to set the policy or merge operations directly. |
+| `interceptor.govern_denied.approval_mode_change` | `approval mode is managed by APF` | The request tried to change `proposal_approval_mode`. |
+| `interceptor.govern_denied.body_digest_mismatch` | `policy body digest mismatch` | The served body does not hash to its token's digest. |
+| `interceptor.govern_denied.policy_identity_mismatch` | `response policy identity disagrees with the token` | The served digest or version does not match the token. |
+| `interceptor.validate_denied.post_injection_mutation` | `config policy integrity check failed` | A forbidden field was added, or the policy removed, after injection. |
+| `interceptor.validate_denied.approval_mode_change` | `approval mode is managed by APF` | The validated request changes the approval mode. |
+| `interceptor.validate_denied.provenance_missing`, `interceptor.validate_denied.provenance_invalid`, `interceptor.validate_denied.spec_digest_mismatch` | `config policy integrity check failed` | As for sandbox creation. |
+
+### Providers and Proposals
+
+| `reason_code` | Reason returned | Cause |
+|---|---|---|
+| `interceptor.provider_type_allowed` | | The provider type is managed by the bundle. |
+| `interceptor.govern_denied.unmanaged_provider_type` | `provider type '<type>' is not a bundle-managed profile` | Create providers only of types the bundle defines. |
+| `interceptor.provider_profiles_allowed` | | The imported or updated profiles are managed by the bundle and match its content. |
+| `interceptor.govern_denied.unmanaged_provider_profile` | `provider profile '<id>' is not managed by the APF bundle` | Add the profile to the bundle instead. |
+| `interceptor.govern_denied.profile_content_mismatch` | `provider profile '<id>' content does not match the APF bundle` | The imported or updated profile differs from the bundle's copy. Change the profile in the bundle, not in OpenShell. |
+| `interceptor.govern_denied.profile_delete` | `provider profiles are bundle-managed; delete is not permitted` | Remove the profile from the bundle instead. |
+| `interceptor.govern_denied.policy_service_unavailable` | `... governance check failed: policy service unavailable` | The interceptor could not fetch the bundle's profiles. |
+| `interceptor.policy_analysis_allowed` | | A mechanistic policy analysis was allowed. |
+| `interceptor.govern_denied.agent_authored_proposal` | `agent-authored policy proposals are not permitted; policy is managed by APF` | Turn off agent policy proposals in OpenShell. |
+| `interceptor.govern_denied.draft_approval` | `policy proposal approval is not permitted; policy is managed by APF` | Change policy through a bundle. |
+
+### Other Interceptor RPCs
+
+These return a gRPC status and write no record.
+
+| RPC | Status | Message |
+|---|---|---|
+| `Describe` | `FAILED_PRECONDITION` | OpenShell's extension protocol metadata is missing or incompatible. |
+| `SnapshotProviderProfiles` | `INTERNAL` | `list_documents: ...` or `get_document '<name>': ...` |
+| `SnapshotProviderProfiles` | `FAILED_PRECONDITION` | `provider profile verifier unavailable`, `provider profile provenance invalid`, `provider profile provenance mismatch`, `provider profile policy changed during snapshot`, or `provider profile snapshot contains an invalid profile` |
+
+## Middleware Records
+
+The middleware returns a deny's code to OpenShell without the `middleware.` prefix and records it with the prefix. An allow carries an empty code on the wire. `middleware.allowed` and `middleware.allowed_with_findings` appear only in audit records. A `Describe` protocol mismatch and WebSocket sessions return gRPC statuses, and a non-empty configuration makes `ValidateConfig` answer `valid: false` with `configuration must be empty; received <n> field(s)`. None of these writes a decision record. Caller authentication failures on any RPC write `extension_auth.*` records.
+
+| `reason_code` | Decision | Reason returned | Cause |
+|---|---|---|---|
+| `middleware.allowed` | Allow | | Allowed with no findings. The body or headers may have been rewritten. |
+| `middleware.allowed_with_findings` | Allow | | Allowed with at least one finding. |
+| `middleware.policy_denied` | Deny | The [deny reason](#deny-reasons) | The policy denied the request. |
+| `middleware.evaluation_failed` | Deny | `policy evaluation failed` | The evaluator returned an error. |
+| `middleware.effect_application_failed` | Deny | `policy effects could not be applied` | A patch could not be applied, for example to a missing field or a body that is not JSON. |
+| `middleware.replacement_body_too_large` | Deny | `policy replacement body exceeds middleware limit` | The rewritten body is over 4 MiB. |
+| `middleware.invalid_header_mutation` | Deny | `policy produced an invalid header mutation` | A header mutation breaks the OpenShell header rules. Refer to [Effects and Findings](/author-policies/effects-and-findings#header-rules-on-openshell). |
+| `middleware.invalid_findings` | Deny | `policy produced invalid findings` | More than 32 findings, or one over 4 KiB. |
+| `middleware.invalid_mcp_request` | Deny | `invalid MCP tools/call request` | A malformed `tools/call`, or a JSON-RPC batch that contains one. |
+| `middleware.body_too_large` | Deny | `request body exceeds middleware limit` | The request body is over 4 MiB. |
+| `middleware.missing_target` | Deny | `HTTP request target is missing` | OpenShell sent no target. |
+| `middleware.invalid_phase` | Deny | `unsupported middleware phase` | The call was not at `PRE_CREDENTIALS`. Check the OpenShell registration. |
+| `middleware.invalid_config` | Deny | `middleware configuration must be empty` | The sandbox policy's middleware entry carries a `config`. |
+
+## Authentication Records
+
+Written by the interceptor and middleware to their own audit files. Not written in insecure mode.
+
+| `reason_code` | gRPC status | Cause |
+|---|---|---|
+| `extension_auth.credential_invalid` | `UNAUTHENTICATED` | The bearer JWT is missing, malformed, expired, or does not match the trust profile. |
+| `extension_auth.caller_unauthenticated` | `UNAUTHENTICATED` | No authenticated caller on the request. |
+| `extension_auth.caller_not_allowed` | `PERMISSION_DENIED` | A gateway or supervisor called an RPC it may not call. |
+| `extension_auth.sandbox_binding_mismatch` | `PERMISSION_DENIED` | A supervisor's token is bound to a different sandbox than the request. Middleware only. |
+
+## Deny Reasons
+
+The policy's deny reason appears as `reason` on a middleware deny, in `error.message` on its audit record, and as `reason` from `EvaluationService`.
+
+| Format | Cause |
+|---|---|
+| `<rule>/<id>` | A `forbid` fired in `<rule>`. `<id>` is its `@id` annotation, or a Cedar policy ID such as `policy1` without one. |
+| `<id>` | A `forbid` with an `@id` that already contains `/`, such as `security-content-gate/deny-secret`. |
+| `no grant for <action>` | A tool call that no capability grant permits. `<action>` is the tool name, or `<tool>::<capability>` from an `EvaluationService` call that sends a `verb`. |
+| `<rule>: conditions not met for <action>` | A tool call that no grant permits, where a capability rule named after the tool exists. |
+| `runtime_error:missing_annotation_source:<path>` | An effect or finding reads an annotation the request did not produce. |
+| `pip_<status>:<provider>` | A policy information provider registered with `on_failure: fail_closed` could not answer. `<status>` is the lookup status, such as `timeout` or `unavailable`, and `<provider>` is the registered name. `pip_invalid_input` denies regardless of the failure mode. Refer to [Policy Information Providers](/integrations/policy-information-providers#failure-modes). |
+
+## gRPC Status Codes
+
+The policy service's `PolicyService` and the gateway's `EvaluationService` return these statuses. Refer to [Service APIs](/reference/service-apis) for details.
+
+| Service and RPC | Status | Message |
+|---|---|---|
+| `PolicyService` `GetDocument`, `ListDocuments` | `INVALID_ARGUMENT` | `kind must be non-empty`, or `kind '<kind>' is not served by this instance` |
+| `PolicyService` `GetDocument` | `NOT_FOUND` | `document '<kind>/<name>' not found` |
+| `EvaluationService` `Evaluate` | `INTERNAL` | `evaluator engine error: <detail>`. No audit record is written. |
+
+## Policy Service HTTP Status Codes
+
+| Status | Body | Cause |
+|---|---|---|
+| `400` | `kind must be non-empty` or `kind '<kind>' is not served by this instance` | Empty or unserved kind. |
+| `400`, `422` | Generated by the HTTP framework | A `POST /v1/refresh` JSON body that is malformed, empty, or has the wrong shape. No audit record is written. |
+| `415` | Generated by the HTTP framework | A `POST /v1/refresh` body with a `Content-Type` other than JSON. `curl -d` without a JSON header sends form encoding and gets this. A request with no `Content-Type` is treated as having no body. |
+| `405` | Generated by the HTTP framework | The wrong method for a route. |
+| `401` | `missing or invalid bearer token` | Bad or missing token. |
+| `404` | `document '<kind>/<name>' not found` | Unknown document. |
+| `500` | `refresh failed: <error>` | A local source refresh failed, for example `bundle_path is required for local bundle refresh`, `bundle verification failed: [...]`, or `counter advance: ...`. An HTTP source refresh does not return `500`. |
+| `503` | `{"status":"not_ready","reason":"no bundle loaded"}` | `/readyz` before a bundle is active. |
+
+## Next Steps
+
+- For the record structure, refer to [Audit Event Schema](/reference/audit-event-schema).
+- To diagnose a failure from its symptom, refer to [Troubleshooting](/deployment/troubleshooting).
