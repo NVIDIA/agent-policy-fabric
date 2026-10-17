@@ -31,7 +31,7 @@ The project's CI builds release binaries of `apf-policy-service` and `apf-policy
 
 ## OpenShell Compatibility
 
-APF generates its OpenShell bindings from the OpenShell protobuf sources at a pinned commit. The pin is set in `crates/apf-proto/build.rs`.
+APF generates its OpenShell bindings from the OpenShell protobuf sources at a pinned commit. The sources are committed under `contracts/third_party/openshell/proto`, and the pin is recorded in `contracts/third_party/pins.toml`.
 
 | APF | OpenShell pin | Notes |
 |---|---|---|
@@ -52,12 +52,12 @@ APF builds from source with Cargo.
 |---|---|
 | Rust toolchain | `1.95.0`, pinned in `rust-toolchain.toml`. The workspace declares `rust-version = "1.88"` and edition 2024. |
 | Protocol Buffers compiler | `protoc` on `PATH`, with the well-known type definitions. The container build installs `protobuf-compiler` and `libprotobuf-dev`. |
-| `buf` CLI | Required at build time. `crates/apf-proto/build.rs` runs `buf export` against the OpenShell GitHub repository at the pinned commit. |
-| Network access during build | Access to `github.com` for the OpenShell protobuf export and to crates.io for dependencies. |
+| `buf` CLI | Optional. `buf lint contracts/` and `cargo xtask vendor-protos` use it; the build does not. |
+| Network access during build | crates.io only; the third-party protobuf sources are committed. |
 | Optional tools | `mise` for the repository tasks, `cargo-nextest` for tests, `cargo-deny` for license checks, Docker with Compose v2 for the container stack and the verification harness, and `kind`, `kubectl`, Helm 3, and `yq` v4 to run that harness against the Helm chart on a kind cluster. |
 
 <Warning>
-If `buf export` fails, the build script writes an empty placeholder for the OpenShell sandbox proto and continues, and `apf-proto` then fails to compile with errors about missing generated OpenShell files. The build script's warning is visible only with `cargo build -vv`. Make sure `buf` is installed and `github.com` is reachable before you build.
+If `cargo build` reports a missing vendored OpenShell proto, the committed sources under `contracts/third_party/` are incomplete. Run `cargo xtask vendor-protos` to restore them from the pinned commits; the build does not fall back to a placeholder.
 </Warning>
 
 ## Platforms
