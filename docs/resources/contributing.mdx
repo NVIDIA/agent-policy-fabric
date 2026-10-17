@@ -56,7 +56,7 @@ mise run dag-guard  # crate dependency DAG
 mise run buf-lint   # buf lint contracts/
 ```
 
-`mise tasks ls` lists every task. If `buf lint` reports missing third-party definitions under `contracts/third_party/`, export them first as the repository's CI configuration does.
+`mise tasks ls` lists every task. The third-party protobuf sources under `contracts/third_party/` are committed; `cargo xtask vendor-protos --check` verifies that they match the pins in `contracts/third_party/pins.toml`.
 
 ### End-to-End Checks
 

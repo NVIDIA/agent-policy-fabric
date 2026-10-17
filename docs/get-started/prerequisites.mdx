@@ -32,7 +32,7 @@ You should be comfortable with:
 | `curl` | Check health endpoints and call the refresh API. The native run commands in [Installation](/get-started/installation) use it. |
 | `jq` | Read and filter audit records in the walkthroughs and tutorials. |
 
-The build needs network access to `github.com`, for the OpenShell protobuf export, and to crates.io, for dependencies.
+The build needs network access to crates.io only; the third-party protobuf sources are committed.
 
 The container stack and the kind harness also pull from `ghcr.io` (the OpenShell images and chart, and the sandbox image), `registry.k8s.io` (the pause image), Docker Hub (`grpcurl` and the provider stub image), and `github.com` (the Agent Sandbox controller manifest and the OpenShell CLI).
 
