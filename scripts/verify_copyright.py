@@ -34,6 +34,9 @@ COMMENT_STYLES = {
     ".sh": "#",
 }
 
+# Vendored third-party sources keep their upstream headers.
+VENDORED_PREFIX = "contracts/third_party/"
+
 YEAR_RE = r"(?:\d{4}-)?(?P<year>\d{4})"
 COPYRIGHT_RE = re.compile(
     r"^\s*(?://|#)\s*SPDX-FileCopyrightText:\s*Copyright \(c\) "
@@ -56,6 +59,14 @@ def repo_root() -> Path:
     return Path(out.stdout.strip())
 
 
+def is_vendored(path: Path, root: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return rel.as_posix().startswith(VENDORED_PREFIX)
+
+
 def tracked_files(root: Path) -> list[Path]:
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files"],
@@ -66,8 +77,7 @@ def tracked_files(root: Path) -> list[Path]:
     files = []
     for line in out.stdout.splitlines():
         p = root / line
-        # Vendored third-party sources keep their upstream headers.
-        if line.startswith("contracts/third_party/"):
+        if line.startswith(VENDORED_PREFIX):
             continue
         if p.suffix in COMMENT_STYLES and "/target/" not in line:
             files.append(p)
@@ -179,7 +189,11 @@ def main() -> int:
 
     root = repo_root()
     if args.files:
-        paths = [Path(f).resolve() for f in args.files if Path(f).suffix in COMMENT_STYLES]
+        paths = [
+            p
+            for p in (Path(f).resolve() for f in args.files if Path(f).suffix in COMMENT_STYLES)
+            if not is_vendored(p, root)
+        ]
     else:
         paths = tracked_files(root)
 

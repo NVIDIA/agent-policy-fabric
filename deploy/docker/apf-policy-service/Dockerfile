@@ -11,19 +11,16 @@
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM rust:1.88-bookworm AS build
 
-ARG BUF_VERSION=1.50.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        protobuf-compiler libprotobuf-dev curl \
-    && ARCH="$(dpkg --print-architecture | sed 's/amd64/x86_64/;s/arm64/aarch64/')" \
-    && curl -sSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-${ARCH}" \
-        -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf \
+        protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
 
-# apf-proto/build.rs vendors APF's own IR protos from contracts/proto/; buf is
-# only needed here to export OpenShell's protos from GitHub at build time.
+# apf-proto/build.rs compiles APF's own protos from contracts/proto/ and the
+# committed third-party copies under contracts/third_party/, so the build needs
+# protoc and network access to crates.io only.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release -p apf-policy-service -p apf-compile && \
