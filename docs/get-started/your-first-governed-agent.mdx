@@ -1,0 +1,213 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Run Your First Governed Agent"
+sidebar-title: "Your First Governed Agent"
+description: "Admit an OpenShell sandbox under a signed APF bundle, inspect its policy provenance, exercise allowed, mutated, and denied requests, and find the audit evidence for each."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Governed Agent, Provenance, Audit, OpenShell, Sandbox"
+position: 5
+---
+
+This walkthrough admits a sandbox under the signed bundle from [Your First Signed Policy](/get-started/your-first-signed-policy) and exercises each layer of the governed path. You use `curl` inside the sandbox as a stand-in for an agent, so no AI model is required.
+
+After completing it, you understand:
+
+- How APF injects signed policy into a sandbox and stamps its provenance.
+- How to tie a sandbox back to the exact bundle revision and signer that governs it.
+- Which layer allows, rewrites, or denies a request, and where each decision is recorded.
+- Why a direct policy edit no longer works once APF governs the gateway.
+
+## Coverage
+
+This walkthrough demonstrates signed policy projection and the evidence trail for admission and per-request decisions. It does not cover production signing or Kubernetes deployment.
+
+## Prerequisites
+
+- APF running as native processes with the revision 2 bundle from [Your First Signed Policy](/get-started/your-first-signed-policy). The demo bundle at revision 1 also works if you skip the `GET /get` step.
+- APF registered with your OpenShell gateway as both a gateway interceptor and a supervisor middleware, as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell), and the OpenShell gateway restarted.
+- A workload image with `curl` installed at `/usr/bin/curl` and a `sandbox` user and group, which the demo sandbox policy runs the workload as. The policy lets only `/usr/bin/curl` and `/usr/bin/python3` reach `httpbin.org`.
+- A second terminal set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal), for the host commands.
+- `python3` on the host to decode the provenance token.
+
+<Steps toc={true}>
+
+## Create a Sandbox
+
+Create a sandbox from your image. APF's interceptor runs during creation, so you do not pass a policy.
+
+```shell
+openshell sandbox create \
+  --name apf-demo \
+  --from registry.example.com/team/agent-tools:1.0 \
+  --no-auto-providers
+```
+
+You land in a shell inside the sandbox. Keep it open and run the remaining host commands in a second terminal.
+
+If creation fails, check the interceptor audit file for a `policy_injection` or `admission_validation` record with `"outcome":"refused"`. Admission fails closed when APF cannot fetch or verify the projection. If the policy service is unreachable, no record is written, so also check the gateway's log.
+
+## Inspect the Sandbox Provenance
+
+On the host, inspect the sandbox:
+
+```shell
+openshell sandbox get apf-demo
+```
+
+The `Id` field near the top of the output is the sandbox's OpenShell ID. Note it, because APF's per-request audit records identify the sandbox by this ID:
+
+```shell
+SANDBOX_ID='<the Id value>'
+```
+
+The output also lists the `apf.nvidia.com/*` annotations APF stamped at admission, in alphabetical order:
+
+```text
+  Annotations:
+    apf.nvidia.com/bundle-id: cedar-demo-bundle
+    apf.nvidia.com/correlation-id: <uuid>
+    apf.nvidia.com/document-digest: <sha256 of the projected sandbox policy>
+    apf.nvidia.com/policy-version: 2
+    apf.nvidia.com/provenance-token: <EdDSA JWT>
+    apf.nvidia.com/signer-identity: apf-dev
+```
+
+The annotations are provenance, not policy. OpenShell enforces the injected policy, and the annotations record which signed bundle produced it. `signer-identity` names the policy service's document signing key, which signs every provenance token.
+
+## Decode the Provenance Token
+
+Copy the `apf.nvidia.com/provenance-token` value and decode its claims:
+
+```shell
+TOKEN='<paste the provenance token>'
+python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; print(json.dumps(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4))),indent=2))' "$TOKEN"
+```
+
+```text
+{
+  "jti": "<same value as apf.nvidia.com/correlation-id>",
+  "sub": "apf-dev",
+  "iat": 1790000000,
+  "apf/document-digest": "<same value as apf.nvidia.com/document-digest>",
+  "apf/version": 2,
+  "apf/spec-digest": "<canonical sandbox policy digest>",
+  "apf/bundle-id": "cedar-demo-bundle"
+}
+```
+
+The token is signed with the policy service's document key. Anyone with the public key from `/.well-known/jwks.json` can verify that this sandbox was admitted under revision 2 of `cedar-demo-bundle`. Refer to [Trace Policy Provenance](/observability/trace-policy-provenance) to verify the signature.
+
+## Find the Admission Record
+
+The token's `jti` is also the audit correlation ID for this admission. Search the interceptor audit file for it:
+
+```shell
+JTI='<paste the jti value>'
+grep "$JTI" "$APF_AUDIT_LOG_DIR/apf-policy-gateway-interceptor-audit.jsonl"
+```
+
+You find a `policy_injection` record with reason code `interceptor.policy_injected` and an `effects` block listing the spec paths APF patched, followed by an `admission_validation` record with reason code `interceptor.validate_allowed`.
+
+## Make an Allowed Request
+
+In the sandbox shell, call the endpoint you allowed in your signed policy:
+
+```shell
+curl -s https://httpbin.org/get
+```
+
+The request succeeds. OpenShell allowed it at Layer 1 because the projected policy permits `GET /get` on `httpbin.org`. APF allowed it at Layer 2 because the body carries nothing the content gate flags.
+
+Find the decision in the middleware audit file:
+
+```shell
+grep '"verb":"http.get"' "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl" | tail -n 1
+```
+
+The `authorization` record carries `"decision":"allow"`, `"reason_code":"middleware.allowed"`, the resource `httpbin.org`, `$SANDBOX_ID` as `session_id`, and the `bundle_digest` and `policy_revision` of the policy that decided.
+
+## Make a Request Layer 1 Denies
+
+Call a path the policy does not list:
+
+```shell
+curl -s https://httpbin.org/ip
+```
+
+OpenShell rejects the request with a `policy_denied` response. The decision came from the projected sandbox policy at Layer 1, so APF's middleware is never called and no APF record exists for it. Refer to [OpenShell logs](https://docs.nvidia.com/openshell/latest/observability/accessing-logs) for the denial.
+
+## Make a Request APF Rewrites
+
+Send a body that contains the demo credential pattern the `secret-detector` annotator recognizes:
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"text":"deploy key APF-DEMO-STRING-42"}'
+```
+
+httpbin echoes what it received. The body is not yours. The `security-content-gate` rule matched a secret in a plain HTTP request, so the `redact-wholesale` effect replaced the body before OpenShell injected credentials and forwarded the request:
+
+```text
+"data": "{\"apf_redacted\": true, \"reason\": \"credential pattern detected\"}",
+"headers": {
+  "X-Openshell-Middleware-Apf-Event": "demo_secret",
+  ...
+}
+```
+
+The audit record shows that the request was allowed, what was observed, and what was changed:
+
+```shell
+grep '"reason_code":"middleware.allowed_with_findings"' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl" | tail -n 1
+```
+
+The record carries a `findings` entry with `kind` `secret_detected`, `label` `demo_secret`, and `severity` `critical`, and an `effects` block with `payload_replaced: true`.
+
+## Make a Request APF Denies
+
+APF identifies an MCP tool call from its JSON-RPC body, wherever it is sent. Send a `tools/call` envelope for a tool the bundle does not grant:
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_repo_write","arguments":{}}}'
+```
+
+APF denies the request at Layer 2, and it never reaches httpbin. The `github-grants` rule permits only `github_repo_read`, and every MCP tool call needs at least one capability grant. Repeat the request with `"name":"github_repo_read"` and it is allowed.
+
+The denial is recorded with the policy's reason:
+
+```shell
+grep '"reason_code":"middleware.policy_denied"' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl" | tail -n 1
+```
+
+The record carries `"decision":"deny"`, `"verb":"tool.github_repo_write"`, and an `error.message` of `no grant for github_repo_write`.
+
+## Try to Edit the Policy Directly
+
+On the host, try to widen the sandbox policy without a signed bundle:
+
+```shell
+openshell policy update apf-demo --add-endpoint example.com:443:read-only:rest:enforce
+```
+
+OpenShell refuses the change. APF's interceptor denies direct policy mutations with the reason `direct policy mutation not permitted; policy is managed by APF`, and records a `config_governance` record with reason code `interceptor.govern_denied.direct_policy_mutation`. The only way to change this sandbox's policy is a new signed bundle.
+
+</Steps>
+
+## Clean Up
+
+Exit the sandbox shell and delete the sandbox:
+
+```shell
+openshell sandbox delete apf-demo
+```
+
+## Next Steps
+
+- To change the policy the right way, refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
+- To trace any decision back to its rule, refer to [Investigate a Denied Request](/observability/investigate-a-denied-request).
+- To write your own content controls, refer to [Content Controls](/author-policies/content-controls).

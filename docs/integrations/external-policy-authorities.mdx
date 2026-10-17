@@ -1,0 +1,72 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "External Policy Authorities"
+sidebar-title: "External Policy Authorities"
+description: "Bring your own policy authority and signing authority to APF, and see how external decision and context providers connect to it."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Authority, Signing Authority, BundleSigner, BundleVerifier, PAP, Integration"
+position: 3
+---
+
+APF is deliberately not opinionated about who authors policy or who signs it. The contract between your organization and APF is the signed bundle: a manifest of YAML documents, signed in the yaml-sigil format, delivered as files or over HTTPS. Anything that produces that artifact can be your policy authority.
+
+## Bring Your Own Policy Authority
+
+A policy authority is the system of record where policy is written, reviewed, and approved. APF needs only its output.
+
+| Your authority must | APF provides |
+|---|---|
+| Produce documents that match the authoring schemas. | JSON Schemas in `contracts/jsonschema/` and the protobuf definitions in `contracts/proto/`. |
+| Produce a manifest that lists every document by path and SHA-256 digest, with a higher `policy_revision` for every change. | The manifest format and `apf-compile genfixture`, which fills in digests from a template. |
+| Sign the manifest with a key the hosts trust. | Signature verification against Ed25519 and ECDSA P-256 trust roots. |
+| Publish the bundle where policy services can read it. | Local file and HTTPS sources. |
+
+A Git repository with pull request review and a CI signing job is one such authority. A governance platform that exports approved policy as documents is another. APF does not call back into the authority, so the authority can be offline from APF's point of view.
+
+## Bring Your Own Signing Authority
+
+The signing authority holds the private key. APF supports two ways to bring one.
+
+**Sign outside APF.** Any signer that produces yaml-sigil signatures with a supported algorithm works without changes to APF. Install its public key in each policy service's trust-root directory, named after the `keyid` the signer writes. P-256 keys use the `.pem` or `.p256` extension. Refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority).
+
+**Implement APF's signing traits.** APF's signing seam is two traits in the `apf-types` crate:
+
+```rust
+/// Sign arbitrary bytes; return the signed artifact bytes.
+pub trait BundleSigner: Send + Sync {
+    fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, SignError>;
+}
+
+/// Verify a signed artifact; return the payload bytes on success.
+pub trait BundleVerifier: Send + Sync {
+    fn verify(&self, artifact: &[u8]) -> Result<Vec<u8>, VerifyError>;
+}
+```
+
+`apf-bundle` provides the yaml-sigil verifier the policy service uses, and an Ed25519 signer for tests that writes a raw signature-and-payload artifact, not yaml-sigil. The services always use the yaml-sigil verifier, so a production signing backend must emit yaml-sigil signatures, or ship with its own verifier in a separate composition binary. Organization-specific signing backends belong in such a binary, so the public service binaries never depend on private code.
+
+## Authoring and Signing
+
+In this release, authoring and signing are an offline step. You compile and sign a bundle with `apf-compile` in your own pipeline, wherever your keys and review process live, and the policy service verifies and serves the result. APF receives signed policy; it does not produce it.
+
+## Bring Your Own Decision Point
+
+If you already run a policy decision point, you can bring it into the governed model: OpenShell is where it attaches, and the signed bundle decides where it applies. Bringing it in has two steps, and they live in different places.
+
+1. **Register it with OpenShell.** Wrap your decision point as an OpenShell middleware service: the service implements `Describe`, `ValidateConfig`, and one evaluation RPC per operation it handles, and calls your decision point from the evaluation RPC. Then add it to the OpenShell gateway configuration with its name, address, TLS material, and expected audience, next to APF's own entry. This is OpenShell configuration, not APF policy, and on its own it routes no traffic to the service. Refer to [OpenShell supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware).
+2. **Select it in the signed policy.** Add a `network_middlewares` entry to the `SandboxPolicy` that names the registered service for a set of host patterns and sets its `order`, its `on_error` mode, and its `config`, then sign a new revision. Give APF's entry the highest `order` among middleware that change bodies, so APF decides on the request that leaves. The document ships in the bundle and reaches every sandbox through admission, and it cannot be changed on the gateway: APF's interceptor denies direct policy edits and provider and profile changes outside the bundle. Which hosts a sandbox may reach comes from the sandbox policy and the bundle-managed provider profiles; which decision points see that traffic comes from the same signed revision. Refer to [Sandbox Policies](/author-policies/sandbox-policies#selecting-apfs-middleware) and [Middleware Ordering](/security/enforcement-coverage-and-limitations#middleware-ordering).
+
+OpenShell then calls the matching middleware in ascending `order`. Each one allows, denies, or changes the request on its own, a denial from any of them blocks it, and a middleware that fails blocks its traffic by default.
+
+The reverse direction works today as well: APF acts as a decision provider for other enforcement points on the same host through the gateway's `EvaluationService`. Refer to [Service APIs](/reference/service-apis#evaluationservice).
+
+An external decision point can also take part in APF's own decision today, through the provider contract: register it as a `grpc` provider, return its verdict as a claim, and write a rule that honors it. What is open in the design is native delegation, where APF forwards a request to an external decision point and adopts its answer with its provenance. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+
+## External Context Providers
+
+Policy information providers feed external facts into decisions. A provider implements the `PolicyInformationService` contract over HTTPS with mutual TLS or over a Unix socket, or the gateway calls an existing JSON API itself by configuration alone, and the gateway consults it in the Enrichment stage before any rule runs. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+
+## Next Steps
+
+- To set up keys, refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority).
+- To connect another enforcement point, refer to [APF Adapter](/integrations/apf-adapter).

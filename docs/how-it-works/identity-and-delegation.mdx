@@ -1,0 +1,69 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Identity and Delegation"
+sidebar-title: "Identity and Delegation"
+description: "Which identities APF verifies itself, which it receives from the runtime, and how facts about the user or agent reach a decision through an identity provider."
+keywords: "Generative AI, Cybersecurity, AI Agents, Identity, Delegation, On Behalf Of, Extension JWT, Sandbox Identity, SPIFFE"
+position: 6
+---
+
+An authorization decision is only as good as the identity it is made for. This page separates what APF verifies itself, what it receives from OpenShell and records as given, and what it can look up about the user or agent from an identity system you register.
+
+In authenticated mode, APF verifies the caller and binds each request to its sandbox. It does not verify user or agent identity: the OpenShell middleware path carries neither, and the user subject and agent type a co-located caller supplies to `EvaluationService.Evaluate` are trusted as sent. APF has no delegation model.
+
+## Identities APF Verifies
+
+APF verifies the caller on every OpenShell extension call when the listener runs in authenticated mode. OpenShell signs a short-lived extension JWT for each call, and APF checks it against the trust profile configured for that listener.
+
+| Caller | How APF recognizes it | Where it is accepted |
+|---|---|---|
+| OpenShell gateway | Issuer `openshell-gateway:<gateway-id>`, subject equal to the issuer, and no `sandbox_id` claim. | Every interceptor RPC, and the middleware's `Describe` and `ValidateConfig`. |
+| Sandbox supervisor | Subject `spiffe://openshell/sandbox/<sandbox-id>` and a matching `sandbox_id` claim. | The middleware's `Describe` and `EvaluateHttpRequest`. |
+
+For every `EvaluateHttpRequest`, APF requires the `sandbox_id` in the supervisor's token to equal the sandbox ID in the request context. A supervisor's credential therefore cannot be used to evaluate a request on behalf of another sandbox. A mismatch is refused before policy is consulted and recorded as an `authentication` event with reason code `extension_auth.sandbox_binding_mismatch`.
+
+In explicit insecure mode, APF verifies no caller and performs no sandbox binding. Use it only for local development. Refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+
+## Identities APF Receives
+
+Some identity fields come from OpenShell's request and are recorded as given. APF does not independently attest them.
+
+| Identity | Where it comes from | How APF uses it |
+|---|---|---|
+| Sandbox ID at admission | The name of the sandbox in the `CreateSandbox` operation. | Sent to the policy service as runtime context and recorded on admission audit records. |
+| Caller subject at admission | OpenShell's authenticated principal for the `CreateSandbox` call. | Sent to the policy service as `user_subject`, where the claims resolver can select a bundle variant from it. |
+| Sandbox ID per request | The request context, bound to the supervisor token as described above. | Recorded as the audit `session_id`. It is OpenShell's sandbox ID, not the sandbox name. It is not available to Cedar rules. |
+| User subject per request | Not supplied. OpenShell does not carry an authenticated user subject on the middleware path. | The Cedar principal is `APF::User::""`. Do not write per-request rules that depend on the principal on this path. |
+
+Co-located callers of `EvaluationService.Evaluate` may supply a user subject in the request's runtime context. That surface is protected by the Unix socket's owner-only mode and peer UID check, and APF trusts the subject the caller sends.
+
+## Identity Facts from a Provider
+
+A rule rarely needs the subject string itself. It needs a fact about the subject: a group, a role, a clearance, whether the account is still active. APF does not hold those facts. Register your identity system as a policy information provider, and the policy gateway looks the subject up at decision time and exposes the answer to rules as `context.<domain>`. The signed policy states what must be true, and the identity system says whether it is true right now, so a withdrawn clearance takes effect on the next request without a policy change.
+
+The lookup is keyed on the user subject the enforcement point asserts, and the two surfaces fill it differently:
+
+- A caller of `EvaluationService.Evaluate` that asserts `user_subject` gets the lookup. APF passes the subject as asserted; it does not verify it.
+- The OpenShell middleware path carries no user subject, so the lookup has nothing to ask and reports `no_data`. A grant guarded on the fact stays off, and a provider registered as `fail_closed` denies the request before any rule runs.
+
+A lookup keyed on the sandbox identity, `runtime`, works on both surfaces: an agent registry can answer which team owns a sandbox or which agent it runs, and a rule can condition on that instead of on the user. Refer to [Policy Information Providers](/integrations/policy-information-providers#identity-facts) for the registration shape and a rule that reads the facts.
+
+### Current Limitations
+
+- OpenShell does not carry an authenticated user subject on the middleware path, so per-request rules on that path cannot condition on who the agent acts for.
+- APF records the user subject and agent type a caller asserts and does not verify them. A provider lookup adds facts about the asserted subject, not proof of it.
+- APF has no delegation model. Refer to [Delegation and Acting on Behalf of a User](#delegation-and-acting-on-behalf-of-a-user).
+
+## Identities in Provenance
+
+The provenance token on each served document names the key that signed it, not a person. `apf.nvidia.com/signer-identity` and the token's `sub` claim are the key ID of the policy service's document signing key. The identity of the authority that signed the bundle is the bundle signature's `keyid`, which the policy service checks against its trust roots.
+
+## Delegation and Acting on Behalf of a User
+
+**In development.** The planned scope covers how an agent acts on behalf of a user, how the delegation is asserted and verified, and how policy constrains what the delegated authority may do. No delegation model exists in the repository yet.
+
+## Next Steps
+
+- To see how credentials relate to identity, refer to [Credential Integration](/how-it-works/credential-integration).
+- To configure the extension trust profiles, refer to [Configure Service Authentication](/deployment/configure-service-authentication).

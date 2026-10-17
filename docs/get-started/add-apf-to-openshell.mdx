@@ -1,0 +1,157 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Add APF to an OpenShell Gateway"
+sidebar-title: "Add APF to OpenShell"
+description: "Register the APF gateway interceptor and supervisor middleware with an existing OpenShell gateway so every sandbox is admitted and governed under signed policy."
+keywords: "Generative AI, Cybersecurity, AI Agents, OpenShell, Gateway Interceptor, Supervisor Middleware, Registration, gateway.toml"
+position: 3
+---
+
+APF governs an OpenShell deployment through two OpenShell extension points. You register both in the OpenShell gateway configuration and restart the gateway. You do not change how sandboxes are created, and you do not rewrite your existing policy. You move it into a signed bundle.
+
+<Note>
+On Kubernetes, the OpenShell chart renders the gateway configuration from its values, so the registrations below go into a `gatewayConfig` values overlay rather than a TOML file. Applying the overlay with `helm upgrade` rolls the gateway pod, so there is nothing to edit or restart by hand. Refer to [Register APF through the OpenShell chart](/deployment/kubernetes#register-apf-through-the-openshell-chart).
+</Note>
+
+| Extension point | APF surface | Default address in the dev stack | Registration name used in this guide |
+|---|---|---|---|
+| Gateway interceptor | `apf-policy-gateway --openshell-interceptor-addr` | `127.0.0.1:18202` | `apf-policy-adapter` |
+| Supervisor middleware | `apf-policy-gateway --openshell-middleware-addr` | `127.0.0.1:9099` | `apf-content-policy` |
+
+The interceptor puts sandbox admission and policy changes under APF. The middleware adds per-request content and context decisions. To run with the interceptor alone, remove the `network_middlewares` entry from your bundle's sandbox policy, because OpenShell refuses to create a sandbox whose policy selects a middleware that is not registered.
+
+## Before You Begin
+
+- APF is running. Refer to [Installation](/get-started/installation).
+- You can edit the OpenShell gateway TOML and restart the gateway. Refer to [OpenShell gateway configuration](https://docs.nvidia.com/openshell/latest/how-it-works/gateways/configuration).
+- Both APF listeners are reachable from the OpenShell gateway. The middleware listener must also be reachable from every sandbox supervisor.
+
+<Steps toc={true}>
+
+## Move Your Existing Policy into a Bundle
+
+If you already run OpenShell with your own sandbox policy, put that policy into the bundle APF serves. The demo bundle in `examples/demo-bundle/` shows the layout.
+
+1. Translate your OpenShell policy into an APF `SandboxPolicy` in `sandbox/default-policy.yaml`. Set `apiVersion: nvidia.agent-policy-fabric.sandbox/v1alpha1`, `kind: SandboxPolicy`, and `metadata.name: default`. Put `filesystem`, `landlock`, `process`, `network_policies`, and `network_middlewares` under `spec`, rename OpenShell's `filesystem_policy` to `filesystem`, and drop the top-level `version`. The interceptor injects the `SandboxPolicy` named `default` unless you start the gateway with a different `--document-name`.
+2. Put each provider your sandboxes may use under `provider-profiles/` as a `kind: Provider` document.
+3. List every file in the bundle template's `manifest` and sign the bundle.
+
+Refer to [Your First Signed Policy](/get-started/your-first-signed-policy) for the signing steps and [Sandbox Policies](/author-policies/sandbox-policies) for the document format.
+
+## Register the Gateway Interceptor
+
+Add an interceptor registration to the OpenShell gateway TOML. For local development with APF's insecure listener, use plaintext and opt out of extension authentication on both sides:
+
+```toml
+[[openshell.gateway.interceptors]]
+name                     = "apf-policy-adapter"
+grpc_endpoint            = "http://127.0.0.1:18202"
+order                    = 0
+failure_policy           = "fail_closed"
+allow_insecure_transport = true
+```
+
+For an authenticated deployment, remove `allow_insecure_transport`, point `grpc_endpoint` at APF's HTTPS listener, and give OpenShell the CA that issued APF's listener certificate:
+
+```toml
+[[openshell.gateway.interceptors]]
+name             = "apf-policy-adapter"
+grpc_endpoint    = "https://apf.example.internal:18202"
+tls_ca_cert_path = "/etc/openshell/apf-ca.pem"
+order            = 0
+failure_policy   = "fail_closed"
+```
+
+APF's manifest declares its own failure policy for every binding: fail-closed for each admission and governance binding, and fail-open for its two post-commit bindings. With OpenShell's default `binding_policy = "dynamic"`, those per-binding values take precedence, so if APF is unreachable OpenShell refuses governed operations instead of running them ungoverned. The registration's `failure_policy` applies only to bindings that declare none, and setting it to `fail_closed` documents the intent.
+
+Keep the default `binding_policy = "dynamic"`.
+
+<Warning>
+APF does not work with OpenShell's `allowlist` or `exact` binding policies in this release. APF declares three bindings each on `CreateSandbox` and `UpdateConfig`, and the strict policies accept only one binding per configured RPC. With `exact`, the OpenShell gateway does not start. With `allowlist`, you would have to leave sandbox admission and refresh out of the allowlist, which leaves them ungoverned. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor#bindings) for the RPCs and phases APF declares.
+</Warning>
+
+## Register the Supervisor Middleware
+
+Add a middleware registration. The name must be `apf-content-policy`, because the sandbox policy selects the middleware by that name. Register it before you admit sandboxes under a bundle that selects it.
+
+```toml
+[[openshell.supervisor.middleware]]
+name                     = "apf-content-policy"
+grpc_endpoint            = "http://127.0.0.1:9099"
+max_payload_bytes        = 4194304
+allow_insecure_transport = true
+```
+
+The `127.0.0.1` endpoint works only when sandbox supervisors share the host's network, as with OpenShell's Docker driver on Linux. With other setups, such as Docker Desktop, Podman on macOS, a microVM, or Kubernetes, bind APF's middleware listener to an address the supervisors can reach and register that address, for example `http://host.openshell.internal:9099`. If supervisors cannot reach APF, every request to a host routed to APF fails closed and APF writes no record.
+
+`max_payload_bytes` is required by OpenShell and must not exceed the 4 MiB APF advertises. For an authenticated deployment, use an `https://` endpoint, add `tls_ca_cert_path`, and remove `allow_insecure_transport`, as for the interceptor. OpenShell's default evaluation `timeout` is `500ms`. Refer to [OpenShell middleware configuration](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware/configure).
+
+## Select the Middleware in Sandbox Policy
+
+OpenShell runs a middleware only for destinations that the sandbox policy selects. Add a `network_middlewares` entry under `spec` in the `SandboxPolicy` in your bundle. The demo bundle selects APF for four hosts:
+
+```yaml
+spec:
+  network_middlewares:
+    apf_content_policy:
+      name: APF content policy
+      middleware: apf-content-policy
+      order: 10
+      on_error: fail_closed
+      endpoints:
+        include:
+          - "httpbin.org"
+          - "api.github.com"
+          - "api.openai.com"
+          - "host.openshell.internal"
+```
+
+APF's middleware takes no configuration, and an APF `SandboxPolicy` has no field to give it one. If a policy reaches OpenShell with a non-empty `config` for it, APF's `ValidateConfig` marks the policy invalid, and APF denies any request evaluated with one.
+
+## Make APF the Provider Profile Source
+
+The APF interceptor can vend the provider profiles from the signed bundle. To make the bundle the authoritative provider catalog, select the interceptor as the only profile source in the OpenShell gateway TOML. If your file already has an `[openshell.gateway]` table, add `provider_profile_sources` to it rather than repeating the table header:
+
+```toml
+[openshell.gateway]
+provider_profile_sources = [
+  { type = "interceptor", name = "apf-policy-adapter" },
+]
+```
+
+Independently, when you start `apf-policy-gateway` with `--openshell-gateway-url`, it reconciles the bundle's provider profiles into the OpenShell gateway at startup and whenever the served policy set changes. APF denies imports and updates of profiles the bundle does not manage or whose content differs from the bundle, and it denies every profile deletion.
+
+## Turn Off Agent Policy Proposals
+
+On any host where APF governs sandbox policy, OpenShell's agent-driven policy proposals must stay off. Otherwise the effective policy is whatever OpenShell accepted most recently, not what was signed. Set it explicitly at global scope. `--yes` confirms the global change in a non-interactive shell:
+
+```shell
+openshell settings set --global --key agent_policy_proposals_enabled --value false --yes
+openshell settings get --global
+```
+
+APF also refuses agent-authored proposals and every draft approval at the interceptor, but the setting is the first line of defense. Re-check it as part of every deployment review.
+
+## Restart the OpenShell Gateway
+
+Registrations are read at startup. Restart the OpenShell gateway so it calls APF's `Describe`, negotiates the extension protocol, and builds its interceptor plan. If APF is unreachable or its protocol does not match, the OpenShell gateway does not start.
+
+</Steps>
+
+## Verify the Registration
+
+Create a sandbox and confirm APF admitted it. The policy gateway's interceptor audit file records an injection and a validation for the sandbox:
+
+```shell
+grep -E '"event_type":"(policy_injection|admission_validation)"' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-interceptor-audit.jsonl"
+```
+
+Each record carries `"outcome":"success"` with the reason codes `interceptor.policy_injected` and `interceptor.validate_allowed`. Then try a direct policy edit on the sandbox. APF refuses it with `direct policy mutation not permitted; policy is managed by APF`.
+
+## Next Steps
+
+- To sign your own bundle, refer to [Your First Signed Policy](/get-started/your-first-signed-policy).
+- To walk through admission and enforcement on a real sandbox, refer to [Your First Governed Agent](/get-started/your-first-governed-agent).
+- To configure caller authentication and TLS, refer to [Configure Service Authentication](/deployment/configure-service-authentication).

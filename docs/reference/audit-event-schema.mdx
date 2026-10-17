@@ -1,0 +1,200 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Audit Event Schema"
+sidebar-title: "Audit Event Schema"
+description: "Field-by-field reference for apf.audit.event.v1: the envelope, every event type and the fields it allows, enumerations, nested objects, limits, and what each component records."
+keywords: "Generative AI, Cybersecurity, AI Agents, Audit, Schema, apf.audit.event.v1, JSON Lines, Evidence, Compliance, SIEM"
+position: 7
+---
+
+Every APF audit record is one JSON object on one line, valid against `contracts/audit/apf.audit.event.v1.schema.json`, a JSON Schema draft 2020-12 document. Components validate each record against the schema before writing it. For how to read and ship records, refer to [Access Audit Events](/observability/access-audit-events).
+
+## Files
+
+| File | Component | `enforcement_point_id` | `runtime_substrate` |
+|---|---|---|---|
+| `apf-policy-service-audit.jsonl` | `apf-policy-service` | `apf-policy-service:local` | `none` |
+| `apf-policy-gateway-audit.jsonl` | `apf-policy-gateway` | `apf-policy-gateway:pdp` | `openshell` |
+| `apf-policy-gateway-interceptor-audit.jsonl` | `apf-policy-gateway-interceptor` | `apf-policy-gateway:interceptor` | `openshell` |
+| `apf-policy-gateway-middleware-audit.jsonl` | `apf-policy-gateway-middleware` | `apf-policy-gateway:middleware` | `openshell` |
+
+Files are created with mode `0600` in the component's `--audit-log-dir` and opened in append mode for every write. APF does not rotate or `fsync` them.
+
+## Envelope
+
+Every record carries these fields.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `schema_version` | string | Yes | Always `apf.audit.event.v1`. |
+| `event_id` | id | Yes | Unique per record, `evt_` followed by 32 hexadecimal characters. |
+| `timestamp` | string | Yes | UTC time in RFC 3339 form with a `Z` suffix, taken when the record is built. |
+| `event_type` | enum | Yes | One of the [event types](#event-types). |
+| `correlation_id` | id | Yes | Joins records about one action. Refer to [Correlation IDs](#correlation-ids). |
+| `enforcement_point_id` | id | Yes | The emitting component, as in the table above. |
+| `runtime_substrate` | name | Yes | `none` or `openshell`. |
+| `component.name` | name | Yes | The component name, which is also the file name stem. |
+| `component.version` | string | Yes | The producing crate's version. |
+| `component.instance_id` | id | Yes | `<enforcement_point_id>@<hostname>`, or the enforcement point ID if the host name is unusable. |
+| `reason` | string | No | Free text, up to 1024 characters. Set on degraded records, on records written with no active bundle, and on `counter_not_newer` refusals, where it is `http_bundle_source_poll`. |
+
+The schema also defines `causation_id`, `trace_id`, `span_id`, `device_id`, `deployment_profile`, `component.workload_identity`, `delivery`, and `extensions`. Of these, only `extensions` is set: an `authorization` record written after the Enrichment stage ran carries `extensions.x_apf_pip`, listing what each policy information provider contributed. Refer to [Policy Information Providers](/integrations/policy-information-providers#audit-extension).
+
+### String Profiles
+
+| Profile | Length | Pattern |
+|---|---|---|
+| id | 1 to 512 | `^[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,511}$` |
+| name | 1 to 128 | `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` |
+| digest | 1 to 256 | A 64-character hex SHA-256, optionally prefixed with `sha256:`, or another id-like value. |
+| reason code | 1 to 160 | `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$` |
+| verb | 1 to 160 | Same as reason code. |
+
+## Event Types
+
+| `event_type` | Producers | Required beyond the envelope | Optional |
+|---|---|---|---|
+| `policy_service_startup` | Policy service | `reason_code`, `security_state`. `error` when the state is not `secure`. | `rejection_reasons` when the state is not `secure`. Not populated in this release. |
+| `policy_verification` | Policy service | `bundle_digest`, `trust_root_id`, `outcome`, `reason_code` | `bundle_id`, `policy_revision`, `error`, `rejection_reasons` |
+| `policy_activation` | Policy service, gateway | `bundle_digest`, `trust_root_id`, `outcome`, `reason_code` | `bundle_id`, `policy_revision`, `error` |
+| `policy_distribution` | Policy service | `bundle_digest`, `trust_root_id`, `resource`, `verb`, `outcome`, `reason_code` | `policy_revision`, `error` |
+| `policy_refresh` | Policy service | `outcome`, `reason_code` | Policy identity |
+| `provenance_signing` | Policy service | `outcome`, `reason_code` | Policy identity, `error`, and `served_unsigned`, which must be `false` when `outcome` is `success`. Only failures are recorded. |
+| `authorization` | Gateway, middleware | `bundle_digest`, `trust_root_id`, `resource`, `verb`, `decision`, `decision_id`, `reason_code` | `session_id`, `user_id`, `agent_id`, `policy_revision`, `error`, `findings`, `verdict`, `effects` |
+| `policy_injection` | Interceptor | `resource`, `verb`, `outcome`, `reason_code` | Policy identity, subject identity, `error`, `effects` |
+| `admission_validation` | Interceptor | `resource`, `verb`, `outcome`, `reason_code` | Policy identity, subject identity, `error`, `checks` |
+| `config_governance` | Interceptor | `verb`, `outcome`, `reason_code` | `resource`, policy identity, subject identity, `error` |
+| `authentication` | Policy service, interceptor, middleware | `reason_code`, `outcome` (always `refused`), `error` | `caller_kind`, `caller_sandbox_id`, `claimed_sandbox_id`, `resource`, `verb` |
+| `review_request`, `review_decision`, `credential_issuance` | None | Reserved. | |
+
+Every event type rejects fields it does not allow. `authentication` and `policy_service_startup` records never carry subject or policy identity, so a caller cannot choose whose name or which policy appears on a refusal.
+
+## Event Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `outcome` | enum | `success`, `failure`, or `refused`. On every event type except `authorization` and `policy_service_startup`. `failure` is an operational error. `refused` is a deliberate rejection. |
+| `reason_code` | reason code | Why the record was written. Refer to [Error Reference](/reference/error-reference). |
+| `error.code` | reason code | The same value as `reason_code`. |
+| `error.message` | string | Detail, up to 1024 bytes. Long detail is truncated with ` [+N more]` or an ellipsis. |
+| `error.retryable` | boolean | Whether retrying could succeed. |
+| `decision` | enum | On `authorization` only. `allow` or `deny`. The schema also reserves `require_review`, `require_step_up`, `quarantine`, and `stop_session`. |
+| `decision_id` | id | `dec_` followed by 32 hexadecimal characters. |
+| `resource.type`, `resource.id` | name, id | What was acted on. Refer to [Resource and Verb](#resource-and-verb). |
+| `verb` | verb | The action, in lowercase dotted form. |
+| `bundle_digest` | digest | The policy in force. Refer to [Policy Identity](#policy-identity). |
+| `bundle_id` | id | The bundle's `id`. Policy service only. |
+| `policy_revision` | integer | The bundle's `policy_revision`. |
+| `trust_root_id` | id | A fixed label per component, `apf-policy-service:signing`. It is not the key ID that verified the bundle. |
+| `session_id` | id | The sandbox. Middleware records carry OpenShell's sandbox ID, the value `openshell sandbox get` prints as `Id`. Interceptor admission records carry the sandbox name from the creation request. Gateway records carry the `sandbox_id` from the request context. |
+| `user_id`, `agent_id` | id | The subject and agent type from the request context, on gateway and interceptor records when present. |
+| `rejection_reasons` | list of reason codes | On refused `policy_verification` records. Every verifier reason, without the `policy.bundle_rejected.` prefix. Up to 16. |
+| `security_state` | enum | On `policy_service_startup`. `secure` or `degraded`. `rejected` is defined but not produced. |
+| `findings` | list | On `authorization`. Refer to [Findings](#findings). |
+| `verdict` | enum | On `authorization`. `allow`, `warn`, or `escalate`. Records from `EvaluationService` always carry a verdict, which is `allow` even on a deny, so read `decision` for the outcome. |
+| `effects` | object | On `authorization` and `policy_injection`. Refer to [Effects](#effects). |
+| `served_unsigned` | boolean | On `provenance_signing`. `true` when a document was served without a token. |
+| `caller_kind` | name | On `authentication`. `gateway` or `supervisor` when known. |
+| `caller_sandbox_id`, `claimed_sandbox_id` | string | On `authentication` for a sandbox binding mismatch. The sandbox in the supervisor's token, and the sandbox the request claimed. |
+
+The schema also defines `result_class`, `argument_summary`, `result_summary`, `obligations`, `checks`, `signer_id`, `workspace_id`, `review_ref`, `credential_scope`, and `credential_request_id`. No component sets them in this release.
+
+### Policy Identity
+
+What `bundle_digest` identifies depends on the component.
+
+| Component and record | `bundle_digest` | `policy_revision` |
+|---|---|---|
+| Policy service `policy_verification`, `policy.bundle_loaded` | SHA-256 of the signed manifest file. | The bundle's revision. Set on refusals only when the bundle parsed. |
+| Policy service HTTP source `policy.bundle_hot_swapped`, `counter_not_newer`, and distribution | SHA-256 of the downloaded archive. | The bundle's revision. |
+| Policy service local source distribution | SHA-256 of the signed manifest file. | The document version. |
+| Gateway and middleware | SHA-256 of the compiled `apf.policy.v1` document. | The bundle's revision. Omitted by the middleware when `0`. |
+| Interceptor | The verified `apf/document-digest` claim, the digest of the `openshell.sandbox.v1` document. `unverified` when nothing was proven. On `interceptor.policy_injected.unverified`, the served response's digest, which was not signature-verified. | The token's `apf/version`, or the response's version. Omitted when `0`. |
+| Any record with no active bundle | `none`, with an explanatory `reason`. | Omitted. |
+| A degraded gateway, interceptor, or middleware record | `unrecordable`. | Kept. |
+
+Use `policy_revision` to relate records across components, not `bundle_digest`. Only policy service records carry `bundle_id`. Refer to [Trace Policy Provenance](/observability/trace-policy-provenance).
+
+### Resource and Verb
+
+| Producer and record | `resource.type` | `resource.id` | `verb` |
+|---|---|---|---|
+| Middleware `authorization` | `openshell.egress` | The target host. The path is not recorded. | `tool.<tool name>` for an MCP call, otherwise `http.<method>`, or `http.request` when no method was sent |
+| Gateway `authorization` | The request's `resource.class` | The request's `resource.id` | The request's `verb` |
+| Interceptor `policy_injection` | `openshell.sandbox.v1` | The sandbox name from the creation request | `interceptor.create_sandbox` |
+| Interceptor `admission_validation` | `openshell.sandbox.v1` | The sandbox name from the creation request | `interceptor.validate_sandbox` |
+| Interceptor `config_governance` | `openshell.sandbox.v1`, `openshell.provider`, `openshell.provider_profile`, or `apf.policy_proposal` | The document name, provider type, profile ID, or operation | `interceptor.update_config`, `interceptor.create_provider`, `interceptor.update_provider`, `interceptor.import_provider_profiles`, `interceptor.update_provider_profiles`, `interceptor.delete_provider_profile`, `interceptor.submit_policy_analysis`, `interceptor.approve_draft_chunk`, or `interceptor.approve_all_draft_chunks` |
+| Policy service `policy_distribution` | The document kind | The document name | `policy.get_document` or `policy.list_documents` |
+
+Values are normalized to fit their profiles. In `verb`, characters that are not lowercase letters, digits, underscores, or dots are dropped, so a tool named `GetMail` is recorded as `tool.etail`. A value that normalizes to nothing becomes `unspecified`.
+
+### Findings
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | The finding's type, up to 256 characters. |
+| `label` | string | The finding's label, up to 256 characters. |
+| `severity` | enum | `low`, `medium`, `high`, or `critical`. |
+| `confidence` | integer | 0 to 100, when known. |
+
+A record holds up to 32 findings. The gateway keeps the most severe. A record that carries `verdict` never also carries a `policy_verdict` finding.
+
+### Effects
+
+| Field | Type | Description |
+|---|---|---|
+| `patch_count` | integer | Number of body patches applied. Exact even when `patches` is truncated. |
+| `patches` | list | Up to 64 records of `path`, up to 256 characters, and `op`. Patch values are never recorded. |
+| `payload_replaced` | boolean | `true` when the whole body was replaced. A record carries either this or patches. |
+| `header_mutations` | list | Up to 64 records of `name` and `action` (`set`, `add`, `remove`). Header values are never recorded. |
+
+`effects` is omitted when nothing changed.
+
+## Correlation IDs
+
+| Producer | `correlation_id` |
+|---|---|
+| Middleware | OpenShell's request ID. |
+| Interceptor admission | The provenance token's `jti`, also written to the sandbox's `apf.nvidia.com/correlation-id` annotation. Validation uses the annotation. |
+| Interceptor refusals | A new UUID, also returned to OpenShell in the denial's log annotations. |
+| Gateway `authorization` | The request's `audit_context["correlation_id"]`, or a new ID. |
+| Policy service | A new ID for every record. |
+
+## Degraded Records
+
+If a record fails schema validation or the credential scan, some producers write a reduced record instead. Every reduced record keeps the event type and the decision or outcome, and explains itself in `reason`, for example `caller-supplied request detail omitted`.
+
+| Producer | Reduced record |
+|---|---|
+| Gateway, interceptor, and middleware decisions | Resource and verb become `unspecified`, subject IDs are removed, `error`, findings, and verdict are dropped, and `bundle_digest` becomes `unrecordable`. `policy_revision` is kept. The gateway and middleware also generate a new `correlation_id`. |
+| Middleware sandbox binding refusals | Both sandbox IDs become `unspecified`. |
+| Policy service document requests | The document kind and name become `unspecified`. The verb is kept. A refusal keeps `error` with the message `caller-supplied kind and name omitted: not safely recordable`. |
+
+Other policy service records have no reduced form. What happens when one cannot be written is listed in [Write Failures](#write-failures).
+
+## What Is Never Recorded
+
+- Request and response bodies.
+- Header values and patch values.
+- Request paths on middleware records.
+- Extension bearer tokens, the policy service HTTP token, and bundle source tokens.
+- Evaluator error text on middleware records. The generic `policy evaluation failed` is used.
+
+Before writing, every string is scanned. A record that contains a private key block, a bearer or basic credential, or a token with a known prefix such as `sk-`, `ghp_`, `xoxb-`, or `AKIA`, or a string longer than 2048 bytes, is not written as is.
+
+## Write Failures
+
+| Record | If it cannot be written |
+|---|---|
+| Policy service startup | The service does not start. |
+| Successful bundle verification | The bundle is not loaded. |
+| Gateway initial activation | The gateway does not start. |
+| Gateway hot swap | The gateway exits. The new policy was already active. |
+| Policy service UDS refusals | Refusals are queued. If the queue overflows, a summary `auth.uds_refusals_dropped` record is written. If the writer stops, the service stops serving. |
+| All other records | A warning is logged and the operation proceeds. |
+
+## Next Steps
+
+- For every `reason_code`, refer to [Error Reference](/reference/error-reference).
+- For example records and queries, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).

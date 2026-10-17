@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fern site configuration for the NVIDIA Agent Policy Fabric (APF) documentation.
+#
+# GitHub Actions in .github/workflows/ validate docs and preview eligible PRs.
+# docs-publish.yml publishes manually. The custom domain stays configured
+# while routing is set up.
+instances:
+  - url: nvidia-apf.docs.buildwithfern.com/agent-policy-fabric
+    custom-domain: docs.nvidia.com/agent-policy-fabric
+    multi-source: true
+
+title: NVIDIA Agent Policy Fabric
+
+global-theme: nvidia
+
+versions:
+  - display-name: Dev
+    path: ../docs/index.yml
+    slug: dev

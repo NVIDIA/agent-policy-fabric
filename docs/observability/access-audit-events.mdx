@@ -1,0 +1,114 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Access Audit Events"
+sidebar-title: "Access Audit Events"
+description: "Where APF writes its apf.audit.event.v1 records, which component writes which events, and how to read and filter them."
+keywords: "Generative AI, Cybersecurity, AI Agents, Audit, JSONL, Observability, Evidence, apf.audit.event.v1"
+position: 1
+---
+
+Every APF component writes structured audit records for the policy lifecycle steps and the decisions it makes. A few outcomes are not recorded. Refer to [Gaps in the Record](#gaps-in-the-record). Records follow one schema, `apf.audit.event.v1`, and are validated against it before they are written. Together they answer what happened, why, and under which policy.
+
+## Where Records Are Written
+
+Each service writes one JSON Lines file per component into its `--audit-log-dir`. Both services refuse to start without an audit directory.
+
+| File | Component | `enforcement_point_id` |
+|---|---|---|
+| `apf-policy-service-audit.jsonl` | Policy service | `apf-policy-service:local` |
+| `apf-policy-gateway-audit.jsonl` | Policy gateway decision point | `apf-policy-gateway:pdp` |
+| `apf-policy-gateway-interceptor-audit.jsonl` | OpenShell gateway interceptor | `apf-policy-gateway:interceptor` |
+| `apf-policy-gateway-middleware-audit.jsonl` | OpenShell supervisor middleware | `apf-policy-gateway:middleware` |
+
+The interceptor and middleware files are created only when their listener is enabled. Files are created with mode `0600`. Each record is one line. Because every write opens the file in append mode, the files can be rotated by renaming or truncating them.
+
+| Deployment | Default location |
+|---|---|
+| Native development processes | The directory in `APF_AUDIT_LOG_DIR`. |
+| systemd | The directory you set in `APF_AUDIT_LOG_DIR` in each service's env file. It must be writable by the unit, for example `/var/lib/apf/policy-service/audit` and `/var/lib/apf/policy-gateway/audit`. |
+| Container stack | The `apf-audit` volume, mounted at `/var/log/apf/audit` in both containers. |
+
+## Event Types
+
+The schema defines 14 event types. Eleven have producers today.
+
+| `event_type` | Written by | Records |
+|---|---|---|
+| `policy_service_startup` | Policy service | The security state of the configuration the service started with: `secure` or `degraded`, and which controls were weakened. Once per start. |
+| `policy_verification` | Policy service | Each bundle verification, with every rejection reason on failure. |
+| `policy_activation` | Policy service, policy gateway | A bundle or policy set brought into force, at startup or by hot swap. |
+| `policy_distribution` | Policy service | A projected document served, deduplicated per document and version, not per consumer. Also a refused document request. |
+| `policy_refresh` | Policy service | An operator-triggered refresh. |
+| `provenance_signing` | Policy service | A failure to sign a served document's provenance token, which means the document was served unsigned. |
+| `authorization` | Policy gateway, middleware | A decision on a governed request. The only event type that carries `decision`. |
+| `policy_injection` | Interceptor | Signed policy injected into a sandbox admission, with the patched paths. |
+| `admission_validation` | Interceptor | The validation of a sandbox admission against its provenance token and spec digest. |
+| `config_governance` | Interceptor | A governed configuration, provider, or proposal operation admitted or refused. |
+| `authentication` | Policy service, interceptor, middleware | A caller refused at a trust boundary before policy was consulted. |
+| `review_request`, `review_decision`, `credential_issuance` | None | Reserved. No component produces them yet. |
+
+## Fields Every Record Carries
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | Always `apf.audit.event.v1`. |
+| `event_id` | Unique identifier for this record. |
+| `timestamp` | UTC RFC 3339 time. |
+| `event_type` | One of the types above. |
+| `correlation_id` | Joins the records about one governed action, such as the injection and validation of one sandbox admission. The policy service generates a new one for each of its records, so its records do not join to the gateway's by this field. |
+| `enforcement_point_id` | The emitting component, as in the table above. |
+| `runtime_substrate` | `openshell` for the gateway's components, and `none` for the policy service. |
+| `component` | `name`, `version`, and `instance_id`. The instance ID includes the host name, so records from several hosts stay distinguishable in one pipeline. |
+
+Operation events add `outcome` (`success`, `failure`, or `refused`) and `reason_code`. Authorization events add `decision` and `reason_code` instead, and the startup event adds `security_state` and `reason_code`. Policy identity fields, `bundle_digest`, `bundle_id`, `policy_revision`, and `trust_root_id`, appear where a policy is in force. Refer to [Audit Event Schema](/reference/audit-event-schema) for every field.
+
+## Read and Filter Records
+
+Records are plain JSON Lines, so standard tools work. With `jq`:
+
+```shell
+# Every refusal or denial, across components
+jq -c 'select(.outcome == "refused" or .decision == "deny")' "$APF_AUDIT_LOG_DIR"/*.jsonl
+
+# The policy each gateway decision was made under
+jq -c 'select(.event_type == "authorization") | {timestamp, decision, reason_code, bundle_digest, policy_revision}' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl"
+
+# Records that share a correlation ID, such as one sandbox admission
+jq -c --arg id "$CORRELATION_ID" 'select(.correlation_id == $id)' "$APF_AUDIT_LOG_DIR"/*.jsonl
+```
+
+Query on `component.name` and `enforcement_point_id`, which the producer writes, rather than on file names, which a log shipper may change.
+
+## Emission Guarantees
+
+Whether a failed write stops the operation depends on the event, not the component.
+
+| Discipline | Used for | On a write failure |
+|---|---|---|
+| Fail closed | The policy service's startup record, a successful bundle verification, and the gateway's initial policy activation. | The service does not start, or the bundle is not loaded. A failed verification record blocks every load, including refreshes and polls. |
+| Halt | The gateway's record of a policy hot swap. | The gateway exits. The new evaluator is already active when this happens. |
+| Best effort | Per-request decisions, `policy.bundle_loaded`, refused verifications, distribution, refresh, authentication refusals, and other lifecycle records. | The operation continues and the failure is logged. |
+
+## Sanitized and Degraded Records
+
+Every string is scanned for credential-shaped content before a record is written, and fields that come from callers are length-capped and coerced to their schema patterns. When a record cannot be written safely, the gateway, interceptor, and middleware, and the policy service for document requests, write a reduced record instead. The event type, the decision or outcome, and the reason code survive. Caller-supplied detail is replaced with sentinel values such as `unspecified` or `unrecordable`, and the record notes the degradation in `reason`. Other policy service records have no reduced form: they are lost with a logged warning, or the operation stops. Do not treat sentinel values as real identities. Refer to [Degraded Records](/reference/audit-event-schema#degraded-records).
+
+## Gaps in the Record
+
+Some outcomes leave no audit record. Collect service logs alongside audit records to cover them.
+
+- The gateway does not record refused Unix socket peers, failed hot swaps, or its startup posture.
+- When a verified bundle fails to compile, the policy service has already written a successful `policy_verification` record and records nothing about the failure.
+- The policy service records nothing when a startup check fails before its startup record, or when no manifest in an HTTP source archive verifies.
+- The interceptor does not record successful configuration validations or post-commit calls.
+
+Activation records need care too. A local `POST /v1/refresh` records `policy.bundle_loaded`, not `policy.bundle_hot_swapped`. An HTTP poll records `policy.bundle_loaded` before it decides whether to swap, so the record can be followed by `policy.bundle_rejected.counter_not_newer` for a bundle that never took effect. Treat the last record for a revision as authoritative.
+
+Refer to [Monitor Policy and Service Health](/observability/monitor-policy-and-service-health).
+
+## Next Steps
+
+- To read decisions and findings, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+- To ship records to a SIEM, refer to [Export Audit Events](/observability/export-audit-events).

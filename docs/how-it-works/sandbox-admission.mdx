@@ -1,0 +1,100 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Sandbox Admission"
+sidebar-title: "Sandbox Admission"
+description: "How the APF interceptor injects signed sandbox policy at OpenShell sandbox creation, stamps provenance, validates it, and keeps running sandboxes on signed policy."
+keywords: "Generative AI, Cybersecurity, AI Agents, Sandbox Admission, Gateway Interceptor, Provenance, Fail Closed, OpenShell"
+position: 4
+---
+
+Admission is the one-time gate at sandbox creation. The APF interceptor replaces whatever policy the caller asked for with the signed projection from the active bundle, stamps the sandbox with the identity of that policy, and checks the stamp again before OpenShell commits the sandbox. If any step fails, OpenShell does not create the sandbox.
+
+The interceptor runs inside `apf-policy-gateway` and answers OpenShell's gateway interceptor calls. In authenticated mode, only the OpenShell gateway may call it. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor) for the full list of operations APF governs.
+
+## Admission Phases
+
+OpenShell calls the interceptor up to three times for each `CreateSandbox`, once for each of these bindings it has enabled.
+
+| Phase | APF binding | Failure policy | What APF does |
+|---|---|---|---|
+| Modify | `sandbox-policy-inject` | Fail closed | Fetches and verifies the projection, then returns patches that set the policy and add provenance annotations. |
+| Validate | `sandbox-policy-verify` | Fail closed | Re-verifies the provenance on the patched request and checks that the policy was not changed after injection. |
+| Post-commit | `sandbox-policy-post-commit` | Fail open | Logs that the sandbox was committed. It writes no audit record and cannot change the outcome. |
+
+## Modify Phase
+
+The interceptor fetches the `SandboxPolicy` projection named by `--document-kind` and `--document-name`, by default `openshell.sandbox.v1/default`, from the policy service. The request carries the sandbox ID and the caller's subject as runtime context. The interceptor then checks the response before it changes anything:
+
+1. The response must carry a provenance token.
+2. The token's EdDSA signature must verify against the key from the policy service's JWKS.
+3. The token must carry a `jti`, a signer identity in `sub`, and a document digest.
+4. The digest and version in the response must equal the ones in the token.
+5. The SHA-256 of the projection body must equal the token's document digest.
+
+If all checks pass, the interceptor returns RFC 6902 patches. The first sets `/spec/policy` to the signed projection, overwriting any policy in the request. The others add these annotations to the operation:
+
+| Annotation | Value |
+|---|---|
+| `apf.nvidia.com/document-digest` | SHA-256 of the injected policy document. |
+| `apf.nvidia.com/policy-version` | The bundle's `policy_revision`. |
+| `apf.nvidia.com/bundle-id` | The bundle manifest's `id`. |
+| `apf.nvidia.com/signer-identity` | The key ID of the policy service's document signing key. |
+| `apf.nvidia.com/correlation-id` | The provenance token's `jti`. It is also the correlation ID of the admission audit records. |
+| `apf.nvidia.com/provenance-token` | The provenance token itself. |
+| `apf.nvidia.com/policy-valid-until` | Present only when the policy service sets a document TTL. |
+
+The injected policy is serialized through the same canonical JSON path the policy service used to compute the spec digest, so the validate phase can recompute it byte for byte.
+
+## Validate Phase
+
+The validate phase reads the annotations back from the patched request and checks:
+
+- The `provenance-token`, `correlation-id`, and `document-digest` annotations are present.
+- The token's signature verifies and, if it has an `exp`, it has not expired.
+- The token's `jti` equals the `correlation-id` annotation, so a token cannot be swapped onto another admission.
+- The token's document digest equals the `document-digest` annotation.
+- The canonical digest of the policy now in the request equals the token's `apf/spec-digest`. This catches any change to the policy between injection and commit.
+
+If the token carries no spec digest, the spec check is skipped, and the validation record's reason code is `interceptor.validate_allowed.no_spec_digest` instead of `interceptor.validate_allowed`.
+
+## Admission Outcomes
+
+Admission decisions write a record to `apf-policy-gateway-interceptor-audit.jsonl`. An operation with no `name` field returns `INVALID_ARGUMENT` with `operation missing name (sandbox_id)`, and a policy service that cannot be reached returns `UNAVAILABLE`. Neither writes a record. Give sandboxes an explicit `--name` so admission records identify them.
+
+| Reason code | Phase | Meaning |
+|---|---|---|
+| `interceptor.policy_injected` | Modify | The signed policy was injected. The record lists the patched paths. |
+| `interceptor.inject_denied.no_provenance_token` | Modify | The policy service returned a document without a provenance token. |
+| `interceptor.inject_denied.invalid_jwt` | Modify | The token signature failed, the token expired, or its claims were unreadable or incomplete. |
+| `interceptor.inject_denied.policy_identity_mismatch` | Modify | The response's digest or version disagreed with the signed token. |
+| `interceptor.inject_denied.body_digest_mismatch` | Modify | The projection body did not hash to the token's document digest. |
+| `interceptor.validate_allowed` | Validate | All checks passed. |
+| `interceptor.validate_allowed.no_spec_digest` | Validate | Checks passed, and the spec digest check was skipped because the token carried none. |
+| `interceptor.validate_denied.provenance_missing` | Validate | The provenance token annotation was missing. |
+| `interceptor.validate_denied.provenance_invalid` | Validate | The token failed verification or expired, another provenance annotation was missing, or the token did not match the annotations. |
+| `interceptor.validate_denied.spec_digest_mismatch` | Validate | The policy changed after injection. |
+
+If the policy service is unreachable, the interceptor returns an error instead of a decision. With the recommended `fail_closed` registration, OpenShell then refuses the operation. The post-commit binding only writes a log line, and no audit record.
+
+## Running Sandboxes
+
+After admission, a sandbox's source policy changes only through `UpdateConfig`, and APF governs that RPC too. OpenShell also composes the effective policy from the providers attached to a sandbox, and APF does not bind `AttachSandboxProvider` or `DetachSandboxProvider`.
+
+- **Refresh.** A bare `UpdateConfig` that carries no policy, merge operations, or settings is a refresh. In the modify phase APF injects the currently served policy and provenance into `/policy`, and in the validate phase it verifies the provenance. A changed or removed policy is rejected with `interceptor.validate_denied.spec_digest_mismatch`. Merge operations or approval settings added after injection, or a policy removed from what has become a settings update, are rejected with `interceptor.validate_denied.post_injection_mutation`. APF's own sandbox policy refresher sends these requests when the served policy set changes, which means a change to rules, annotators, effects, or findings, if it is enabled.
+- **Direct edits.** An `UpdateConfig` that carries a policy body or merge operations is denied with `direct policy mutation not permitted; policy is managed by APF`.
+- **Approval mode.** Any attempt to change the proposal approval mode is denied with `approval mode is managed by APF`.
+- **Other settings.** A settings-only update passes through unchanged.
+
+Refer to [Update Policies](/manage-policy-bundles/update-policies) for when running sandboxes pick up a new bundle.
+
+## Trust Model
+
+The interceptor verifies provenance tokens, not the bundle signature. The policy service verified the bundle once when it ingested it, and it signs a provenance token for every document it serves. The interceptor's checks prove that the policy admitted with the sandbox is the document the policy service served, unchanged in transit or between injection and validation. OpenShell's supervisor may later add filesystem paths to the stored policy, which OpenShell allows.
+
+The provenance token attests to the policy, not to the caller. The sandbox ID and the caller subject come from OpenShell's request and are not independently attested by APF. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation).
+
+## Next Steps
+
+- To see how each request is decided after admission, refer to [Request Evaluation](/how-it-works/request-evaluation).
+- To tie a running sandbox to its signed policy, refer to [Trace Policy Provenance](/observability/trace-policy-provenance).

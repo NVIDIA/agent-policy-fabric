@@ -1,0 +1,119 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Trace Policy Provenance"
+sidebar-title: "Trace Policy Provenance"
+description: "Tie a running sandbox back to the exact signed bundle, revision, and signing key that govern it, and verify each link."
+keywords: "Generative AI, Cybersecurity, AI Agents, Provenance, JWT, JWKS, Audit, Bundle Revision, Signing Key, Traceability"
+position: 3
+---
+
+Every sandbox APF admits carries the identity of the policy it was admitted under. This page follows that identity from the sandbox back to the signed bundle, verifying each link, so you can answer which policy governs a sandbox and who authorized it.
+
+## The Chain of Evidence
+
+| Link | Evidence | Proves |
+|---|---|---|
+| Sandbox to served document | The `apf.nvidia.com/*` annotations and the provenance token on the sandbox. | The policy in the sandbox is the document the policy service served, unchanged. |
+| Served document to bundle | The token's `apf/bundle-id` and `apf/version` claims, and the policy service's verification record for that bundle and revision. | The document was projected from a bundle the policy service verified. |
+| Bundle to signing authority | The bundle's signature `keyid` and the trust root that verified it. | An authority holding that key signed the bundle. |
+| Bundle to source | Your publish process's record of which commit produced which revision. | Which reviewed change the bundle contains. APF does not record source commits. |
+
+<Steps toc={true}>
+
+## Read the Sandbox Annotations
+
+```shell
+openshell sandbox get <sandbox>
+```
+
+Note the values of `apf.nvidia.com/correlation-id`, `apf.nvidia.com/document-digest`, `apf.nvidia.com/policy-version`, `apf.nvidia.com/bundle-id`, `apf.nvidia.com/signer-identity`, and `apf.nvidia.com/provenance-token`.
+
+## Verify the Provenance Token
+
+The token is a compact JWT signed with EdDSA by the policy service's document signing key. The key is published at `/.well-known/jwks.json` on the policy service's HTTP surface, under the token's `kid`. This script verifies the signature and prints the claims. It uses the Python `cryptography` package.
+
+```python
+import base64, json, sys, urllib.request
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+def b64u(value):
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+token, jwks_url = sys.argv[1], sys.argv[2]
+header_b64, payload_b64, signature_b64 = token.split(".")
+kid = json.loads(b64u(header_b64))["kid"]
+jwks = json.load(urllib.request.urlopen(jwks_url))
+key = next(k for k in jwks["keys"] if k["kid"] == kid)
+Ed25519PublicKey.from_public_bytes(b64u(key["x"])).verify(
+    b64u(signature_b64), f"{header_b64}.{payload_b64}".encode()
+)
+print(json.dumps(json.loads(b64u(payload_b64)), indent=2))
+```
+
+```shell
+python3 verify_provenance.py "$TOKEN" http://127.0.0.1:19200/.well-known/jwks.json
+```
+
+The script raises `InvalidSignature` if the token was altered. On success, check that the claims match the annotations:
+
+| Claim | Must equal |
+|---|---|
+| `jti` | `apf.nvidia.com/correlation-id` |
+| `sub` | `apf.nvidia.com/signer-identity` |
+| `apf/document-digest` | `apf.nvidia.com/document-digest` |
+| `apf/version` | `apf.nvidia.com/policy-version` |
+| `apf/bundle-id` | `apf.nvidia.com/bundle-id` |
+
+Before OpenShell admits the sandbox, the interceptor verifies the token's signature and expiry, checks the `jti` and `apf/document-digest` claims against the annotations, and recomputes the sandbox policy spec digest. It does not compare `sub`, `apf/version`, or `apf/bundle-id`, so those checks are yours. `apf/bundle-id` names the bundle the policy service loaded at startup, even after a later refresh.
+
+## Find the Admission Records
+
+The token's `jti` is the correlation ID of the admission:
+
+```shell
+jq -c --arg id "$JTI" 'select(.correlation_id == $id)' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-interceptor-audit.jsonl"
+```
+
+The `policy_injection` record lists the spec paths APF patched, and the `admission_validation` record's reason code shows whether the spec digest check ran.
+
+## Find the Bundle Verification
+
+Search the policy service's audit file for the bundle and revision named in the token:
+
+```shell
+jq -c --arg id "$BUNDLE_ID" --argjson rev "$VERSION" \
+  'select(.event_type == "policy_verification" and .bundle_id == $id and .policy_revision == $rev)' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-service-audit.jsonl"
+```
+
+A record with `"outcome":"success"` shows the policy service verified that revision. Its `bundle_digest` is the SHA-256 of the signed bundle file. If the policy service loaded a bundle with a different `id` after it started, the token still carries the startup `id`, so filter on the revision alone.
+
+## Verify the Signed Bundle
+
+Hash the signed bundle file from your artifact store and compare it with the record's `bundle_digest`. Then verify its signature against the trust roots:
+
+```shell
+sha256sum team-bundle/team-bundle.yaml
+tail -n 4 team-bundle/team-bundle.yaml
+./target/release/apf-compile compile \
+  --bundle-path team-bundle/team-bundle.yaml \
+  --trust-root-dir trust-roots \
+  --verify-only
+```
+
+The signature document's `keyid` names the trust root, and so the signing authority, that authorized the bundle.
+
+</Steps>
+
+## What Provenance Does Not Prove
+
+- The provenance token attests to the policy, not to the caller. The sandbox ID and caller subject come from OpenShell's request.
+- The token's signer is the policy service's document key, not the bundle signing authority. The bundle signature links the two.
+- Without a document TTL, tokens do not expire. A token proves which policy a sandbox was admitted under, not that the policy is still current. Compare `apf.nvidia.com/policy-version` with the active revision to find sandboxes running older policy.
+
+## Next Steps
+
+- To trace a decision rather than an admission, refer to [Investigate a Denied Request](/observability/investigate-a-denied-request).
+- To review the keys involved, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).

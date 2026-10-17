@@ -1,0 +1,124 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Protect Sensitive Data"
+sidebar-title: "Protect Sensitive Data"
+description: "Use APF's content controls to deny MCP tool calls that carry credentials, redact credentials from plain requests, and withhold personal data, and verify each outcome."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Data Loss Prevention, Secrets, PII, Redaction, Content Controls"
+position: 4
+---
+
+This tutorial exercises the demo bundle's content controls. The security team's detectors and gate decide what may leave a sandbox, regardless of which tool or service the agent calls.
+
+After completing it, you understand:
+
+- How annotators, a control rule, effects, and findings work together.
+- Why the same secret is denied in a tool call but redacted in a plain request.
+- How a redaction that cannot be applied fails closed.
+- How each outcome appears in the audit trail.
+
+## Prerequisites
+
+- APF running with the demo bundle, or the revision from [Your First Signed Policy](/get-started/your-first-signed-policy), and registered with OpenShell as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell). The demo sandbox policy allows `POST /anything` on `httpbin.org` and routes the host to APF.
+- A workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group.
+- Terminals set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal), and `jq`.
+
+`httpbin.org/anything` echoes the request it receives, which makes each rewrite visible.
+
+<Steps toc={true}>
+
+## Review the Controls
+
+| Document | Role |
+|---|---|
+| `annotators/secret-detector.yaml` | Sets `secret_detected` and `secret_kind` when the body contains a credential shape. It includes the pattern `APF-DEMO-STRING-<digits>` labeled `demo_secret` for testing. |
+| `annotators/pii-detector.yaml` | Sets `pii_detected` and `pii_kind` for email addresses, US social security numbers, and payment card numbers. |
+| `rules/security-content-gate.yaml` | Denies MCP tool calls with a secret. Permits plain requests with a secret or PII, attaching a redaction effect. |
+| `effects/redact-wholesale.yaml` | Replaces the whole body and sets `x-openshell-middleware-apf-event` to the secret kind. |
+| `effects/redact-pii-body.yaml` | Replaces the `/text` field of a JSON body and records an inline `pii_redacted` finding. |
+| `findings/secret-detected.yaml` | A `critical` finding labeled with the secret kind. |
+
+## Create a Sandbox
+
+```shell
+openshell sandbox create \
+  --name dlp \
+  --from registry.example.com/team/agent-tools:1.0 \
+  --no-auto-providers
+```
+
+Run the following requests in the sandbox shell.
+
+## Redact a Credential from a Plain Request
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"text":"deploy key APF-DEMO-STRING-42"}'
+```
+
+The echoed `data` is APF's redaction notice, not your body, and the echoed headers include `X-Openshell-Middleware-Apf-Event: demo_secret`. The credential never left the sandbox.
+
+The `authorization` record has `"decision":"allow"`, `"reason_code":"middleware.allowed_with_findings"`, a finding of kind `secret_detected` with label `demo_secret` and severity `critical`, and `effects.payload_replaced: true`.
+
+## Withhold Personal Data
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"text":"reach me at jane.doe@example.com","priority":"high"}'
+```
+
+The echoed JSON has its `text` field replaced with the sanitization notice from `redact-pii-body`, and `priority` is unchanged. The record carries a finding of kind `pii_redacted`, label `pii_in_body_text`, severity `medium`, and `effects` with `patch_count: 1` and a patch record for `/text`.
+
+## See a Redaction Fail Closed
+
+Send personal data in a body without a `text` field:
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"message":"reach me at jane.doe@example.com"}'
+```
+
+The request is denied and never reaches httpbin. `redact-pii-body` must replace `/text`, the body has no such field, and APF refuses to forward a request it could not rewrite. The record has `"decision":"deny"` and `"reason_code":"middleware.effect_application_failed"`.
+
+To redact any body shape, use a whole-body replacement, as `redact-wholesale` does.
+
+## Deny a Tool Call That Carries a Credential
+
+Send an MCP tool call for a granted tool, with a credential in its arguments:
+
+```shell
+curl -s https://httpbin.org/anything \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_repo_read","arguments":{"note":"APF-DEMO-STRING-7"}}}'
+```
+
+The tool is granted by `github-grants`, but the content gate's `forbid` fires because the call carries a secret. Evaluation stops and the request is denied. The record has `"decision":"deny"`, `"verb":"tool.github_repo_read"`, an `error.message` of `security-content-gate/deny-secret`, and the `secret_detected` finding.
+
+Tool calls are denied rather than redacted because rewriting a tool's arguments could change what the tool does.
+
+## Review the Evidence
+
+On the host, find the sandbox's ID, which APF's per-request records use, and summarize the decisions for it:
+
+```shell
+openshell sandbox get dlp
+SANDBOX_ID='<the Id value>'
+```
+
+```shell
+jq -c --arg id "$SANDBOX_ID" 'select(.event_type == "authorization" and .session_id == $id)
+  | {verb, decision, reason_code, findings: [.findings[]? | .kind + "/" + .label]}' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl"
+```
+
+You see four records: two allows with findings, one deny for the failed redaction, and one deny for the tool call. No record contains the secret or the email address.
+
+</Steps>
+
+## Next Steps
+
+- To write your own detectors, refer to [Annotators](/author-policies/annotators).
+- To change how detections are handled, refer to [Content Controls](/author-policies/content-controls).

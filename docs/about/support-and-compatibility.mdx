@@ -1,0 +1,130 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Support and Compatibility"
+sidebar-title: "Support and Compatibility"
+description: "Release status, OpenShell compatibility, build requirements, and the support status of every APF capability and integration."
+keywords: "Generative AI, Cybersecurity, AI Agents, Support Matrix, Compatibility, OpenShell, Releases, Capability Matrix"
+position: 6
+---
+
+This page lists what the `main` branch of APF supports, which OpenShell version it is built against, and the status of each capability and integration.
+
+## Status Definitions
+
+The documentation uses these status labels consistently.
+
+| Status | Meaning |
+|---|---|
+| Available | Implemented on `main` and exercised by the repository's tests. |
+| Limited | Implemented with a documented restriction. The restriction is listed next to the capability. |
+| Development only | Implemented for local development or demonstration. Do not use it in production. |
+| In development | Not yet in the repository. Pages and sections for these capabilities are marked **In Development**. |
+| Reserved | A value or field exists in a contract so the vocabulary stays stable, but no component produces it yet. |
+| Not supported | Not implemented in this release, and not marked In Development. |
+
+## Releases
+
+APF does not publish tagged releases yet. Every workspace crate is at version `0.1.0`. Security fixes are provided for the default branch, as described in the repository's `SECURITY.md`.
+
+The project's CI builds release binaries of `apf-policy-service` and `apf-policy-gateway` on the default branch, together with a SHA-256 checksum for each binary, `LICENSE`, and `THIRD_PARTY_LICENSES.txt`. Refer to [Release Notes](/releases/release-notes).
+
+## OpenShell Compatibility
+
+APF generates its OpenShell bindings from the OpenShell protobuf sources at a pinned commit. The pin is set in `crates/apf-proto/build.rs`.
+
+| APF | OpenShell pin | Notes |
+|---|---|---|
+| `main` | `v0.1.3` (`e1f3c82caa3ed3b65de22889ae7ef32a774878ef`) | Generated bindings track the OpenShell `v0.1.3` protobuf sources. |
+
+OpenShell 0.1.x requires every gateway interceptor and supervisor middleware to exchange extension protocol metadata during `Describe`. APF advertises extension protocol `1.0` with one required capability per extension:
+
+- `openshell.gateway-interceptor.contract` for the gateway interceptor.
+- `openshell.supervisor-middleware.contract` for the supervisor middleware.
+
+Both APF adapters validate the gateway's metadata and fail `Describe` with `FAILED_PRECONDITION` when it is missing or incompatible, so a mismatched OpenShell gateway cannot register APF. OpenShell calls `Describe` on every registered extension when its gateway starts, and does not start if one fails, so upgrade OpenShell and APF together. Refer to [Upgrade Guides](/releases/upgrade-guides).
+
+## Build Requirements
+
+APF builds from source with Cargo.
+
+| Requirement | Value |
+|---|---|
+| Rust toolchain | `1.95.0`, pinned in `rust-toolchain.toml`. The workspace declares `rust-version = "1.88"` and edition 2024. |
+| Protocol Buffers compiler | `protoc` on `PATH`, with the well-known type definitions. The container build installs `protobuf-compiler` and `libprotobuf-dev`. |
+| `buf` CLI | Required at build time. `crates/apf-proto/build.rs` runs `buf export` against the OpenShell GitHub repository at the pinned commit. |
+| Network access during build | Access to `github.com` for the OpenShell protobuf export and to crates.io for dependencies. |
+| Optional tools | `mise` for the repository tasks, `cargo-nextest` for tests, `cargo-deny` for license checks, Docker with Compose v2 for the container stack and the verification harness, and `kind`, `kubectl`, Helm 3, and `yq` v4 to run that harness against the Helm chart on a kind cluster. |
+
+<Warning>
+If `buf export` fails, the build script writes an empty placeholder for the OpenShell sandbox proto and continues, and `apf-proto` then fails to compile with errors about missing generated OpenShell files. The build script's warning is visible only with `cargo build -vv`. Make sure `buf` is installed and `github.com` is reachable before you build.
+</Warning>
+
+## Platforms
+
+The service binaries use Unix domain sockets with `SO_PEERCRED` peer checks. The systemd units in `deploy/systemd/` target Linux hosts, and the container images in `deploy/docker/` are based on Debian bookworm.
+
+The Helm chart needs Helm 3 and a Kubernetes cluster. With the default state volume, the cluster needs a default StorageClass, or you set `persistence.state.storageClass`. The repository's verification harness exercises the chart on a local kind cluster next to an OpenShell `0.1.3` gateway and the Agent Sandbox controller `v1.0.3` that OpenShell's Kubernetes driver requires. The Compose stack is verified on Docker Desktop for macOS, runs with the same files on Docker Engine, and passes the same verification on rootless Podman through its Docker-compatible API socket.
+
+## Capability Matrix
+
+### Policy Supply
+
+| Capability | Status | Notes |
+|---|---|---|
+| Bundle signing with `apf-compile genfixture` | Available | Ed25519 signatures in the yaml-sigil format. |
+| Signature verification | Available | Trust roots may be Ed25519 (`*.pub`) or ECDSA P-256 (`*.pem`, `*.p256`). |
+| Member digest verification | Available | Every manifest member is hashed and compared. |
+| Validity window (`not_before`, `expires_at`) | Available | Checked when the policy service ingests a bundle. |
+| Anti-rollback counter | Available | File-backed counter store for single-instance deployments. |
+| `runtime_compatibility` gate | Limited | Parsed and syntax-checked, but not enforced, because the policy service does not present runtime versions to the verifier. |
+| Local file bundle source | Available | Default policy source. |
+| HTTP bundle source with polling | Available | Fetches a gzipped tarball. `https://` is recommended but not enforced. |
+| Per-caller bundle variants | Limited | The `{variant}` URL placeholder and the `claims` resolver exist, but variants are never loaded, so they do not work end to end. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants). |
+| Policy retirement | Available | A policy is retired by publishing a new revision. The policy service refuses any revision lower than the highest it has accepted, so a superseded bundle cannot return while the anti-rollback counter is intact. Refer to [Backup and Recovery](/deployment/backup-and-recovery) for what a lost counter means. To stop trusting a signing key, remove it from the trust roots and publish a replacement bundle under a new key. |
+| Self-hosted policy service | Available | The policy service is yours to run. The supported topology today places it on the same host as each policy gateway; a shared service that many gateways fetch from over the network needs the networked transport, which is not in the repository. |
+| Composing policy from several sources | Available | Several teams contribute documents to one bundle, and the bundle is signed once as a whole. Combining independently signed bundles is not in the repository. |
+
+### Decision and Enforcement
+
+| Capability | Status | Notes |
+|---|---|---|
+| OpenShell sandbox policy projection | Available | `openshell.sandbox.v1`. |
+| Provider profile projection | Available | `openshell.provider-profile.v1`. |
+| Provider profile reconciliation to the OpenShell gateway | Limited | Requires `--openshell-gateway-url` and a `--bundle-refresh-interval-secs` greater than `0`. Connects without TLS or credentials. Runs at startup and when the served policy set changes, not when only providers change. |
+| Sandbox admission injection and validation | Available | Fails closed. |
+| Governance of policy, provider, and proposal RPCs | Available | Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor). |
+| Running sandbox refresh on bundle change | Limited | Opt-in. Requires `--openshell-gateway-url`, `--jwks-url`, and a `--bundle-refresh-interval-secs` greater than `0`. Connects without TLS or credentials. Triggered only when the served policy set changes, not when only the sandbox policy changes. |
+| Per-request evaluation of HTTP requests | Available | OpenShell supervisor middleware, `HTTP_REQUEST` at `PRE_CREDENTIALS`. |
+| MCP `tools/call` evaluation | Available | One tool call per request. JSON-RPC batches that contain a tool call are denied. |
+| HTTP response inspection | Not supported | APF binds only the request operation. |
+| WebSocket message inspection | Not supported | APF does not inspect WebSocket sessions. |
+| Annotator, Cedar, and effect pipeline | Available | Cedar is the only registered policy language. |
+| Policy information provider enrichment | Available | Providers registered with `--pip-config` are consulted before any rule runs, through the `PolicyInformationService` contract over HTTPS with mutual TLS or a Unix socket, or as a JSON API the gateway calls itself. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `EvaluationService.Evaluate` gRPC | Limited | Returns allow or deny with a reason and policy digest. It does not return obligations or mutations. |
+| Extension caller authentication | Available | OpenShell extension JWT plus TLS on each listener. |
+| Insecure extension transport | Development only | `--openshell-*-allow-insecure-transport`. |
+
+### Evidence and Response
+
+| Capability | Status | Notes |
+|---|---|---|
+| Structured audit events (`apf.audit.event.v1`) | Available | One JSONL file per component. |
+| Provenance tokens on served documents | Available | EdDSA JWT minted per `GetDocument` response. |
+| Metrics endpoint | In development | Use health endpoints and audit events today. |
+| Human review and step-up decisions | Reserved | The audit schema and the `pdp.proto` decision enum reserve these values. |
+
+### Deployment and Integrations
+
+| Capability | Status | Notes |
+|---|---|---|
+| Host deployment with systemd | Available | `deploy/systemd/`. The shipped env files need an audit directory and the policy service HTTP surface before the services start. Refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment). |
+| Container images | Available | `deploy/docker/` Dockerfiles with a `runtime` target, and a `demo` target for the policy service. |
+| Local container stack | Development only | `deploy/docker/compose.yaml`, built from the Dockerfiles next to it. Refer to [Installation](/get-started/installation). |
+| Kubernetes | Limited | The Helm chart at `deploy/helm/apf`, with images you build and load yourself. Refer to [Kubernetes](/deployment/kubernetes). |
+| User and agent identity facts | Limited | Rules can read facts about the user from an identity system registered as a policy information provider. Only callers of `EvaluationService.Evaluate` supply a user subject, APF trusts the name they send, and OpenShell sends none for sandbox traffic. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation). |
+
+## Next Steps
+
+- To diagnose a problem, refer to [Troubleshooting](/deployment/troubleshooting).
+- To prepare a host, refer to [Prerequisites](/get-started/prerequisites).

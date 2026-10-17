@@ -1,0 +1,58 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Upgrade Guides"
+sidebar-title: "Upgrade Guides"
+description: "How to move an APF deployment to a newer build, and the changes to plan for when upgrading OpenShell to 0.1.x."
+keywords: "Generative AI, Cybersecurity, AI Agents, Upgrade, OpenShell Compatibility, Extension Protocol, Migration, Audit"
+position: 2
+---
+
+APF has no tagged releases yet, so an upgrade means moving to a newer build of `main`. This page gives the general procedure and the changes that need action.
+
+## General Procedure
+
+1. **Read the changes.** Compare the two commits, and read the [Release Notes](/releases/release-notes).
+2. **Check the OpenShell pin.** The OpenShell commit APF is built against is set in `crates/apf-proto/build.rs`. If it changed, upgrade OpenShell and APF together. Refer to [OpenShell 0.1.x](#openshell-01x).
+3. **Validate your bundle with the new build.** Run `apf-compile compile` against your signed bundle and build the evaluator with the new gateway, as described in [Validate and Test Policies](/author-policies/validate-and-test-policies). A Cedar or annotator change in the new build can reject a policy the old one accepted.
+4. **Keep state in place.** Leave the counter store, trust roots, and audit directories where they are. A new counter store would accept older bundles again. Refer to [Backup and Recovery](/deployment/backup-and-recovery).
+5. **Restart the policy service, then the gateway.** The gateway connects to the policy service at startup and exits if it cannot.
+6. **Confirm.** Check the policy service's `policy_service_startup` and `policy_verification` records and the gateway's `policy.bundle_activated` record. Create a test sandbox and confirm it is admitted.
+
+## OpenShell 0.1.x
+
+The current `main` builds against OpenShell `v0.1.3`, commit `e1f3c82caa3ed3b65de22889ae7ef32a774878ef`. These changes apply when you move from an APF build pinned to an earlier OpenShell development build.
+
+### Extension Protocol Negotiation
+
+OpenShell 0.1.x requires every gateway interceptor and supervisor middleware to exchange extension protocol metadata during `Describe`.
+
+- APF advertises protocol `1.0` with one required capability per extension: `openshell.gateway-interceptor.contract` and `openshell.supervisor-middleware.contract`.
+- An OpenShell gateway that receives a manifest without this metadata, with a different protocol major version, or without a capability it requires refuses to start.
+- APF fails `Describe` with `FAILED_PRECONDITION` when OpenShell's metadata is missing or incompatible.
+
+An older APF build therefore cannot register with OpenShell 0.1.x, and this APF build cannot register with an OpenShell build that predates the protocol. Upgrade both together. A gateway that starts does not by itself prove that the protocols match, so also confirm that APF's listeners are registered and called.
+
+### Endpoint Enums in Provider Snapshots
+
+OpenShell now carries an endpoint's `tls`, `enforcement`, and `access` as protobuf enums rather than strings. APF emits the enum values:
+
+- An unknown `tls`, `enforcement`, or `access` value is rejected instead of passed through.
+- `terminate` and `passthrough` are passed as their corresponding OpenShell enum values, which OpenShell 0.1.x rejects in validation.
+- An omitted `enforcement` keeps OpenShell's default.
+- One invalid provider document fails the whole provider profile snapshot, rather than publishing an incomplete set.
+
+Check your bundle's `Provider` and `SandboxPolicy` endpoints. Remove `tls: terminate` and `tls: passthrough`, and keep only an omitted `tls` or `skip`. Keep `enforcement` to `enforce` or `audit`, and `access` to `read-only`, `read-write`, or `full`. Set `landlock.compatibility` to `best_effort`, or to `hard_requirement`, which OpenShell accepts but the APF schema does not list.
+
+### Running Sandbox Refresh
+
+OpenShell renamed the `UpdateConfig` request field that names the sandbox from `name` to `sandbox`. APF's refresher uses the new field, pages through sandboxes with opaque page tokens, and scopes updates to the default workspace.
+
+### What Did Not Change
+
+Bundle formats, policy documents, signatures, the counter store, and caller authentication are unchanged. Uninspected credentials stay disabled.
+
+## Next Steps
+
+- For what each build contains, refer to [Release Notes](/releases/release-notes).
+- For compatibility status, refer to [Support and Compatibility](/about/support-and-compatibility).

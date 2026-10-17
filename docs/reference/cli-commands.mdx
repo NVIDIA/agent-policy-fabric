@@ -1,0 +1,292 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "CLI Commands"
+sidebar-title: "CLI Commands"
+description: "Every command, flag, environment variable, and default for apf-policy-service, apf-policy-gateway, and apf-compile, plus the policy service configuration file."
+keywords: "Generative AI, Cybersecurity, AI Agents, CLI, apf-policy-service, apf-policy-gateway, apf-compile, Flags, Environment Variables, Configuration"
+position: 3
+---
+
+APF ships three command-line programs. This page lists every flag each one accepts on the `main` branch. Where a flag has an environment variable, the flag takes precedence over the variable.
+
+| Program | Purpose |
+|---|---|
+| [`apf-policy-service`](#apf-policy-service) | The Policy Administration Point. Loads, verifies, projects, and serves signed bundles. |
+| [`apf-policy-gateway`](#apf-policy-gateway) | The Policy Decision Point. Evaluates requests and hosts the OpenShell interceptor and middleware listeners. |
+| [`apf-compile`](#apf-compile) | Offline tool for signing and verifying bundles. |
+
+Build all three with Cargo:
+
+```shell
+cargo build --release -p apf-policy-service -p apf-policy-gateway -p apf-compile
+```
+
+## apf-policy-service
+
+```shell
+apf-policy-service <COMMAND> [OPTIONS]
+```
+
+| Command | Purpose |
+|---|---|
+| `serve` | Run the policy service. |
+| `keygen` | Generate an Ed25519 key pair for document provenance tokens. |
+
+### serve
+
+```shell
+apf-policy-service serve [OPTIONS]
+```
+
+#### Core Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--config <PATH>` | `APF_CONFIG` | None | TOML configuration file. Refer to [Configuration File](#configuration-file). |
+| `--socket <PATH>` | `APF_SOCKET` | `/run/apf/policy-service.sock` | Unix socket for the `PolicyService` gRPC API. The service removes an existing file at the path, sets the parent directory to `0700`, and binds the socket with mode `0600`. |
+| `--allowed-uid <UID>` | `APF_ALLOWED_UID` | The service's own UID | The only peer UID accepted on the socket. Other peers are disconnected and recorded as `auth.uds_peer_rejected`. |
+| `--audit-log-dir <DIR>` | `APF_AUDIT_LOG_DIR` | None | Directory for `apf-policy-service-audit.jsonl`. Required. The service refuses to start without it or if it cannot write there. |
+| `--trust-root-dir <DIR>` | `APF_TRUST_ROOT_DIR` | `./trust-roots` | Bundle trust roots: `*.pub` Ed25519 keys and `*.pem` or `*.p256` ECDSA P-256 keys. The file stem is the key ID. The service refuses to start if the directory holds no keys. |
+| `--counter-store <PATH>` | `APF_COUNTER_STORE` | `/var/lib/apf/counter` | Anti-rollback counter file. A sidecar `<PATH>.digest` records the accepted payload digest. A missing file means revision 0. |
+| `--surfaces <KIND,...>` | `APF_SURFACES` | All surfaces | Comma-separated list of surface kinds to serve. Requests for other kinds are refused. The names are not validated. Include `apf.policy.v1` for the gateway and `openshell.sandbox.v1` and `openshell.provider-profile.v1` for the interceptor. |
+
+#### Policy Source Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--policy-source <SOURCE>` | `APF_POLICY_SOURCE` | `local` | `local` reads `--bundle-path`. `http` fetches from `--bundle-source-url`. Any value other than `http` is treated as `local` without an error. |
+| `--bundle-path <PATH>` | `APF_BUNDLE_PATH` | None | Signed bundle manifest for the local source. Required when the source is `local`. Member paths resolve relative to its directory. |
+| `--bundle-source-url <URL>` | `APF_BUNDLE_SOURCE_URL` | None | URL of a gzipped tarball of the bundle directory. Required when the source is `http`. The first fetch happens at startup and fails closed. |
+| `--bundle-source-token-file <PATH>` | `APF_BUNDLE_SOURCE_TOKEN_FILE` | None | File holding the bearer token for the bundle source. Takes precedence over `--bundle-source-token`. An empty file is an error. |
+| `--bundle-source-token <TOKEN>` | `APF_BUNDLE_SOURCE_TOKEN` | None | Bearer token for the bundle source. Prefer the file form. Passing it as an argument records `startup.token_in_process_args`. |
+| `--bundle-source-poll-interval-secs <SECS>` | `APF_BUNDLE_SOURCE_POLL_INTERVAL` | `30` | Seconds between polls of the HTTP source. The environment variable has no `_SECS` suffix. Do not set `0`: the polling task stops, and the service keeps running without updates. |
+| `--resolver <RESOLVER>` | `APF_RESOLVER` | `passthrough` | Document name resolver: `passthrough` or `claims`. Other values are rejected. Refer to [Policy Name Resolution](/how-it-works/policy-service#policy-name-resolution). |
+| `--claims-config <PATH>` | `APF_CLAIMS_CONFIG` | None | JSON file with a `role_map` from user subject to bundle variant. Required with `--resolver claims`. |
+
+#### Document Signing Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--document-signing-key <PATH>` | `APF_DOCUMENT_SIGNING_KEY` | None | Ed25519 seed file used to sign provenance tokens. The first non-comment line must be `ed25519:<base64 seed>`. Without it, the service generates an ephemeral key and records `startup.ephemeral_signing_key`. |
+| `--document-key-id <ID>` | `APF_DOCUMENT_KEY_ID` | `apf-dev` | Key ID written to the `kid` header and `sub` claim of every provenance token. Must match the gateway's `--document-key-id`. |
+| `--document-ttl-secs <SECS>` | `APF_DOCUMENT_TTL_SECS` | `0` | Lifetime of documents served over gRPC. When greater than zero, sets `valid_until_ms` and the token's `exp` claim. `0` means no expiry. |
+
+#### HTTP Surface Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--http-addr <ADDR:PORT>` | `APF_HTTP_ADDR` | Disabled | Address for the HTTP surface. Must be an IP address and port. A non-loopback address records `startup.http_bind_non_loopback`. |
+| `--http-bearer-token-file <PATH>` | `APF_HTTP_BEARER_TOKEN_FILE` | None | Bearer token for `/v1/documents` and `/v1/refresh`. Required whenever `--http-addr` is set. An empty file is an error. |
+
+#### Other Options
+
+| Flag | Description |
+|---|---|
+| `--config-dump` | Accepted but has no effect in this release. |
+
+### keygen
+
+Writes `<key-id>.seed` and `<key-id>.pub` and prints the public key.
+
+```shell
+apf-policy-service keygen [--key-id <ID>] [--output-dir <DIR>] [--force]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--key-id <ID>` | `apf-dev` | Key ID and file name stem. |
+| `--output-dir <DIR>` | `.` | Output directory, created if missing. |
+| `--force` | Off | Overwrite existing files. Without it, the command fails if either file exists. |
+
+The files are written with the process umask. Set their permissions yourself, for example `chmod 0600` on the seed.
+
+### Configuration File
+
+`--config` reads a TOML file whose values fill in options not set on the command line or in the environment.
+
+| Key | Section | Option |
+|---|---|---|
+| `bundle_path` | Top level | `--bundle-path` |
+| `trust_root_dir` | Top level | `--trust-root-dir` |
+| `audit_log_dir` | Top level | `--audit-log-dir` |
+| `allowed_uid` | Top level | `--allowed-uid` |
+| `http_addr` | Top level | `--http-addr` |
+| `surfaces` | Top level | `--surfaces` |
+| `signing_key` | `[verifier]` | `--document-signing-key` |
+| `backend` | `[policy_source]` | `--policy-source` |
+| `bundle_source_url` | `[policy_source]` | `--bundle-source-url` |
+| `bundle_source_token` | `[policy_source]` | `--bundle-source-token` |
+| `bundle_source_token_file` | `[policy_source]` | `--bundle-source-token-file` |
+| `bundle_source_poll_interval_secs` | `[policy_source]` | `--bundle-source-poll-interval-secs` |
+| `backend` | `[resolver]` | `--resolver` |
+| `claims_config` | `[resolver]` | `--claims-config` |
+
+<Warning>
+The configuration file has several limitations in this release:
+
+- The `socket` and `counter_store` keys apply only when the flag or environment variable holds an outdated default, `/run/apf/apf-policy-service.sock` or `/tmp/apf-counter`, and then override it. In practice they do not set the option. The `document_ttl_secs`, `[verifier] key_id`, and `[provenance]` keys are parsed but never applied. Set these options with flags or environment variables.
+- There is no key for `--http-bearer-token-file`. If you set `http_addr` in the file, pass the token file as a flag or environment variable.
+- Unknown keys are ignored without a warning.
+- A flag or environment variable whose value equals the built-in default can be overridden by the file.
+- The sample `examples/policy-service.toml` in the repository is out of date and does not work as written.
+
+Refer to [Settings Are Ignored](/deployment/troubleshooting#settings-are-ignored).
+</Warning>
+
+## apf-policy-gateway
+
+```shell
+apf-policy-gateway [OPTIONS]
+```
+
+The gateway has no subcommands and no configuration file. Provider registration is a separate YAML file passed with `--pip-config`.
+
+### Core Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--socket <PATH>` | `APF_GATEWAY_SOCKET` | `/run/apf/policy-gateway.sock` | Unix socket for the `EvaluationService` gRPC API, mode `0600`. |
+| `--allowed-uid <UID>` | `APF_GATEWAY_ALLOWED_UID` | The gateway's own UID | The only peer UID accepted on the socket. Rejected peers are logged, not audited. |
+| `--policy-service-socket <PATH>` | `APF_POLICY_SERVICE_SOCKET` | `/run/apf/policy-service.sock` | The policy service socket. The gateway exits if it cannot connect at startup. |
+| `--audit-log-dir <DIR>` | `APF_AUDIT_LOG_DIR` | None | Directory for the gateway's audit files. Required. |
+| `--bundle-refresh-interval-secs <SECS>` | None | `10` | Seconds between polls of the policy set digest. `0` disables hot swap, provider profile reconciliation, and running sandbox refresh. |
+
+### Provider Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--pip-config <PATH>` | `APF_PIP_CONFIG` | None | YAML registration of the policy information providers the gateway consults in the Enrichment stage. Loaded and validated before any listener binds, and the gateway refuses to start on any error. Without it there is no enrichment. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `--pip-stage-budget-ms <MS>` | `APF_PIP_STAGE_BUDGET_MS` | `250` | Hard cap in milliseconds on the whole Enrichment stage. It is the default and the upper bound of every registration's `timeout_ms`, and it must stay below the timeout OpenShell applies to middleware calls. |
+
+### Provenance Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--jwks-url <URL>` | `APF_JWKS_URL` | None | The policy service's `/.well-known/jwks.json`. Fetched at startup, and a failed fetch stops startup. Required when the interceptor listener is enabled. Without it, provenance verification is off and the gateway logs a warning. |
+| `--jwks-refresh-interval-secs <SECS>` | None | `60` | Seconds between JWKS fetches. `0` disables refresh. A failed refresh keeps the current key. |
+| `--document-key-id <ID>` | `APF_DOCUMENT_KEY_ID` | `apf-dev` | Expected `sub` claim of provenance tokens on provider profile snapshots. Set it to the policy service's `--document-key-id`. Sandbox admission does not compare it, and the JWKS key is used without matching its `kid`. |
+| `--document-kind <KIND>` | None | `openshell.sandbox.v1` | Surface kind the interceptor fetches for admission. |
+| `--document-name <NAME>` | None | `default` | Document name the interceptor fetches for admission. Matches the `SandboxPolicy` member's `metadata.name`. |
+
+### OpenShell Options
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--openshell-gateway-url <URL>` | `APF_OPENSHELL_GATEWAY_URL` | None | OpenShell gateway URL. Enables provider profile reconciliation and, with `--jwks-url`, running sandbox refresh. There are no client TLS or CA options for this connection. |
+| `--openshell-compute-driver <DRIVER>` | `APF_OPENSHELL_COMPUTE_DRIVER` | Empty | The OpenShell gateway's compute driver, such as `docker`, `podman`, or `kubernetes`. The interceptor admits caller-supplied driver config (`driver_config`) in a sandbox request only when its single driver key equals this value. When the flag is empty and `--openshell-gateway-url` is set, the gateway asks OpenShell for its driver once at startup; if that fails, or neither is set, every request that carries driver config is denied. |
+| `--openshell-interceptor-addr <ADDR:PORT>` | `APF_OPENSHELL_INTERCEPTOR_ADDR` | Disabled | Listener for the gateway interceptor. Must be an IP address and port. |
+| `--openshell-interceptor-auth-trust-file <PATH>` | `APF_OPENSHELL_INTERCEPTOR_AUTH_TRUST_FILE` | None | Extension trust profile for interceptor callers. |
+| `--openshell-interceptor-tls-cert-file <PATH>` | `APF_OPENSHELL_INTERCEPTOR_TLS_CERT_FILE` | None | PEM certificate for the interceptor listener. |
+| `--openshell-interceptor-tls-key-file <PATH>` | `APF_OPENSHELL_INTERCEPTOR_TLS_KEY_FILE` | None | PEM private key for the interceptor listener. |
+| `--openshell-interceptor-allow-insecure-transport` | `APF_OPENSHELL_INTERCEPTOR_ALLOW_INSECURE_TRANSPORT` | Off | Serve the interceptor without TLS or caller authentication. Development only. |
+| `--openshell-middleware-addr <ADDR:PORT>` | `APF_OPENSHELL_MIDDLEWARE_ADDR` | Disabled | Listener for the supervisor middleware. |
+| `--openshell-middleware-auth-trust-file <PATH>` | `APF_OPENSHELL_MIDDLEWARE_AUTH_TRUST_FILE` | None | Extension trust profile for middleware callers. |
+| `--openshell-middleware-tls-cert-file <PATH>` | `APF_OPENSHELL_MIDDLEWARE_TLS_CERT_FILE` | None | PEM certificate for the middleware listener. |
+| `--openshell-middleware-tls-key-file <PATH>` | `APF_OPENSHELL_MIDDLEWARE_TLS_KEY_FILE` | None | PEM private key for the middleware listener. |
+| `--openshell-middleware-allow-insecure-transport` | `APF_OPENSHELL_MIDDLEWARE_ALLOW_INSECURE_TRANSPORT` | Off | Serve the middleware without TLS or caller authentication. Development only. |
+
+### Listener Rules
+
+The gateway checks each OpenShell listener before it does anything else:
+
+- An enabled listener needs either all three of its trust file, certificate, and key, or the insecure flag.
+- The insecure flag cannot be combined with a trust file, certificate, or key.
+- A trust file, certificate, key, or insecure flag without the listener's address is an error.
+- Certificate files must be regular files of at most 1 MiB that are not group or world writable. Key files must be regular files of at most 64 KiB with no group or other permissions. Symbolic links are refused.
+
+Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile format.
+
+### Audit Files
+
+| File | Written when |
+|---|---|
+| `apf-policy-gateway-audit.jsonl` | Always. |
+| `apf-policy-gateway-interceptor-audit.jsonl` | The interceptor listener is enabled. |
+| `apf-policy-gateway-middleware-audit.jsonl` | The middleware listener is enabled. |
+
+The gateway does not accept `--trust-root-dir` or `--counter-store`. It verifies documents through provenance tokens and the JWKS, and the policy service owns the counter store.
+
+## apf-compile
+
+```shell
+apf-compile <COMMAND> [OPTIONS]
+```
+
+| Command | Purpose |
+|---|---|
+| `genfixture` | Fill in member digests in a bundle template and sign it. |
+| `compile` | Verify a signed bundle and, optionally, compile it. |
+
+On failure, both commands print `Error: <message>` to standard error and exit with status 1.
+
+### genfixture
+
+```shell
+apf-compile genfixture --template <PATH> --key <PATH> --out <PATH> [OPTIONS]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--template <PATH>` | Required | Bundle template with a `REPLACE_WITH_DIGEST` placeholder for every manifest entry. |
+| `--key <PATH>` | Required | Ed25519 seed file, `ed25519:<base64 seed>`. |
+| `--out <PATH>` | Required | Output path for the signed bundle. Overwritten if it exists. |
+| `--base-dir <DIR>` | The template's directory | Directory that member paths are resolved against. |
+| `--keyid <ID>` | The `--key` file stem | Key ID written into the signature. Verifiers look for `<keyid>.pub` in their trust-root directory. |
+| `--generate-key` | Off | Create the key file and a public key file if `--key` does not exist. |
+| `--pubkey-out <PATH>` | `--key` with a `.pub` extension | Where to write the generated public key. |
+
+The command prints one `manifest  <path>: sha256=<digest>` line per member and `signed bundle written to <path>`.
+
+<Note>
+`genfixture` fills placeholders in the order manifest entries appear, one per entry. Use a placeholder for every entry and nowhere else in the template, including comments. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+</Note>
+
+### compile
+
+```shell
+apf-compile compile --bundle-path <PATH> [--trust-root-dir <DIR>] [--verify-only]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--bundle-path <PATH>` | Required | Signed bundle manifest. |
+| `--trust-root-dir <DIR>` | `./trust-roots` | Trust roots to verify the signature against. |
+| `--verify-only` | Off | Verify only. Without it, also load and compile every member. |
+| `--key-id <ID>` | `apf-dev` | Accepted but not used. Any trusted key verifies the bundle. |
+
+On success it prints `verified  digest=<sha256> counter=<revision>`, and without `--verify-only`, one `projection  kind=<kind> name=<name> bytes=<n>` line per surface. It produces `apf.policy.v1` and `openshell.provider-profile.v1`, not the OpenShell sandbox projection.
+
+The command uses a new, empty counter store for every run, so it cannot detect a replayed bundle, and it rejects `policy_revision: 0`. It does not build the Cedar evaluator. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+
+## Logging
+
+`apf-policy-service` and `apf-policy-gateway` log to standard output. Set `RUST_LOG` to change the level, for example `RUST_LOG=debug` or `RUST_LOG=apf_policy_gateway=debug`. The default is `info`. `apf-compile` prints plain output and has no log level.
+
+## Repository Tasks
+
+The repository's `mise.toml` defines development tasks. Run them with `mise run <task>`.
+
+| Task | Runs |
+|---|---|
+| `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo deny check`. |
+| `test` | `cargo nextest run`. |
+| `dag-guard` | `cargo xtask dag-guard`, which enforces the crate dependency rules. |
+| `buf-lint` | `buf lint contracts/`. |
+| `sign-bundle` | Re-signs the demo bundle with the development key. |
+| `dev`, `dev-logs`, `dev-down` | `dev` builds both images, starts the Docker Compose stack in `deploy/docker/`, runs the smoke suite, and leaves the stack running. `dev-logs` follows its logs, and `dev-down` stops it and keeps its volumes. |
+| `e2e:compose` | Brings up the Compose stack, runs the smoke suite, and tears the stack down. |
+| `e2e:compose:openshell` | The same, with an OpenShell gateway that admits a sandbox through APF. |
+| `e2e:kind` | Installs the Helm chart on a local kind cluster next to an OpenShell gateway, runs the smoke suite, and uninstalls. |
+| `e2e:parity` | Checks that the Compose stack and the Helm chart start both services with the same flags. No stack is started. |
+| `dev-native` | Build and run both services natively. |
+| `docs`, `docs:serve` | `docs` runs `fern check` and `scripts/check_docs_nav.py` to validate the documentation configuration, links, and navigation. `docs:serve` previews the site locally. Both use the Fern CLI version pinned in `fern/fern.config.json` and need Node.js and uv. Refer to [Contributing](/resources/contributing#contribute-to-the-documentation). |
+
+<Warning>
+`dev-native` does not start on `main` because it sets no audit directory, which both services require, and passes flags the gateway no longer accepts. Use the commands in [Installation](/get-started/installation) instead.
+</Warning>
+
+## Next Steps
+
+- To see how these options fit together on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+- For the HTTP and gRPC interfaces, refer to [Service APIs](/reference/service-apis).

@@ -1,0 +1,58 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Enforcement Coverage and Limitations"
+sidebar-title: "Enforcement Coverage and Limitations"
+description: "Which agent actions and control-plane operations APF governs today, which it does not, and how bypasses are prevented."
+keywords: "Generative AI, Cybersecurity, AI Agents, Coverage, Limitations, Bypass Prevention, Threat Model, Security Review"
+position: 5
+---
+
+This page states precisely what APF governs in this release, so you can decide where you need other controls. Everything here reflects the `main` branch of the repository.
+
+## What APF Governs
+
+| Path | Coverage |
+|---|---|
+| Sandbox creation | Every `CreateSandbox` gets the signed sandbox policy, overwriting any policy in the request, with provenance verified twice. |
+| Sandbox policy changes | `UpdateConfig` with a policy body or merge operations is denied. Refreshes receive only signed policy. Approval-mode changes are denied. |
+| Policy proposals | Agent-authored proposals and every draft approval are denied. |
+| Providers and profiles | Provider types and profiles outside the bundle are denied. Profile deletion is denied. An imported or updated profile must match the bundle's copy. |
+| Outbound HTTP requests | Requests to hosts that the sandbox policy routes to `apf-content-policy` are decided at `PRE_CREDENTIALS`, with the full annotator, Cedar, and effect pipeline. |
+| MCP tool calls | A `tools/call` in an HTTP request body is evaluated as a tool call, and needs a capability grant. |
+
+## What APF Does Not Govern
+
+| Gap | Detail | Mitigation |
+|---|---|---|
+| Responses and tool results | APF binds only the request operation. Response bodies, including MCP tool results, are not inspected. | Inspect results in the tool path. Result controls are planned. |
+| WebSocket messages | Not inspected. | Do not route WebSocket traffic that needs content decisions until it is supported. |
+| Hosts not routed to APF | A host reachable at Layer 1 but missing from the `apf-content-policy` middleware entry gets no content decision. | Include every sensitive host in the middleware entry. |
+| Traffic OpenShell cannot inspect | Layer 4 `tcp` endpoints and endpoints with `tls: skip` never reach APF with a body. APF always projects `allow_uninspected_credentials` as `false`. | Avoid them for sensitive destinations. |
+| Very large bodies | A body over the middleware registration's `max_payload_bytes`, at most 4 MiB, never reaches APF and gets no APF record. OpenShell blocks it if the host's middleware entry is `fail_closed`, and forwards it uninspected if every middleware on the host is `fail_open`. | Use `on_error: fail_closed`, and keep request bodies to governed hosts under the limit. |
+| JSON-RPC batches with tool calls | Denied, because one evaluation carries one tool identity. | Send tool calls individually. |
+| Provider attachment and lifecycle RPCs | APF does not bind `AttachSandboxProvider`, `DetachSandboxProvider`, `DeleteProvider`, `ConfigureProviderRefresh`, or `RotateProviderCredential`. Attaching or detaching a provider changes a sandbox's effective network policy through OpenShell's provider layers. | Restrict who may call these RPCs in OpenShell. |
+| Per-request user identity | OpenShell supplies no user subject on the middleware path, so rules cannot condition on who the agent acts for. | Refer to [Identity and Delegation](/how-it-works/identity-and-delegation). |
+| Retiring a bundle before it expires | A bundle is retired by publishing a higher revision. There is no revocation list that reaches a host which has not loaded the new one. | Publish the replacement at a higher revision, keep `expires_at` short, and remove a compromised key's trust root. |
+| Expiry of an active bundle | Not enforced until the next restart or reload. | Renew bundles well before `expires_at`. |
+| Runtime version gating | `runtime_compatibility` is not enforced. | Track OpenShell compatibility in your release process. |
+| Audit integrity | Records are not signed or hash-chained. | Ship records off the host promptly. |
+
+## Bypass Prevention
+
+APF's decisions bind only traffic that passes through it. These controls keep an agent from going around it:
+
+- **OpenShell mediates all egress.** The sandbox's only network path is through OpenShell's supervisor, which enforces the projected network policy and calls APF for routed hosts.
+- **Source policy cannot be changed outside a bundle.** The interceptor denies direct edits, agent-authored proposals, draft approvals, and unmanaged providers and profiles, and agent policy proposals must stay disabled in OpenShell. Provider attachment is not governed, as listed above.
+- **Admission fails closed.** A sandbox cannot start without the signed policy and valid provenance.
+- **Credentials come last.** OpenShell injects credentials only after APF's decision, so a request APF denies never carries a credential, and APF never holds one.
+- **Callers are authenticated.** In authenticated mode, only OpenShell's gateway and the bound sandbox supervisor can call APF's listeners.
+
+## Middleware Ordering
+
+APF decides on the request body it receives. If another middleware that transforms bodies runs after APF on the same host, the request that leaves can differ from the one APF approved. OpenShell runs middleware in ascending `order`. Give APF's entry the highest `order` among middleware that transform bodies on the same hosts, or do not combine them.
+
+## Next Steps
+
+- To close the gaps you can close today, refer to [Security Best Practices](/security/best-practices).
+- For the status of each capability, refer to [Support and Compatibility](/about/support-and-compatibility).

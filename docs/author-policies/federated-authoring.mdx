@@ -1,0 +1,96 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Federated Authoring"
+sidebar-title: "Federated Authoring"
+description: "How security, compliance, tool-owner, and platform teams contribute independent policy documents to one signed bundle, share detectors and effects, and review changes."
+keywords: "Generative AI, Cybersecurity, AI Agents, Federated Authoring, Policy as Code, GitOps, Review, Ownership"
+position: 2
+---
+
+Federated authoring lets each team own the policy in its domain without editing a shared codebase or coordinating every change. Security writes detectors and content gates, compliance writes data-handling controls, tool owners write grants for their tools, and the platform team writes the sandbox perimeter. All of it is signed into one bundle and enforced together.
+
+## How Teams Divide the Work
+
+Each document kind maps to a concern, so ownership follows the kind.
+
+| Team | Typical documents |
+|---|---|
+| Platform | `SandboxPolicy` perimeter, `Provider` documents for shared services. |
+| Security | `PolicyAnnotator` detectors such as `secret-detector`, `PolicyRule` documents with `role: control` such as `security-content-gate`, and the `PolicyFinding` and `PolicyEffect` documents they reference. |
+| Compliance | Annotators and effects for regulated data, such as `pii-detector` and `redact-pii-body`. |
+| Tool owners | `PolicyRule` documents with `role: capability` for their tools, such as `github-grants` or `slack-grants`, with operator-tunable values in `spec.data`. |
+
+## Shared Components
+
+Annotators, effects, and findings are shared infrastructure. They are written once and referenced by name from any rule in the bundle.
+
+- Every annotation is available to every rule as `context.annotations.<name>`. The security team's `secret-detector` is visible to a tool owner's grant rule with no coordination.
+- Any rule can reference an effect with `@apf_effect("<name>")` and a finding with `@apf_finding("<name>")`.
+- A reference to an effect or finding that does not exist in the bundle is a load-time error, so a team cannot silently depend on a document that was removed.
+
+Document names must be unique within each kind, and annotation names must be unique across all annotators. A duplicate is a load-time error. For a duplicate annotation name, the error names both annotators.
+
+## A Policy Repository Layout
+
+APF does not require a particular repository structure. A conventional layout keeps each bundle in its own directory, with one subdirectory per document kind:
+
+```text
+policy-repo/
+  bundles/
+    <bundle-name>/
+      <bundle-name>.template.yaml
+      sandbox/
+      provider-profiles/
+      annotators/
+      findings/
+      effects/
+      rules/
+```
+
+Each bundle directory compiles and signs independently. Teams contribute to the bundles they are responsible for, and every change goes through pull request review before it is signed.
+
+## Who Owns the Manifest
+
+The manifest template lists every member and fixes their order. Rule order is semantic: the first `forbid` that fires decides the deny reason. Order also controls which effects run first and which annotator a duplicate-name error blames. Treat a reorder of the manifest as a policy change and review it as one.
+
+The recommended manifest order is:
+
+1. `SandboxPolicy` and provider documents.
+2. `PolicyAnnotator` documents.
+3. `PolicyFinding` and `PolicyEffect` documents.
+4. `PolicyRule` documents, with the rules whose `forbid` reasons you want reported first listed first.
+
+## Reviewing Changes
+
+Every policy change is a document diff. Because each kind has one concern, a reviewer can read a change in isolation:
+
+- An annotator change alters what is detected, not what is decided.
+- A rule change alters what is decided.
+- An effect change alters what is done to an allowed request.
+- A `data` change alters a tunable value without touching logic.
+
+An example of independent contributions to one bundle:
+
+```text
+Security team
+  annotators/prompt-injection-detector.yaml   detects adversarial prompt patterns
+  rules/security-content-gate.yaml            forbids on detection
+  findings/prompt-injection.yaml
+
+Agent owner
+  rules/github-grants.yaml                    capability grants for the agent's tools
+  effects/redact-code-secrets.yaml            redacts secrets before they leave the sandbox
+
+Platform team
+  sandbox/default-policy.yaml                 network perimeter for all sandboxes
+```
+
+After review and merge, the bundle is signed with a higher `policy_revision` and published. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+
+APF does not provide a review or approval workflow of its own. Use your source control's review, branch protection, and code ownership features. A human-review gate inside APF is reserved in the audit schema but not implemented.
+
+## Next Steps
+
+- To check documents before review, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+- To learn each document kind, continue with [Sandbox Policies](/author-policies/sandbox-policies).

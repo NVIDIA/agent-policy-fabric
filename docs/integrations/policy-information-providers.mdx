@@ -1,0 +1,512 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Policy Information Providers"
+sidebar-title: "Policy Information Providers"
+description: "Register policy information providers with the policy gateway so rules can read attested facts from external systems: the contract, the two provider types, the registration file, the lookup on the wire, timeouts, provenance, audit, and security."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Information Provider, PIP, Enrichment, Context, Mutual TLS, Unix Socket, HTTP, Cedar, Provenance"
+position: 5
+---
+
+A policy information provider supplies facts that neither the runtime nor the request carries: whether a change request is approved, which groups a user belongs to, what a sandbox's current risk level is. The policy gateway consults the providers registered with it in the Enrichment stage, before any rule runs, and exposes their facts to Cedar as `context.<domain>`. This page covers the contract, the two provider types, the registration file, and how to write policy over provider facts.
+
+## What a Provider Is
+
+A provider attests facts. It never decides.
+
+- A provider owns one domain, and policy reads its facts as `context.<domain>.<claim>`. The registration file names the domain `context`, after the Cedar path it fills. Policies name domains, not providers, so a provider can be replaced without a policy change.
+- A provider returns claims. It never returns decisions, effects, obligations, or provenance. The gateway stamps provenance itself, as `context.<domain>._meta`.
+- A provider sees only what its type allows. A `grpc` provider receives the identity and action fields of the subject. An `http` provider receives only the request fields its lookup keys read. Neither sees the request body, Cedar syntax, or another provider's output.
+- A provider that cannot answer either fails the request closed or degrades, as its registration declares.
+
+Registration is deployment configuration. Operators register providers in a YAML file passed to `apf-policy-gateway` with `--pip-config`. The signed bundle does not carry provider registrations.
+
+## Two Provider Types
+
+Every registration declares a `type`.
+
+| `type` | What the gateway does | Use it when |
+|---|---|---|
+| `grpc` | Calls `PolicyInformationService.GetAttributes` on the provider, over HTTPS with mutual TLS or over a Unix socket with a peer UID check. | The system implements the contract, or a small service in front of it does. |
+| `http` | Calls a JSON API itself: one `GET` per applicable request. It then selects the record that answers the lookup, checks that it is the record asked for, and keeps the fields policy needs. | The facts live in a system with an HTTP API and nothing implements the contract. |
+
+A `grpc` provider connects in one of two ways. With `https://host[:port]` and a `tls` block, the provider runs anywhere the gateway can reach, the gateway pins the provider's CA, and it presents its own client certificate. With `unix:///path` and an optional `peer_uid`, the provider runs on the same host and both sides verify the peer's UID. Plain `http://` is accepted only for a loopback host, `localhost`, `127.0.0.0/8`, or `::1`, for both types.
+
+## The Contract
+
+Providers of `type: grpc` implement `PolicyInformationService.GetAttributes`, defined in `contracts/proto/nvidia/agent_policy_fabric/pip/v1alpha1/pip.proto` in package `nvidia.agent_policy_fabric.pip.v1alpha1`. The `apf-proto` crate generates it as `pip_v1alpha1`. Any language with gRPC support can implement it.
+
+The file's `context` is the contract's `domain`. The registration file names the namespace after the Cedar path it fills, and the wire contract and audit records carry the same value as `domain`.
+
+### GetAttributesRequest
+
+| Field | Contents |
+|---|---|
+| `subject` | The evaluation subject, projected to the fields the provider receives. Refer to [Subject Projection](#subject-projection). |
+| `domains` | The domain the provider is registered for, which is its registration's `context`. Every root of the answer must be one of them. |
+| `correlation_id` | The caller's correlation id, for audit joins. At most 256 bytes. |
+
+`EvaluationSubject` carries `user_subject`, `tool`, `capability`, `action`, `args`, `target`, `runtime`, and `user_subject_attestation`. Fields the provider does not receive are left empty.
+
+### GetAttributesResponse
+
+| Field | Contents |
+|---|---|
+| `context_attributes` | One root per requested domain that has attributes, holding a record of claims, for example `{"change": {"approval": "approved"}}`. An omitted root means no data for that domain. Never a `_meta` key. |
+| `ttl_seconds` | Remaining freshness the provider advertises. A `NO_DATA` answer must carry `0`. The gateway does not cache answers in this release, so the value has no other effect. |
+| `evidence_ref` | An opaque pointer to the evidence behind the attributes, such as a change number, for audit. At most 128 characters with no control characters. Never a secret or observation content. |
+| `status` | `ATTRIBUTE_STATUS_FOUND` or `ATTRIBUTE_STATUS_NO_DATA`. Must be set. |
+| `age_seconds` | Age of the underlying facts when the response was produced, `0` when fetched live. The gateway records it as `_meta.age_seconds`. |
+
+Field 2, `entity_attributes`, is reserved for a later version of the contract.
+
+### Output Validation
+
+The gateway validates every answer. An answer that fails any rule is recorded as `invalid_output`.
+
+- Every root of `context_attributes` is a requested domain, and its value is a record.
+- No root carries `_meta`.
+- Claim values hold no nulls. Numbers are integers with an absolute value of at most 2^53 - 1.
+- Nesting is at most 16 levels deep. Keys are 1 to 128 bytes and do not start with `__`.
+- The encoded response is at most 64 KiB.
+- A `NO_DATA` answer carries no attributes and a `ttl_seconds` of `0`.
+- A `FOUND` answer without the domain's root is treated as `no_data`.
+
+### Failures on the Wire
+
+A provider reports a failure with a gRPC status code, which the gateway records as a status.
+
+| gRPC code | Recorded status |
+|---|---|
+| `DEADLINE_EXCEEDED` | `timeout` |
+| `RESOURCE_EXHAUSTED` | `capacity` |
+| `INVALID_ARGUMENT` | `invalid_input` |
+| `UNAUTHENTICATED`, `PERMISSION_DENIED` | `unauthorized` |
+| `UNIMPLEMENTED`, `FAILED_PRECONDITION` | `misconfigured` |
+| `CANCELLED`, which a tonic server reports when the request's deadline expires | `timeout` |
+| `OUT_OF_RANGE`, which the client reports for a reply over the message cap | `invalid_output` |
+| Any other code, including `UNAVAILABLE` and `INTERNAL` | `unavailable` |
+
+The contract evolves additively. The gateway rejects an `AttributeStatus` value it does not know, so adding one is a breaking change until providers can negotiate the contract version.
+
+## The Enrichment Stage
+
+For each evaluation, the gateway runs these steps for every registered provider. Refer to [Request Evaluation](/how-it-works/request-evaluation#stage-1-enrichment) for where the stage sits in the pipeline.
+
+1. **Applicability.** `applies_to` lists tool names or action ids. The provider runs when an entry equals the request's tool name or its action id. A registration without `applies_to` applies to every evaluation. A provider that does not apply makes no lookup and records the status `not_applicable`.
+2. **Projection.** The subject is projected to the fields the provider's type allows. Only those fields leave the gateway.
+3. **Lookup.** Applicable providers run concurrently, each within its `timeout_ms` and the whole stage within `--pip-stage-budget-ms`. At most 32 lookups per provider are in flight at once.
+4. **Validation.** The answer is checked against the output rules above.
+5. **Provenance.** The claims are written to `context.<domain>` with a `_meta` record. Refer to [Provenance](#provenance).
+6. **Failure mode.** A provider that failed is handled as its `on_failure` declares. Refer to [Failure Modes](#failure-modes).
+
+Action ids differ by surface. On the OpenShell middleware path the tool name and the action id are both the bare MCP tool name, for example `github_merge_pull_request`. On the `EvaluationService` path the tool name is `resource.class` and the action id is `<resource.class>::<verb>`, for example `github::merge_pull_request`. One `applies_to` entry covers both surfaces only when callers use the same tool name on both; otherwise list both forms.
+
+Anything a caller supplies in `context_attributes` is discarded before the stage runs. Only the gateway writes provider facts.
+
+## Registration File
+
+The file is a YAML document with one `providers` list of 1 to 16 entries. Unknown keys are rejected anywhere in the file, and so are the keys listed under [Deferred Keys](#deferred-keys). The gateway loads the file through its checked startup-file path: it must be a regular file, not a symbolic link, not group or world writable, and at most 64 KiB. The gateway parses and validates the file before any listener binds and refuses to start on any error. A validation error names the provider and the key path, for example `provider 'change-management': response.must_match references key 'repo', which request.keys does not define`. Once the file is accepted, the gateway logs `policy information providers registered` with the path, the number of providers, their contexts, and the stage budget.
+
+```yaml
+providers:
+  - name: change-management
+    context: change
+    type: http
+    applies_to: [github_merge_pull_request]
+    endpoint:
+      url: https://itsm.example.com/api/now/table/change_request
+      auth: { bearer_token_file: /etc/apf/providers/itsm.token }
+    request:
+      query: { cmdb_ci.name: "{repository}", state: scheduled }
+      keys:
+        repository: { from: args.repository, pattern: "^[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,63}$" }
+    response:
+      record_path: result
+      must_match: { cmdb_ci.name: "{repository}" }
+      keep: [number, state, approval, risk]
+    on_failure: degrade
+    timeout_ms: 200
+  - name: agent-registry
+    context: agent
+    type: grpc
+    applies_to: [github_merge_pull_request]
+    endpoint:
+      url: https://registry.agents.example.com:8443
+      tls:
+        ca_file: /etc/apf/providers/registry-ca.pem
+        client_cert_file: /etc/apf/providers/gateway.pem
+        client_key_file: /etc/apf/providers/gateway.key
+    on_failure: fail_closed
+```
+
+### Keys
+
+| Key | Required | Default | Meaning |
+|---|---|---|---|
+| `name` | Yes | | The provider's label in audit records and deny reasons: 1 to 64 ASCII letters, digits, `.`, `_`, or `-`, unique across the file, and free of any [sanitizer word](#reserved-words). |
+| `context` | Yes | | The domain policy reads the facts under: `context: change` fills `context.change.*`. 1 to 32 lowercase letters, digits, or `_`, starting with a letter, not a [reserved root](#reserved-words), and free of any sanitizer word. One provider per context. The wire contract and audit records carry it as `domain`. |
+| `type` | Yes | | `http` when the gateway calls a JSON API itself, `grpc` when the system implements `PolicyInformationService`. |
+| `applies_to` | No | Every request | 1 to 64 tool names or action ids, each 1 to 256 characters of ASCII letters, digits, or `-_.:/@`. The provider runs when an entry equals the request's tool name or its action id. |
+| `endpoint.url` | Yes | | Where the provider is. For `http`, `https://` to any host or `http://` to a loopback host, and path segments may hold `{key}` tokens. For `grpc`, `https://host[:port]` with `endpoint.tls`, `unix:///absolute/path`, or `http://` to a loopback host. Refer to [Endpoint Rules](#endpoint-rules). |
+| `endpoint.auth` | No | No credential | `http` only. Exactly one of `bearer_token_file` and `basic_auth_file`. A basic credential file holds the user on the first line and the password on the second. The file is read on every call. Refer to [Security](#security). |
+| `endpoint.tls` | With `https://` | | `grpc` only. `ca_file` pins the CA that signs the provider's certificate. `client_cert_file` and `client_key_file` are the gateway's identity. Required with an `https://` URL and not allowed otherwise. |
+| `endpoint.peer_uid` | No | The gateway's own UID | `grpc` only. The UID the provider process runs as. Only allowed with a `unix://` URL. |
+| `request.query` | No | No query | `http` only. Query parameters sent with the `GET`. A name is literal. A value is a literal or exactly one `{key}` token. |
+| `request.keys` | No | No keys | `http` only. 1 to 8 lookup keys by name, each a lowercase letter followed by lowercase letters, digits, or `_`. A key has `from`, a [subject path](#subject-projection), and `pattern`, an anchored regular expression that starts with `^` and ends with `$`. Every key is used in `endpoint.url` or `request.query`, and every `{key}` token names a key. Without `request`, the lookup is fixed and sends no request fields. |
+| `response.record_path` | No | The body | `http` only. A [field reference](#field-references) to the record in the answer. Without it, the body is the record. A list, there or as the whole body, must hold exactly one record: an empty list is `no_data`, a list of several records is `invalid_output`. |
+| `response.must_match` | No | No check | `http` only. Record fields that must equal a key, as `<field reference>: "{key}"`. A record that differs is `no_data`. Set it whenever the API filters by the key, so the API cannot answer with a different record than the one asked for. |
+| `response.keep` | No | Presence only | `http` only. The record fields that become claims: a list of field names, each also a valid claim name, or a map of `<claim>: <field reference>` that renames them. A claim name is a lowercase letter followed by lowercase letters, digits, or `_`, and is never `_meta`. Without `keep`, a found record yields no claims and `context.<domain>` holds only `_meta`. |
+| `on_failure` | Yes | | `fail_closed` or `degrade`. Refer to [Failure Modes](#failure-modes). |
+| `timeout_ms` | No | The stage budget | The lookup's deadline in milliseconds, from 1 to `--pip-stage-budget-ms`, 250 by default. For `http` it is also the HTTP client's timeout. |
+
+### Field References
+
+`response.record_path`, the names in `response.must_match`, and the field references in `response.keep` name a place in the JSON answer.
+
+- A bare name without `/` is one top-level field. `cmdb_ci.name` is the field named `cmdb_ci.name`, not a nested path. The gateway converts it to the JSON pointer `/cmdb_ci.name` and escapes a `~` in the name as `~0`.
+- A value that starts with `/` is a JSON pointer, used as written. `/result/0/approval` reaches into nested records and lists.
+
+A field whose name is not a valid claim name, such as `cmdb_ci.name`, can still become a claim through the map form of `keep`: `keep: { ci: cmdb_ci.name }`. A list entry that is not a valid claim name is rejected with a message that points at the map form.
+
+### Lookup Keys and Tokens
+
+- A `{key}` token is allowed in the path segments of `endpoint.url` and in `request.query` values. It is never allowed in the scheme, the host, or a query name.
+- A query value with a token holds exactly one token and nothing else.
+- Every token names a key in `request.keys`, and every key is used at least once in the URL or the query.
+- Every `response.must_match` value is exactly one `{key}` token.
+- A key is read from the subject path its `from` names. A key that is absent, empty, or does not match its `pattern` means the source cannot be asked: no request is sent and the lookup fails with the status `no_data`. The provider's `on_failure` then applies: `degrade` continues with `_meta` only and `degraded: true`, `fail_closed` denies the request as `pip_no_data:<provider>`. A value is URL-encoded where its token stands; the pattern is the injection guard.
+
+### Endpoint Rules
+
+- A URL must name a host, must not carry a user name or password, and must not carry a fragment.
+- For `type: http`, `endpoint.tls` and `endpoint.peer_uid` are rejected: client certificates for http endpoints are not supported in this release. Register a system that requires one through the contract over mutual TLS.
+- For `type: grpc`, `endpoint.auth`, `request`, and `response` are rejected.
+- An `https://` URL on a `grpc` provider requires `endpoint.tls` with all three files. `endpoint.peer_uid` is not allowed.
+- An `http://` URL is accepted only for a loopback host. `endpoint.tls` and `endpoint.peer_uid` are not allowed.
+- A `unix://` URL is an absolute path with no trailing slash, no `.` or `..` segments, and no `?`, `#`, `%`, or control characters. `endpoint.tls` is not allowed. The path must not be the gateway's own evaluation socket, compared by resolved path and by inode. The socket must already exist when the gateway starts: the gateway inspects it before any listener binds and refuses to start unless it passes the socket rules under [Security](#security), so start the provider before the gateway and order the units with `After=` and `Requires=` on the provider's service. An `https://` or `http` provider is contacted only on the first lookup and may be unreachable at startup; `on_failure` governs lookups, not startup.
+
+### Reserved Words
+
+A context can never be one of the roots the request and the engine own: `args`, `annotations`, `data`, `body_text`, `has_tool_name`, `target_host`, `target_method`, `target_path`, or `target_scheme`. The evaluator also refuses an input whose namespace would shadow one of them.
+
+A provider name or context that contains a word the audit sanitizer treats as a forbidden key is rejected, so a provider's name can always appear in audit records. The words are `token`, `secret`, `password`, `credential`, `private_key`, `api_key`, `apikey`, `refresh_token`, `access_token`, `cookie`, `authorization`, `body`, `text`, `raw`, `message`, and `file_content`, matched as substrings without regard to case.
+
+### Deferred Keys
+
+The following keys are reserved for a later release and are rejected today like any unknown key. The file has no legacy form: a document with a `pips` root is rejected.
+
+| Reserved key | What it will configure |
+|---|---|
+| `cache` | Reuse of answers between requests. Every evaluation asks the provider in this release, and `_meta.cached` is always `false`. |
+| `max_in_flight` | The concurrent lookup limit per provider. It is fixed at 32. |
+| `max_response_bytes` | The response size cap for `http`. It is fixed at 256 KiB. |
+| `request.method`, `request.body`, `request.headers` | Other request shapes for `http`. The gateway sends a `GET` with `Accept: application/json` and the credential header. |
+| `subject` | An explicit subject projection. A `grpc` provider receives identity and action, and an `http` provider receives the fields its keys read. |
+| `as` in `response.keep` | Claim coercion. Values are kept as the API returns them. |
+| `endpoint.tls` for `type: http` | A client certificate toward a JSON API. |
+
+## Subject Projection
+
+The provider's type decides which subject fields the gateway may send. The lookup key of an `http` provider is visible in its registration, so a provider never receives arguments it has no use for.
+
+| Path | Wire field | Contents |
+|---|---|---|
+| `user_subject` | `subject.user_subject`, `subject.user_subject_attestation` | The user subject the enforcement point asserts. APF does not verify it. The attestation is `none` when the subject is empty and `caller` when the enforcement point asserted it. |
+| `tool` | `subject.tool` | The tool name. |
+| `capability` | `subject.capability` | The capability, when the request carries one. |
+| `action` | `subject.action` | The normalized action id: `<tool>::<capability>`, the tool alone when there is no capability, or `invoke` when there is neither. |
+| `runtime` | `subject.runtime` | The whole runtime identity: `platform`, `instance_id`, `agent_type`, and `attestation`, which is `caller` or `openshell-supervisor-jwt`. As a lookup key, `runtime` and `runtime.instance_id` give the instance id and `runtime.platform` gives the platform name. |
+| `args.<name>` | `subject.args.<name>` | One named call argument. The name is 1 to 128 characters with no whitespace or control characters. A null or missing argument is left out. |
+| `target.host`, `target.method`, `target.path`, `target.scheme` | `subject.target.*` | One field of the HTTP target each. |
+
+- A `grpc` provider receives identity and action: `user_subject`, `tool`, `capability`, `action`, and `runtime`. Arguments and target fields are never sent to a `grpc` provider in this release.
+- An `http` provider receives the distinct `from` paths of its `request.keys`, and nothing else. Each value is rendered into the request where its token stands. Any path in the table can be a key's `from`; `runtime` renders as the instance id.
+
+**Choose the lookup key with care.** A key must be a field the tool acts on or the policy also constrains, such as a repository, a project, or a sandbox identity. It must never be a free argument the agent chooses, or the agent selects which record gates its request.
+
+The two surfaces fill the subject differently.
+
+| Field | OpenShell middleware | `EvaluationService` |
+|---|---|---|
+| `user_subject` | Empty, attestation `none`. | `OpenShellContext.user_subject`, attestation `caller`. |
+| `tool`, `capability` | The MCP tool name, no capability. | `resource.class` and `verb`. |
+| `action` | The bare MCP tool name. | `<resource.class>::<verb>`. |
+| `args` | `params.arguments` of the `tools/call`. | The request's `args` map, as strings. |
+| `runtime` | Platform `openshell` and the sandbox id from the request context. The attestation is `openshell-supervisor-jwt` in authenticated mode and `caller` with the insecure transport flag. | Platform `openshell`, the sandbox id, and the agent type from `OpenShellContext`. The attestation is `caller`. |
+| `correlation_id` | The request's `request_id`. | `audit_context["correlation_id"]`. |
+
+## The http Provider Type
+
+A `type: http` registration turns an existing JSON API into a provider. For each applicable evaluation the gateway resolves the keys from the subject, sends one `GET`, selects the record, checks that it is the record asked for, and keeps the configured fields as the domain's claims.
+
+```yaml
+endpoint:
+  url: https://itsm.example.com/api/now/table/change_request
+  auth: { bearer_token_file: /etc/apf/providers/itsm.token }
+request:
+  query: { cmdb_ci.name: "{repository}", state: scheduled }
+  keys:
+    repository: { from: args.repository, pattern: "^[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,63}$" }
+response:
+  record_path: result
+  must_match: { cmdb_ci.name: "{repository}" }
+  keep: [number, state, approval, risk]
+```
+
+### The Lookup on the Wire
+
+For a `github_merge_pull_request` call whose `repository` argument is `acme/payments`, the gateway sends one request. The key value is percent-encoded for the query.
+
+```text
+GET /api/now/table/change_request?cmdb_ci.name=acme%2Fpayments&state=scheduled HTTP/1.1
+Host: itsm.example.com
+Accept: application/json
+Authorization: Bearer <contents of /etc/apf/providers/itsm.token>
+```
+
+The API answers with the matching record under `result`.
+
+```json
+{
+  "result": [
+    {
+      "number": "CHG0012345",
+      "state": "scheduled",
+      "approval": "approved",
+      "risk": "moderate",
+      "cmdb_ci.name": "acme/payments"
+    }
+  ]
+}
+```
+
+`record_path: result` selects the list, which holds exactly one record. `must_match` confirms that its `cmdb_ci.name` equals the `repository` key. `keep` turns four fields into claims, and the rules see this record as `context.change`.
+
+```json
+"change": {
+  "number": "CHG0012345",
+  "state": "scheduled",
+  "approval": "approved",
+  "risk": "moderate",
+  "_meta": {
+    "provider": "change-management",
+    "status": "found",
+    "verified": false,
+    "degraded": false,
+    "cached": false,
+    "age_seconds": 0,
+    "evidence_ref": "CHG0012345"
+  }
+}
+```
+
+### Behavior
+
+- The request is always a `GET` with `Accept: application/json`, plus the credential header when `endpoint.auth` is set. The client follows no redirects and ignores proxy environment variables.
+- Resolved key values are percent-encoded for their position, a path segment or a query value, and never unescaped. A composite argument value, a list or an object, does not resolve. A boolean renders as `true` or `false`, and an integer as digits.
+- A key that is absent, empty, or does not match its `pattern` means the source cannot be asked. No request is sent; the lookup fails with `no_data` and the provider's `on_failure` applies.
+- Without `record_path`, the body is the record, or a list that holds exactly one record. With it, the same applies to the referenced value. An empty list or a missing reference is `no_data`; a list of several records is `invalid_output`, because the answer is ambiguous.
+- Every `must_match` entry must hold, or the lookup is `no_data`, so the API cannot answer with a different record than the one asked for.
+- With `keep`, each named field becomes a claim with the same name, or with the name the map form gives it. A field the record does not carry, or carries as `null`, is omitted. Values are kept as the API returned them, and a number must be an integer. Without `keep`, a found record carries no claims and the domain holds only `_meta`.
+- `evidence_ref` is the kept `number` claim, or the kept `id` claim when there is no `number`, when it is a string or an integer that meets the evidence rules of the contract. A record kept under other claim names carries no `evidence_ref`.
+- The lookup must finish within `timeout_ms`, which is also the HTTP client's timeout. A response over 256 KiB is `unavailable`.
+- Credential files are read at call time, so rotation needs no restart, and read once at startup, so a bad credential fails fast instead of degrading every request.
+
+### HTTP Status Mapping
+
+| Response | Recorded status |
+|---|---|
+| 2xx with exactly one matching record | `found` |
+| 2xx with an empty result or no matching record, or 404 | `no_data` |
+| 2xx with a list of several records | `invalid_output` |
+| 401 or 403 | `misconfigured` |
+| Any other non-2xx status, a non-JSON body, a body over 256 KiB, or a claim value that is a float | `unavailable` |
+
+## Timeouts
+
+| Limit | Where | Effect |
+|---|---|---|
+| `timeout_ms` | Each registration, default the stage budget | A lookup that does not answer in time is `timeout`. Between 1 and the stage budget. |
+| `--pip-stage-budget-ms` | The gateway, default 250 | Hard cap on the whole stage, and the default and upper bound of every `timeout_ms`. A lookup still in flight when it expires is `timeout` for that provider. A registration whose `timeout_ms` exceeds it is rejected at startup. |
+| In-flight limit | Each provider, fixed at 32 | Concurrent lookups to one provider. A lookup beyond it is `capacity`. |
+
+Keep the stage budget below the timeout OpenShell applies to middleware calls. The middleware advertises no binding timeout of its own and inherits the deadline OpenShell's operator configured, so a stage that outlives that deadline makes OpenShell treat the call as failed. For a provider off the host, prefer `degrade` and a short `timeout_ms`.
+
+## Provenance
+
+The gateway writes `context.<domain>._meta` beside the claims.
+
+| Field | Contents |
+|---|---|
+| `provider` | The registered provider name. For audit; policies name domains, not providers. |
+| `verified` | `true` when a `grpc` provider's peer was authenticated, by its mutual TLS identity or its registered UID, and the output passed validation. An `http` provider, and a `grpc` provider reached over plain `http://`, are never verified. It does not mean the claim was independently proven. |
+| `age_seconds` | The fact age the provider reported. `0` for an `http` provider. |
+| `degraded` | `true` when the provider failed and `on_failure: degrade` let the evaluation continue without its claims. |
+| `cached` | Always `false` in this release. Every evaluation asks the provider. |
+| `status` | The lookup status. Refer to [Statuses](#statuses). |
+| `evidence_ref` | The provider's evidence pointer, when it supplied one. For an `http` provider, the kept `number` or `id` claim. |
+
+When the lookup found claims, the record holds the claims and `_meta`. When it did not, whether the provider did not apply, holds nothing for the subject, or degraded, the record holds only `_meta`.
+
+### Audit Extension
+
+Every `authorization` record written after the stage ran carries an `extensions.x_apf_pip` object with one entry per provider.
+
+```json
+"extensions": {
+  "x_apf_pip": {
+    "providers": [
+      {
+        "domain": "change",
+        "provider": "change-management",
+        "status": "found",
+        "degraded": false,
+        "cached": false,
+        "age_seconds": 0,
+        "evidence_ref": "CHG0012345",
+        "latency_ms": 12
+      }
+    ]
+  }
+}
+```
+
+`domain` is the registration's `context`. Domains and provider names are values, not keys, so the audit sanitizer's key rules cannot demote the record. An `evidence_ref` the sanitizer rejects is dropped from the entry, not the entry from the record. `latency_ms` is `0` for a provider that did not apply. Both the middleware's `apf-policy-gateway-middleware-audit.jsonl` and the gateway's `apf-policy-gateway-audit.jsonl` carry the extension. Refer to [Audit Event Schema](/reference/audit-event-schema).
+
+## Failure Modes
+
+| `on_failure` | When the provider cannot answer |
+|---|---|
+| `fail_closed` | The request is denied before any rule runs, with the reason `pip_<status>:<provider>`, for example `pip_timeout:identity`. On the OpenShell path the denial carries the reason code `policy_denied`. From `EvaluationService` it is a `DENY` with that reason. The engine never sees the request. |
+| `degrade` | `context.<domain>` holds only `_meta`, with `degraded: true` and `status` naming the failure, and evaluation continues. |
+
+Two statuses deny regardless of the failure mode. `invalid_input` is a failure the caller caused, so a caller cannot induce degradation: a projected subject over the 64 KiB message cap, a correlation id over 256 bytes, or a provider answering `INVALID_ARGUMENT`, which reports the subject it received as malformed. `internal` is a failure of the stage itself, such as a lookup task that panicked, and denies with `pip_internal:<provider>`. A provider reserves `INVALID_ARGUMENT` for a malformed subject; a subject it does not hold is `NO_DATA`.
+
+### Statuses
+
+| Status | Meaning | Failure |
+|---|---|---|
+| `found` | Claims were supplied, or an `http` provider without `keep` found its record. | No |
+| `no_data` | The provider holds nothing for the subject (not a failure), or a key was absent or rejected so the source could not be asked (a failure: `degraded` is true and `on_failure` applies). | Depends |
+| `not_applicable` | No `applies_to` entry matched. No lookup was made. | No |
+| `timeout` | No answer within `timeout_ms`, or the stage budget expired first. | Yes |
+| `unavailable` | The provider could not be reached, or answered with an unmapped gRPC code or HTTP status. | Yes |
+| `capacity` | The provider's in-flight limit of 32 lookups was reached. | Yes |
+| `invalid_output` | The answer failed validation. | Yes |
+| `invalid_input` | The subject could not be sent, or the provider rejected it with `INVALID_ARGUMENT`. Caller fault, and denies in both modes. | Yes |
+| `unauthorized` | The provider refused the gateway's identity. | Yes |
+| `misconfigured` | The provider is misconfigured, such as a rejected credential or an unimplemented method. | Yes |
+| `internal` | The Enrichment stage itself failed, for example a lookup task panicked. Denies in both modes. | Yes |
+
+### Writing Policy over Provider Facts
+
+- Guard a `permit` with `has`. `context.change has approval && context.change.approval == "approved"` grants only when the fact is present. A degraded or empty record keeps the grant off, and the tool call is denied with `no grant for <action>`.
+- A `forbid` that reads a provider fact without a guard denies the request when the fact is missing, because a forbid that fails to evaluate denies. That is the safe default for a deny rule. To deny explicitly when a provider degraded, test `context.<domain>._meta.degraded`.
+- `degrade` relies on Cedar's missing-attribute behavior. The idiom that ports to any engine is an explicit `_meta.degraded` test, or `fail_closed`.
+
+Refer to [Capability Grants](/author-policies/capability-grants#grants-that-depend-on-provider-facts).
+
+## Security
+
+- **Sockets.** Both ends of a Unix socket verify the peer. The gateway connects only to a socket owned by `peer_uid` that other users cannot access and that the gateway's user can write: owner-only (`0600`) when `peer_uid` is the gateway's own UID, otherwise group-writable (`0660`) with a group the gateway belongs to, since connecting to a Unix socket needs write permission on it. The gateway checks at startup that it can connect. Ancestors must be owned by root, the gateway's user, or `peer_uid` and not writable by others; a root-owned directory with the sticky bit set, such as `/tmp`, is also accepted. The hardened systemd unit sets `PrivateUsers=yes`, which maps every UID other than root and the service user to `nobody`, so a provider running as another user needs a unit without that setting or a shared group. A provider must accept connections only from the gateway's UID and must reject bearer credentials on the socket.
+- **TLS material.** `ca_file` and `client_cert_file` must be regular files that are not group or world writable. `client_key_file` must be readable by its owner only.
+- **Credentials.** Bearer tokens and basic credentials come from files, never from the registration file or the URL. A credential file must be a regular file readable by its owner only and at most 8 KiB. A URL that carries a user name or password is rejected.
+- **The registration file.** It is loaded through the gateway's checked startup path: a regular file, not a symbolic link, not group or world writable, and at most 64 KiB.
+- **Network egress.** The hardened unit in `deploy/systemd/apf-policy-gateway.service` sets `IPAddressAllow=localhost` and `IPAddressDeny=any`. A provider off the host needs an `IPAddressAllow=` entry for its address in a drop-in, and an IPv6 address also needs `AF_INET6` in `RestrictAddressFamilies`.
+- **No forgery.** A caller's `context_attributes` are discarded before the stage runs. A provider's `_meta` is rejected as invalid output. Only the gateway writes provenance.
+- **Lookup keys.** Key each lookup on a field the tool acts on or the policy constrains, never on a free argument the agent chooses.
+
+## Worked Example
+
+A change-management system holds the change requests for each repository, as its configuration item. A grant lets an agent merge a pull request into a repository only while an approved, scheduled change exists for it.
+
+Register the system as a provider. Every evaluation asks the system, so a withdrawn approval takes effect on the next request.
+
+```yaml
+providers:
+  - name: change-management
+    context: change
+    type: http
+    applies_to: [github_merge_pull_request]
+    endpoint:
+      url: https://itsm.example.com/api/now/table/change_request
+      auth: { bearer_token_file: /etc/apf/providers/itsm.token }
+    request:
+      query: { cmdb_ci.name: "{repository}", state: scheduled }
+      keys:
+        repository: { from: args.repository, pattern: "^[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,63}$" }
+    response:
+      record_path: result
+      must_match: { cmdb_ci.name: "{repository}" }
+      keep: [number, state, approval, risk]
+    on_failure: degrade
+    timeout_ms: 200
+```
+
+Start the gateway with `--pip-config /etc/apf/providers.yaml`, or set `APF_PIP_CONFIG`. Then add a capability rule to the bundle. The action is the bare MCP tool name because the OpenShell middleware evaluates the call.
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyRule
+metadata:
+  name: change-grants
+spec:
+  language: cedar
+  role: capability
+  definition: |
+    @id("change-grants/github_merge_pull_request")
+    permit (
+      principal,
+      action == APF::Action::"github_merge_pull_request",
+      resource
+    )
+    when {
+      context.change has approval &&
+      context.change.approval == "approved"
+    };
+```
+
+| Situation | Result |
+|---|---|
+| An approved, scheduled change exists for the repository in `args.repository`. | The lookup is `found` and the grant fires. The audit record names the provider and carries the change number as `evidence_ref`. |
+| The approval is withdrawn. | The next request is denied with `no grant for github_merge_pull_request`. No rule or bundle changed. |
+| No change exists for the repository. | The lookup is `no_data`. `context.change` holds only `_meta`, and the `has` guard keeps the grant off. |
+| The system is unreachable, with `on_failure: degrade`. | `context.change._meta.degraded` is `true`, and the guard denies the call. |
+| The system is unreachable, with `on_failure: fail_closed`. | The request is denied before any rule runs, with `pip_unavailable:change-management`. |
+
+The lookup is keyed on the repository the tool acts on, so the agent cannot name a different, approved change to satisfy the rule. The same merge performed as a raw HTTP request is governed by the sandbox network policy, not by this rule.
+
+### Identity Facts
+
+The same shape turns an identity system into a provider. Key the lookup on `user_subject`, keep the fields a rule needs, and fail closed so a request that cannot be looked up is denied before any rule runs. The JSON API here answers a username query with a list of matching users. Leave `record_path` out: the gateway requires the list to hold exactly one record, where a pointer such as `/0` would take the first of several.
+
+```yaml
+  - name: identity
+    context: user
+    type: http
+    applies_to: [github_repo_write]
+    endpoint:
+      url: https://idp.example.com/api/users
+      auth: { bearer_token_file: /etc/apf/providers/idp.token }
+    request:
+      query: { username: "{user}" }
+      keys:
+        user: { from: user_subject, pattern: "^[a-z0-9][a-z0-9._@-]{0,127}$" }
+    response:
+      must_match: { username: "{user}" }
+      keep: [clearance, department]
+    on_failure: fail_closed
+    timeout_ms: 200
+```
+
+A grant then reads the facts: `context.user has clearance && context.user.clearance == "elevated"`. The subject is the one the caller asserts on `EvaluationService.Evaluate`; the OpenShell middleware path carries none, which is why the example is scoped with `applies_to`: unscoped, it would deny every sandbox request as `pip_no_data:identity`. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation).
+
+The repository ships the three registration shapes as annotated files under `examples/pips/`.
+
+## Next Steps
+
+- For the gateway flags, refer to [CLI Commands](/reference/cli-commands#provider-options).
+- To see where the stage sits in the pipeline, refer to [Request Evaluation](/how-it-works/request-evaluation#stage-1-enrichment).
+- To write grants over provider facts, refer to [Capability Grants](/author-policies/capability-grants#grants-that-depend-on-provider-facts).
+- To read provider provenance in audit records, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).

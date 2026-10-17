@@ -19,7 +19,7 @@ npx --yes "fern-api@${FERN_VERSION}" check
 
 ["docs:nav"]
 description = "Check that docs page URLs match their file paths"
-run = "python3 scripts/check_docs_nav.py"
+run = "uv run scripts/check_docs_nav.py"
 
 ["docs:serve"]
 description = "Serve the Fern docs locally"

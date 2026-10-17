@@ -1,0 +1,84 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Policy Gateway"
+sidebar-title: "Policy Gateway"
+description: "How apf-policy-gateway, the host-side Policy Decision Point, builds an evaluator from the served policy set, hot-swaps it on change, and hosts the OpenShell adapters."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Gateway, PDP, Cedar, Hot Swap, JWKS, OpenShell Adapters"
+position: 2
+---
+
+`apf-policy-gateway` is APF's host-side policy agent. It embeds the local Policy Decision Point (PDP): it fetches the compiled policy set from the policy service, builds a Cedar evaluator from it, and decides every governed request in process. It also hosts APF's OpenShell gateway interceptor and supervisor middleware, which are libraries linked into this binary rather than separate processes.
+
+## Startup Sequence
+
+The gateway validates its listener configuration before it does anything else, so a misconfigured listener never reports ready.
+
+1. **Resolve each OpenShell listener.** For the interceptor and the middleware separately, the gateway requires either the full authenticated set (address, extension trust profile, TLS certificate, TLS key) or the address with the explicit insecure flag. Partial sets, conflicting modes, and security files without an address stop startup. The trust profile, certificate, and key are opened without following symlinks, checked for safe permissions, and parsed before any listener starts.
+2. **Load the provider registration** from `--pip-config`, when set, through the same checked file path, and validate every registration. An invalid file stops startup. Without the flag the Enrichment stage is off. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+3. **Connect to the policy service** over its Unix socket and call `Health`. A failed health check is logged and startup continues.
+4. **Fetch the JWKS** from `--jwks-url` to get the policy service's document signing key. The interceptor and the sandbox policy refresher use it to verify provenance tokens. The gateway does not verify the token on the policy set it evaluates. If the fetch fails, startup stops. Without `--jwks-url`, provenance verification is disabled and the gateway logs a warning, and the interceptor cannot be enabled.
+5. **Fetch the policy set.** Call `GetDocument` for `apf.policy.v1/default` and build the Cedar evaluator. If any rule, annotator, effect, or finding fails to compile, startup stops.
+6. **Open the audit log** in `--audit-log-dir` and record a `policy_activation` event with reason code `policy.bundle_activated`. If the record cannot be written, startup stops.
+7. **Start background tasks**: the digest watcher, the evaluator hot swap, and, when configured, provider profile reconciliation and sandbox refresh.
+8. **Bind the listeners**: the `EvaluationService` Unix socket and any enabled OpenShell listeners.
+
+## Hot Swap
+
+The gateway keeps the active policy in a watch channel. Every reader takes the evaluator together with the digest and revision of the policy it was built from, so a decision can never be attributed to a different policy than the one that made it.
+
+A digest watcher polls `apf.policy.v1/default` every `--bundle-refresh-interval-secs` seconds, 10 by default. Setting the interval to `0` disables refresh.
+
+- The first successful poll sets a baseline. A change that lands between startup and that first poll is not detected until the next change.
+- When the digest changes, the gateway fetches the document again, decodes it, builds a new evaluator, and swaps it in. It then records a `policy_activation` event with reason code `policy.bundle_hot_swapped`.
+- If the fetch, decode, or build fails, the gateway logs a warning and keeps the evaluator it already has. A bad policy never replaces a working one. The baseline has already moved to the new digest, so the gateway does not retry until the digest changes again.
+- Change events travel on a channel that holds 16 events. If the hot-swap task falls more than 16 events behind, it stops, and the gateway needs a restart to resume hot swaps.
+- If the hot-swap record cannot be written, the gateway exits. The new evaluator is already active at that point, so decisions made in the interval are not covered by an activation record.
+
+The gateway does not re-verify the bundle signature on this path. The policy service verified the bundle when it ingested it, and the gateway trusts the policy service's responses over the owner-only Unix socket.
+
+## Decisions
+
+Decisions run in process on the active evaluator. In the current deployment, there is no network call to the policy service on the request path. The only per-request calls go to the policy information providers registered with `--pip-config`, each under a budget. Every request passes four stages: enrichment, annotators, Cedar rules, and effects. Refer to [Request Evaluation](/how-it-works/request-evaluation).
+
+Two surfaces reach the evaluator.
+
+| Surface | Callers | Result |
+|---|---|---|
+| OpenShell supervisor middleware | OpenShell sandbox supervisors, per egress request. | Allow or deny, plus body changes, header changes, and findings. |
+| `EvaluationService.Evaluate` over the gateway's Unix socket | Co-located callers on the same host. | Allow or deny with the deny reason and the policy digest. No obligations or mutations are returned. |
+
+Refer to [Service APIs](/reference/service-apis) for both contracts.
+
+## Provenance Key Rotation
+
+When `--jwks-url` is set, the gateway re-fetches the JWKS every `--jwks-refresh-interval-secs` seconds, 60 by default, and replaces the verification key it uses for provenance tokens. Setting the interval to `0` disables rotation.
+
+## OpenShell Background Tasks
+
+Two optional tasks keep OpenShell in step with the active bundle. Both need `--openshell-gateway-url`, the outbound address of the OpenShell gateway.
+
+| Task | Also requires | What it does |
+|---|---|---|
+| Provider profile reconciler | | Writes the bundle's provider profiles to the OpenShell gateway at startup, with retries, and again when the served policy set changes. It updates profiles OpenShell already has and imports new ones. |
+| Sandbox policy refresher | `--jwks-url` | When the served policy set changes, sends a bare `UpdateConfig` to each Ready or Provisioning sandbox in the default workspace so the interceptor can inject the newly served policy. If that change carries a validity deadline, it refreshes once more shortly before the deadline. |
+
+Both tasks are driven by the digest watcher, which watches only `apf.policy.v1`. A bundle that changes only `SandboxPolicy` or `Provider` documents does not trigger them. Setting `--bundle-refresh-interval-secs` to `0` disables them along with the digest watcher. Both connect to OpenShell without TLS and without credentials, so they work only with an OpenShell gateway that accepts such connections.
+
+`--openshell-gateway-url` is where the gateway connects. `--openshell-interceptor-addr` is where it listens. Keep the two distinct.
+
+## Audit Files
+
+The gateway writes one file per component in `--audit-log-dir`.
+
+| File | Contents |
+|---|---|
+| `apf-policy-gateway-audit.jsonl` | Policy activation and hot swap, and `EvaluationService` decisions. |
+| `apf-policy-gateway-interceptor-audit.jsonl` | Admission, validation, governance, and caller authentication on the interceptor. Created when the interceptor is enabled. |
+| `apf-policy-gateway-middleware-audit.jsonl` | Per-request decisions and caller authentication on the middleware. Created when the middleware is enabled. |
+
+## Next Steps
+
+- To see the evaluation pipeline in detail, refer to [Request Evaluation](/how-it-works/request-evaluation).
+- To configure the OpenShell listeners, refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+- For every flag, refer to [CLI Commands](/reference/cli-commands#apf-policy-gateway).

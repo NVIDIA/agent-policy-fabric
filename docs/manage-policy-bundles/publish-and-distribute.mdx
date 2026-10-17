@@ -1,0 +1,106 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Publish and Distribute Bundles"
+sidebar-title: "Publish and Distribute"
+description: "Deliver signed bundles to APF hosts as local files or from an HTTPS artifact store that every policy service polls."
+keywords: "Generative AI, Cybersecurity, AI Agents, Distribution, Artifact Store, HTTP Source, Polling, Bundle Delivery"
+position: 4
+---
+
+A signed bundle reaches the policy service in one of two ways. Either it is placed on the host as files, or the policy service fetches it from an HTTPS endpoint and polls for updates. In both cases the policy service verifies the bundle before it serves anything from it, so the delivery channel does not need to be trusted for integrity.
+
+| Policy source | Bundle location | Updates |
+|---|---|---|
+| `local` (default) | A signed manifest and its members on the host's filesystem. | Restart the policy service, or call `POST /v1/refresh` on its HTTP surface. |
+| `http` | A gzipped tar archive at a URL. | The policy service polls the URL and swaps in a newer bundle automatically. |
+
+## Publish to an Artifact Store
+
+APF does not prescribe an artifact store or a layout. A layout that keeps every revision and a stable pointer to the newest one works well with the HTTP source:
+
+```text
+signed-bundles/
+  <bundle-name>/
+    revisions/<policy_revision>/<bundle-name>.tar.gz
+    latest/<bundle-name>.tar.gz
+```
+
+Point each policy service at the `latest` archive. Keep earlier revisions for audit, but remember that the anti-rollback counter refuses to load them again.
+
+The store must answer a `HEAD` request for the archive with a success status, because the policy service sends one before every polling download and treats a failed `HEAD` as a failed poll. The first fetch at startup does not use `HEAD`. If the store returns an `x-checksum-sha256` or `ETag` header whose value is the archive's hex SHA-256, the policy service skips the download when the archive has not changed. A quoted or opaque `ETag` never matches, so the archive is downloaded on every poll.
+
+## Deliver as Local Files
+
+Copy the signed manifest and all of its members to the host, keeping the directory layout. On a systemd host, the manifest lives at `/etc/apf/bundle/bundle.yaml`, owned by root and readable by the `apf` group:
+
+| Path | Owner and group | Mode |
+|---|---|---|
+| `/etc/apf/bundle/` | `root:apf` | `0750` |
+| `/etc/apf/bundle/bundle.yaml` and members | `root:apf` | `0640` |
+
+Anyone who can write these files can replace the bundle, but cannot get an unsigned or older bundle accepted.
+
+## Fetch over HTTP
+
+Configure the policy service to fetch from a URL:
+
+```shell
+apf-policy-service serve \
+  --policy-source http \
+  --bundle-source-url https://artifacts.example.internal/signed-bundles/team-bundle/latest/team-bundle.tar.gz \
+  --bundle-source-token-file /run/credentials/apf-policy-service.service/bundle-source-token \
+  --bundle-source-poll-interval-secs 60 \
+  --trust-root-dir /etc/apf/trust-roots \
+  --counter-store /var/lib/apf/policy-service/counter \
+  --audit-log-dir /var/lib/apf/policy-service/audit
+```
+
+| Behavior | Detail |
+|---|---|
+| First fetch | Happens at startup. If the bundle cannot be fetched or fails verification, the service does not start. |
+| Polling | Every `--bundle-source-poll-interval-secs` seconds, 30 by default. A failed poll keeps the current bundle. |
+| Authentication | `Authorization: Bearer` with the token from `--bundle-source-token-file`. Prefer the file over `--bundle-source-token`, which is visible in the process arguments and is recorded as a weakened control. |
+| Archive | A gzipped tar of the bundle directory. The service finds the manifest by signature. |
+| Storage | The fetched archive is unpacked into a temporary directory that is removed after loading, and the compiled documents are served from memory. |
+
+<Warning>
+Use an `https://` URL. The service accepts `http://` without a warning. A tampered or unsigned bundle is still rejected, but an attacker on the path could read the bundle source token, which is sent in cleartext, withhold updates, or replay the current bundle until it expires.
+</Warning>
+
+### systemd Hosts
+
+The shipped `apf-policy-service.service` restricts the service to Unix sockets. To use the HTTP source on a systemd host:
+
+1. Add `AF_INET` and `AF_INET6` to `RestrictAddressFamilies` in the unit, and record why in a comment.
+2. Add `LoadCredential=bundle-source-token:/etc/apf/bundle-source-token`, and store the token at that path as `root:root` with mode `0600`.
+3. In `/etc/apf/policy-service.env`, set `APF_POLICY_SOURCE=http`, `APF_BUNDLE_SOURCE_URL`, and `APF_BUNDLE_SOURCE_TOKEN_FILE=/run/credentials/apf-policy-service.service/bundle-source-token`.
+4. Set the poll interval with `APF_BUNDLE_SOURCE_POLL_INTERVAL`. The commented example in the shipped env file uses a different name, `APF_BUNDLE_SOURCE_POLL_INTERVAL_SECS`, which the service does not read.
+
+Refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+
+## Per-Caller Bundle Variants
+
+The HTTP source and the `claims` resolver contain the building blocks for serving different bundles to different callers: a `{variant}` placeholder in the bundle URL, and a `--claims-config` file that maps a caller's `user_subject` to a variant name:
+
+```json
+{
+  "role_map": {
+    "alice@example.com": "rw",
+    "bob@example.com": "ro"
+  }
+}
+```
+
+<Warning>
+Per-caller variants do not work end to end in this release. With a `{variant}` URL, the policy service skips the initial fetch and nothing in the service loads a variant afterward, so no bundle is ever served. With a literal URL, a caller whose subject maps to a variant gets `document not found`. Use a literal URL with the default `passthrough` resolver.
+</Warning>
+
+## How Updates Propagate
+
+Each policy service fetches and verifies independently, and each policy gateway polls its own policy service. A newly published bundle therefore reaches each host within one poll interval of the policy service plus one refresh interval of the gateway, 10 seconds by default, with no restart and no software deployment. Refer to [Update Policies](/manage-policy-bundles/update-policies).
+
+## Next Steps
+
+- To see what the policy service checks before it activates a bundle, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).
+- To plan a policy service shared by many hosts, refer to [Deployment Models](/deployment/deployment-models).

@@ -1,0 +1,126 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Configure Service Authentication"
+sidebar-title: "Configure Service Authentication"
+description: "Configure every authenticated connection in an APF deployment: OpenShell extension JWTs and TLS on the gateway listeners, Unix socket peer checks, and bearer tokens."
+keywords: "Generative AI, Cybersecurity, AI Agents, Authentication, mTLS, TLS, JWT, Extension Auth, Trust Profile, Bearer Token, Unix Socket"
+position: 5
+---
+
+An APF deployment has several connections, and each is authenticated differently. This page covers each one and how to configure it.
+
+| Connection | Authenticated by | Configured with |
+|---|---|---|
+| OpenShell gateway to the APF interceptor | OpenShell extension JWT over TLS | Interceptor trust profile, certificate, and key |
+| Sandbox supervisor to the APF middleware | OpenShell extension JWT over TLS, bound to the sandbox | Middleware trust profile, certificate, and key |
+| Policy gateway to policy service | Unix socket permissions and peer UID | `--allowed-uid` |
+| Policy gateway to the policy service JWKS endpoint | None. The route is public, and the keys it serves are public keys. Bind the HTTP surface to loopback. | `--jwks-url` on the gateway, `--http-addr` on the policy service |
+| Co-located caller to the gateway's `EvaluationService` | Unix socket permissions and peer UID | `--allowed-uid` on the gateway |
+| Policy gateway to the OpenShell gateway, for provider reconciliation and sandbox refresh | None. The connection uses no TLS and no credentials. | `--openshell-gateway-url` |
+| Anyone to the policy service HTTP surface | Bearer token on document and refresh routes | `--http-bearer-token-file` |
+| Policy service to an HTTP bundle source | Bearer token | `--bundle-source-token-file` |
+
+## OpenShell Extension Authentication
+
+When OpenShell's gateway has JWT signing configured, it attaches a short-lived extension JWT to every call into an interceptor or middleware. APF verifies that token against a static trust profile, one per listener. The trust profile is a separate trust domain from APF's bundle trust roots and from the policy service's JWKS. Never substitute one for another.
+
+### The Trust Profile
+
+The trust profile is strict TOML. Unknown fields are rejected.
+
+```toml
+issuer = "openshell-gateway:<gateway-id>"
+audience = "urn:openshell:extension:middleware:apf-content-policy"
+kid = "<OpenShell signing key ID>"
+public_key_pem = """
+-----BEGIN PUBLIC KEY-----
+<OpenShell Ed25519 public key>
+-----END PUBLIC KEY-----
+"""
+max_lifetime_secs = 3600
+leeway_secs = 60
+```
+
+| Field | Value |
+|---|---|
+| `issuer` | The OpenShell gateway's identity, `openshell-gateway:<gateway-id>`. |
+| `audience` | The audience in the OpenShell registration. If the registration omits `audience`, OpenShell uses `urn:openshell:extension:interceptor:<registration name>` for an interceptor and `urn:openshell:extension:middleware:<registration name>` for a middleware. Copy the exact value. |
+| `kid` | The key ID of OpenShell's extension signing key. |
+| `public_key_pem` | OpenShell's Ed25519 public key in PEM form. |
+| `max_lifetime_secs` | The longest token lifetime APF accepts, from 1 to 3600. |
+| `leeway_secs` | Allowed clock skew, at most 300. |
+
+Obtain the issuer, key ID, and public key from your OpenShell gateway's configuration. Refer to [OpenShell extension authentication](https://docs.nvidia.com/openshell/latest/extensibility/overview#authenticating-extensions). On Kubernetes, the OpenShell chart's pre-install Job writes the key ID and public key to the `<fullname>-jwt-keys` Secret as `kid` and `public.pem`; refer to [Trust Profiles](/deployment/kubernetes#trust-profiles).
+
+APF accepts exactly one `authorization: Bearer <JWT>` value and requires `alg` `EdDSA`, `typ` `openshell-ext+jwt`, the configured `kid`, the exact issuer and audience, a non-empty `jti`, and a bounded, unexpired lifetime.
+
+### Caller Rules
+
+| Surface | RPC | Accepted caller |
+|---|---|---|
+| Interceptor | `Describe`, `SnapshotProviderProfiles`, `Evaluate` | The OpenShell gateway only. |
+| Middleware | `Describe` | The OpenShell gateway or a sandbox supervisor. |
+| Middleware | `ValidateConfig` | The OpenShell gateway only. |
+| Middleware | `EvaluateHttpRequest` | A sandbox supervisor only, and the token's `sandbox_id` must equal the request's sandbox ID. |
+
+A gateway token's subject equals its issuer and carries no `sandbox_id`. A supervisor token's subject is `spiffe://openshell/sandbox/<sandbox-id>` and carries a matching `sandbox_id` claim.
+
+### TLS Identity
+
+Each authenticated listener also presents a TLS certificate. The certificate must be valid for the host name in the OpenShell registration's `grpc_endpoint` and must chain to a CA that OpenShell trusts. Give OpenShell that CA with `tls_ca_cert_path` in the registration.
+
+### Configure a Listener
+
+Set all four settings for a surface together. The gateway refuses to start a surface with a partial set, and refuses security files for a surface whose address is not set.
+
+```shell
+apf-policy-gateway \
+  --openshell-interceptor-addr 127.0.0.1:18202 \
+  --openshell-interceptor-auth-trust-file /etc/apf/openshell-interceptor-auth.toml \
+  --openshell-interceptor-tls-cert-file /etc/apf/tls/interceptor-cert.pem \
+  --openshell-interceptor-tls-key-file /etc/apf/tls/interceptor-key.pem \
+  --openshell-middleware-addr 127.0.0.1:9099 \
+  --openshell-middleware-auth-trust-file /etc/apf/openshell-middleware-auth.toml \
+  --openshell-middleware-tls-cert-file /etc/apf/tls/middleware-cert.pem \
+  --openshell-middleware-tls-key-file /etc/apf/tls/middleware-key.pem \
+  --jwks-url http://127.0.0.1:19200/.well-known/jwks.json \
+  --audit-log-dir /var/lib/apf/policy-gateway/audit
+```
+
+The interceptor needs `--jwks-url` to verify provenance tokens, and the gateway refuses to start the interceptor without it.
+
+Each flag has an environment variable equivalent, for example `APF_OPENSHELL_MIDDLEWARE_AUTH_TRUST_FILE`. Refer to [CLI Commands](/reference/cli-commands#apf-policy-gateway).
+
+### File Checks
+
+The gateway opens each security file without following a symbolic link and checks the opened file:
+
+- The trust profile and certificate must be regular files with no group or world write permission.
+- The private key must be a regular file with no group or world permission at all, normally mode `0600` or `0400`.
+- Directories, FIFOs, sockets, devices, and symbolic links are rejected.
+
+The gateway parses all three files into its TLS configuration before any listener reports ready. Any failure stops the process instead of falling back to plaintext.
+
+### Insecure Mode
+
+`--openshell-interceptor-allow-insecure-transport` and `--openshell-middleware-allow-insecure-transport` turn off TLS and caller authentication for one surface. The surface serves plaintext gRPC, verifies no caller, performs no sandbox binding, advertises an empty audience, and logs a warning at startup. The insecure flag cannot be combined with any authenticated setting for the same surface. Pair it with `allow_insecure_transport = true` in the OpenShell registration, and use it only for local development.
+
+## Unix Socket Access
+
+The policy service socket and the gateway's `EvaluationService` socket are created with mode `0600` in a directory with mode `0700`. Each service also reads the connecting peer's UID with `SO_PEERCRED` and accepts only the UID set by `--allowed-uid`, `APF_ALLOWED_UID` for the policy service and `APF_GATEWAY_ALLOWED_UID` for the gateway. Both default to the service's own UID.
+
+The policy service records each refused peer as an `authentication` event with `auth.uds_peer_rejected`, and reports refusals it could not record individually with `auth.uds_refusals_dropped`.
+
+## Policy Service HTTP Token
+
+With `--http-addr` set, the policy service requires `--http-bearer-token-file` and refuses to start without it. The token gates `/v1/documents` and `/v1/refresh`. Health routes and the JWKS route stay open. Store the token as `root:root` with mode `0600` and deliver it as a systemd credential. A wrong token returns `401` and writes an `authentication` event with `auth.http_bearer_invalid`.
+
+## Bundle Source Token
+
+With the HTTP policy source, put the artifact store token in a file and pass `--bundle-source-token-file`. An empty file is an error. `--bundle-source-token` also works, but the token is then visible in the process arguments, and the startup record reports the weakened control.
+
+## Next Steps
+
+- To deploy these files on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+- To see where each boundary sits, refer to [Trust Boundaries](/security/trust-boundaries).

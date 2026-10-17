@@ -1,0 +1,189 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Govern a Coding Agent"
+sidebar-title: "Govern a Coding Agent"
+description: "Write and sign a bundle that gives a coding agent read-only GitHub access and its inference endpoint and nothing else, then verify the behavior and the audit evidence."
+keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Coding Agent, GitHub, Read-Only, Least Privilege, Claude Code"
+position: 2
+---
+
+Coding agents need source control and a model to be useful, and those are the paths where code and credentials leak. This tutorial builds a bundle that gives a coding agent exactly two destinations: its inference endpoint, and the GitHub API in read-only mode. Every request to GitHub passes APF's content gate, and the only MCP tool the bundle grants is a read tool.
+
+After completing it, you understand:
+
+- How the sandbox perimeter, provider profiles, and capability grants work together.
+- Which layer enforces which restriction.
+- How to confirm the restrictions from the audit trail.
+
+## Prerequisites
+
+- APF running and registered with OpenShell, as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell).
+- A working copy of the demo bundle, a signing key, and the policy service HTTP surface, as described in [Your First Signed Policy](/get-started/your-first-signed-policy). This tutorial uses the same `$WORK` directory and works on a copy, `$WORK/coder`, so `$WORK/bundle` stays as the other tutorials expect it.
+- A workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group.
+- Terminals set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal), and `jq`.
+
+<Steps toc={true}>
+
+## Copy the Bundle
+
+```shell
+cp -r "$WORK/bundle" "$WORK/coder"
+```
+
+## Narrow the Perimeter
+
+Open `$WORK/coder/sandbox/default-policy.yaml`. Keep only the `anthropic` and `github` entries under `network_policies`, and delete `nvidia-inference`, `openai`, `httpbin`, and `egress-gateway`:
+
+```yaml
+  network_policies:
+    anthropic:
+      name: anthropic
+      endpoints:
+        - host: api.anthropic.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+    github:
+      name: github
+      binaries:
+        - path: /usr/bin/gh
+        - path: /usr/bin/curl
+      endpoints:
+        - host: api.github.com
+          port: 443
+          protocol: rest
+          enforcement: enforce
+          access: read-only
+```
+
+The `read-only` preset lets only read methods reach GitHub. The `binaries` list lets only `gh` and `curl` open those connections through this entry.
+
+## Route GitHub Through APF
+
+In the same file, change the middleware entry so APF evaluates every request to GitHub:
+
+```yaml
+  network_middlewares:
+    apf_content_policy:
+      name: APF content policy
+      middleware: apf-content-policy
+      order: 10
+      on_error: fail_closed
+      endpoints:
+        include:
+          - "api.github.com"
+```
+
+Requests to `api.anthropic.com` are not routed to APF in this bundle. If you add the inference host, APF's content gate also inspects prompts, and the demo's controls would rewrite or deny prompts. `redact-wholesale` replaces any prompt that contains a credential pattern, which the model API will then reject, and a prompt that contains personal data is denied, because model request bodies have no top-level `text` field for `redact-pii-body` to replace.
+
+## Keep Only the Providers You Need
+
+Remove the provider profiles the agent does not use, and keep `claude-code.yaml` and `github.yaml`. In `$WORK/coder/demo-bundle.template.yaml`, delete the manifest entries for `provider-profiles/slack.yaml`, `provider-profiles/nvidia-inference.yaml`, and `provider-profiles/anthropic.yaml`.
+
+With APF governing the OpenShell gateway, providers of other types cannot be created on it.
+
+## Keep Only the GitHub Tool Grant
+
+The demo bundle also grants a Slack tool. Remove the grant this agent does not need, so a call to that tool is denied rather than granted. In the template, delete the manifest entry for `rules/slack-grants.yaml`.
+
+`rules/github-grants.yaml` permits one MCP tool, `github_repo_read`. Any other MCP tool call, such as `github_repo_write`, now gets no grant and is denied. With the `read-only` preset above, OpenShell already blocks the `POST` requests that carry MCP calls to `api.github.com`, so the grant is a second layer that still holds if you later open a write method or add an MCP endpoint.
+
+## Sign and Load the Bundle
+
+Set `policy_revision` in `$WORK/coder/demo-bundle.template.yaml` to one more than the active revision, then sign, verify, and load the copy:
+
+```shell
+./target/release/apf-compile genfixture \
+  --template "$WORK/coder/demo-bundle.template.yaml" \
+  --base-dir "$WORK/coder" \
+  --key "$WORK/keys/my-signer.seed" \
+  --out "$WORK/coder/demo-bundle.yaml"
+
+./target/release/apf-compile compile \
+  --bundle-path "$WORK/coder/demo-bundle.yaml" \
+  --trust-root-dir "$WORK/trust-roots" \
+  --verify-only
+
+curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+  -H "Authorization: Bearer $(cat examples/dev-keys/http-bearer-token.dev)" \
+  -H 'content-type: application/json' \
+  -d "{\"bundle_path\": \"$WORK/coder/demo-bundle.yaml\"}"
+```
+
+The refresh returns the new `version`. New sandboxes are admitted with the narrowed perimeter.
+
+## Create a Sandbox
+
+```shell
+openshell sandbox create \
+  --name coder \
+  --from registry.example.com/team/agent-tools:1.0 \
+  --no-auto-providers
+```
+
+To run a real coding agent instead of a shell, attach the `claude-code` and `github` providers. Attaching a provider also adds the provider profile's endpoints and binaries to the sandbox's effective policy, so with the demo `github` profile, `git` can reach `api.github.com` too. Edit `provider-profiles/github.yaml` if that is not what you want. Then start the agent as described in [OpenShell's agent guide](https://docs.nvidia.com/openshell/latest/about/run-your-first-agent). The checks below use `curl` so the results are predictable.
+
+## Check Each Restriction
+
+In the sandbox, read from GitHub:
+
+```shell
+curl -s https://api.github.com/zen
+```
+
+The request succeeds. OpenShell allowed it at Layer 1, and APF allowed it at Layer 2. Its `authorization` record has `"verb":"http.get"`, resource `api.github.com`, and `"decision":"allow"`.
+
+Try to write to GitHub:
+
+```shell
+curl -s -X POST https://api.github.com/user/repos -d '{"name":"exfil"}'
+```
+
+OpenShell rejects it at Layer 1 with `policy_denied`, because the `read-only` preset does not include `POST`. APF is not called.
+
+Try to reach any other host:
+
+```shell
+curl -s https://example.com
+```
+
+OpenShell rejects the connection because no network policy allows the host.
+
+## Confirm the Evidence
+
+On the host, find the sandbox's ID, which APF's per-request records use, and list the decisions APF made for it:
+
+```shell
+openshell sandbox get coder
+SANDBOX_ID='<the Id value>'
+```
+
+```shell
+jq -c --arg id "$SANDBOX_ID" 'select(.event_type == "authorization" and .session_id == $id) | {verb, decision, reason_code, policy_revision}' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl"
+```
+
+Only the GitHub read appears, with the new `policy_revision`. Layer 1 denials are recorded by OpenShell, not APF.
+
+## Restore the Demo Perimeter
+
+The other tutorials use the demo perimeter in `$WORK/bundle`. Set its template's `policy_revision` to one more than the revision you loaded for this tutorial, then sign it and load it with `POST /v1/refresh` as above, using `$WORK/bundle` paths.
+
+</Steps>
+
+## What You Built
+
+| Restriction | Enforced by | Configured in |
+|---|---|---|
+| Only the inference endpoint and GitHub are reachable. | OpenShell, Layer 1 | `network_policies` |
+| GitHub is read-only. | OpenShell, Layer 1 | `access: read-only` |
+| Only `gh` and `curl` reach GitHub, plus the binaries of any attached provider profile. | OpenShell, Layer 1 | `binaries` |
+| Only the `github_repo_read` MCP tool is granted. | APF, Layer 2 | `rules/github-grants.yaml`, with the other grants removed |
+| Request bodies sent to GitHub pass the content gate. | APF, Layer 2 | `rules/security-content-gate.yaml` and its annotators and effects |
+
+## Next Steps
+
+- To see the content gate in action, continue with [Protect Sensitive Data](/tutorials/protect-sensitive-data).
+- To change this policy later, refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).

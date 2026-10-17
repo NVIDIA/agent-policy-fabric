@@ -1,0 +1,145 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Bundle Specification"
+sidebar-title: "Bundle Specification"
+description: "Normative reference for the APF policy bundle: manifest fields and formats, the signature document, verification order, revision rules, archive layout, and the contract definitions."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Bundle, Specification, Manifest, yaml-sigil, Signature, policy_revision, Verification"
+position: 2
+---
+
+This page specifies the `PolicyBundle` format version `v1alpha1` as implemented on the `main` branch. For a guided introduction, refer to [Bundle Structure](/manage-policy-bundles/bundle-structure).
+
+## Artifact
+
+A signed bundle is one UTF-8 YAML file containing two YAML documents:
+
+1. The manifest payload, a `PolicyBundle` document.
+2. After a `---` separator, the signature document.
+
+The member documents live in separate files next to the manifest.
+
+## Manifest Fields
+
+| Field | Type | Required | Format and constraints |
+|---|---|---|---|
+| `apiVersion` | string | Yes, by the schema | `nvidia.agent-policy-fabric.policy/v1alpha1`. Not checked at runtime. |
+| `kind` | string | Yes, by the schema | `PolicyBundle`. Not checked at runtime. |
+| `metadata` | object | No | Reserved. Ignored by the runtime. |
+| `id` | string | Yes | Non-empty. Use only letters, digits, and `. _ : @ / + - =`, starting with a letter or digit, at most 512 characters. The policy service cannot record an `id` outside this profile in its audit log and refuses to load the bundle. |
+| `description` | string | No | Free text. |
+| `policy_revision` | unsigned 64-bit integer | Yes | At least `1`. Refer to [Revision Rules](#revision-rules). |
+| `not_before` | string | Yes | RFC 3339 timestamp. |
+| `expires_at` | string | Yes | RFC 3339 timestamp. APF does not check that it is later than `not_before`. |
+| `manifest` | list | No | Members in evaluation order. Each entry has exactly `path` and `sha256`. |
+| `manifest[].path` | string | Yes | Path relative to the manifest's directory. |
+| `manifest[].sha256` | string | Yes | 64 hexadecimal characters, the SHA-256 of the member file's bytes. Compared without regard to case. |
+| `runtime_compatibility` | map | No | Adapter name to `{min_version, max_version}`, as semantic versions. Refer to [Runtime Compatibility](#runtime-compatibility). |
+
+The runtime ignores unknown manifest fields. The JSON Schema rejects them, so validate before signing.
+
+Member paths are joined to the manifest's directory without normalization. Keep them relative and inside the bundle directory.
+
+## Signature Document
+
+```yaml
+---
+schema: YamlSigilSignature.v1alpha1
+alg: ED25519_PUREEDDSA_RAW_RS64_CANONICAL
+keyid: <key id>
+signature: <base64url signature>
+```
+
+| Field | Requirement |
+|---|---|
+| `schema` | `YamlSigilSignature.v1alpha1`. |
+| `alg` | A yaml-sigil algorithm identifier. `apf-compile genfixture` produces Ed25519 signatures. Verifiers also accept ECDSA P-256 keys. |
+| `keyid` | Required. Selects the trust root whose file stem matches. |
+| `signature` | The signature over the manifest payload. |
+
+### Trust Roots
+
+A verifier loads every file in its trust-root directory with one of these extensions. The file name without the extension is the key ID.
+
+| Extension | Contents |
+|---|---|
+| `.pub` | `ed25519:<standard base64 of the 32-byte public key>` on the first non-comment line. |
+| `.pem`, `.p256` | An ECDSA P-256 public key in PEM SubjectPublicKeyInfo form. |
+
+## Member Files
+
+A member file is a YAML document whose `kind` decides how it is used. Refer to [Policy Schemas](/reference/policy-schemas). A member may itself carry a yaml-sigil signature. APF then uses the member's payload, but it does not verify the member's signature against a trust root. The bundle signature, through the manifest digest of the member's raw bytes, is what protects it.
+
+## Verification Order
+
+A verifier processes a bundle in this order.
+
+1. **Signature.** Decompose the artifact, resolve `keyid` in the trust roots, and verify the signature. On failure, stop with `signature_invalid`.
+2. **Parse.** Parse the verified payload as a `PolicyBundle`. On failure, stop with `bundle_parse_failed`.
+3. **Members.** For every manifest entry, read the file and compare its SHA-256 with the declared value: `manifest_member_unreadable`, `manifest_hash_unset`, or `manifest_hash_mismatch`.
+4. **Validity window.** Check `not_before` and `expires_at` against the current time: `not_before_invalid`, `expires_at_invalid`, `bundle_not_yet_valid`, or `bundle_expired`.
+5. **Runtime compatibility.** Check `min_version` values: `runtime_compat_invalid` or `runtime_compat_mismatch`.
+6. **Revision.** Check `policy_revision` against the counter store: `counter_regression` or `counter_content_mismatch`.
+
+Steps 3 to 6 all run, and every failure is reported, except that an unparseable `not_before` or `expires_at` skips the rest of step 4. The bundle is accepted only if none fails. The policy service then loads and compiles the members, and persists the revision only if compilation succeeds.
+
+For the format of each reason, refer to [Bundle Rejection Reasons](/reference/error-reference#bundle-rejection-reasons).
+
+## Revision Rules
+
+The counter store holds a high-water mark, the highest accepted `policy_revision`, and the payload digest accepted at it.
+
+| Candidate revision | Result |
+|---|---|
+| Greater than the high-water mark | Accepted. |
+| Equal to the high-water mark, same payload digest | Accepted, so a restart can reload the active bundle. |
+| Equal to the high-water mark, different payload digest | Rejected with `counter_content_mismatch`. Accepted if the digest record is missing or names another revision, for example after a crash. |
+| Lower than the high-water mark | Rejected with `counter_regression`. |
+| `0` | Always rejected with `counter_regression`. |
+
+The payload digest is the SHA-256 of the verified manifest payload, without the signature document. Re-signing identical content therefore does not change it.
+
+One counter store serves one policy service, whatever the bundle `id`. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+
+## Runtime Compatibility
+
+```yaml
+runtime_compatibility:
+  openshell:
+    min_version: "0.1.0"
+```
+
+A verifier compares each `min_version` with the version of that runtime it is given, after removing a leading `v`. `max_version` is not evaluated. In this release the policy service supplies no runtime versions, so APF only checks that each `min_version` is a valid semantic version.
+
+## Manifest Order
+
+| Kind | Effect of order |
+|---|---|
+| `PolicyRule` | Evaluation order. The first rule with a firing `forbid` decides the deny. Effects apply in rule order. |
+| `PolicyAnnotator` | Decides which annotator an error about a duplicate key names. Annotators cannot read each other's output. |
+| `PolicyEffect`, `PolicyFinding` | None. They are referenced by name. |
+| `SandboxPolicy`, `Provider`, `ProviderProfile` | None. Projections are produced in name order. |
+
+## Distribution Archive
+
+The HTTP policy source fetches a gzipped tar archive of the bundle directory. After unpacking, the policy service tries `.yaml` files in this order and uses the first that verifies against its trust roots and parses as a bundle:
+
+1. `manifest.yaml`.
+2. Files whose name contains `bundle`.
+3. All other `.yaml` files.
+
+Member paths resolve relative to the chosen manifest.
+
+## Contract Definitions
+
+| Definition | Location | Notes |
+|---|---|---|
+| JSON Schema | `contracts/jsonschema/policy-bundle.v1alpha1.schema.json` | Describes the YAML manifest. |
+| Protobuf | `contracts/proto/nvidia/agent_policy_fabric/policy/v1alpha1/policy_bundle.proto` | Describes the bundle model, with `metadata`, `id`, `description`, `policy_revision`, `not_before`, `expires_at`, `manifest`, and `signature`. It is not compiled into the services in this release. The signature travels in the yaml-sigil document instead. |
+| Compiled policy set | `contracts/proto/nvidia/agent_policy_fabric/policy/v1alpha1/policy_set.proto` | The `PolicySet` served as `apf.policy.v1/default`, with rules, annotators, effects, and findings in manifest order. |
+| Provider profile set | `contracts/proto/nvidia/agent_policy_fabric/policy/v1alpha1/provider_profile_set.proto` | The `ProviderProfileSet` served as `openshell.provider-profile.v1/default`. |
+
+## Next Steps
+
+- To produce a conforming bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+- To see the checks in action, follow [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).

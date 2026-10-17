@@ -1,0 +1,94 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "APF Supervisor Middleware for OpenShell"
+sidebar-title: "Supervisor Middleware"
+description: "The contract APF's supervisor middleware exposes to OpenShell: manifest, RPCs, caller rules, decisions, limits, and failure behavior."
+keywords: "Generative AI, Cybersecurity, AI Agents, OpenShell, Supervisor Middleware, PRE_CREDENTIALS, Content Policy, MCP, Egress"
+position: 2
+---
+
+APF's supervisor middleware returns APF's decision for each egress request that a sandbox policy routes to it. OpenShell's sandbox supervisor calls it after Layer 1 checks and before credential injection, then enforces the result. It runs inside `apf-policy-gateway` and implements OpenShell's supervisor middleware service.
+
+## Manifest
+
+APF returns this manifest from `Describe`:
+
+| Field | Value |
+|---|---|
+| `name` | `apf-content-policy` |
+| Bindings | One binding: operation `HTTP_REQUEST` at phase `PRE_CREDENTIALS`. |
+| `max_payload_bytes` | 4,194,304 (4 MiB). |
+| Request timeout | Not set, so the operator's registration timeout applies. |
+| `expected_audience` | The audience in the listener's trust profile, or empty in insecure mode. |
+| Extension protocol | `1.0`, requiring `openshell.supervisor-middleware.contract`. |
+
+APF does not bind HTTP responses or WebSocket messages. A WebSocket session request returns `UNIMPLEMENTED` with `apf-content-policy does not inspect WebSocket sessions`.
+
+## RPCs and Callers
+
+| RPC | Allowed callers | Behavior |
+|---|---|---|
+| `Describe` | OpenShell gateway, sandbox supervisor | Returns the manifest and validates OpenShell's protocol metadata. Fails with `FAILED_PRECONDITION` if the metadata is missing or incompatible. |
+| `ValidateConfig` | OpenShell gateway | Accepts only an empty `config`. A non-empty config is reported invalid, and OpenShell rejects the policy that carries it. |
+| `EvaluateHttpRequest` | Sandbox supervisor | Evaluates the request. The supervisor token's `sandbox_id` must equal the request context's sandbox ID. |
+
+Refer to [Identity and Delegation](/how-it-works/identity-and-delegation#identities-apf-verifies) for how callers are recognized.
+
+## Request Handling
+
+APF parses the request, detects an MCP `tools/call` from its JSON-RPC body, builds an evaluation input, and runs the annotator, Cedar, and effect stages against the active policy. It then applies any body replacement, body patches, and header mutations, and returns the result. Refer to [Request Evaluation](/how-it-works/request-evaluation) for every step.
+
+## Results
+
+| Result | Fields |
+|---|---|
+| Allow | `decision: ALLOW`, the new body and `has_body: true` when the body changed, header mutations, and findings. A `warn` or `escalate` verdict is added as a finding of type `policy_verdict`. |
+| Deny | `decision: DENY`, a `reason_code`, and a `reason`. A policy deny also carries the findings of the forbid that fired. |
+
+### Deny Reason Codes
+
+| `reason_code` | Meaning |
+|---|---|
+| `policy_denied` | The policy denied the request. `reason` is the policy's deny reason, such as `security-content-gate/deny-secret` or `no grant for github_repo_write`. |
+| `evaluation_failed` | The evaluator returned an error, or evaluation could not complete. |
+| `effect_application_failed` | A body patch could not be applied. |
+| `replacement_body_too_large` | A replacement body exceeds 4 MiB. |
+| `invalid_header_mutation` | A header mutation breaks the header rules or limits. |
+| `invalid_findings` | The policy produced too many findings or an oversized one. |
+| `invalid_mcp_request` | A `tools/call` body is malformed, or a JSON-RPC batch contains a tool call. |
+| `body_too_large` | The request body exceeds 4 MiB. |
+| `missing_target` | The request has no target. |
+| `invalid_config` | The middleware config in the sandbox policy is not empty. |
+| `invalid_phase` | The request is not at `PRE_CREDENTIALS`. |
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Request body | 4 MiB |
+| Replacement body | 4 MiB |
+| Deny reason | 4 KiB, truncated at a character boundary |
+| Header mutations | 64, with at most 32 KiB of names and values and 64 KiB on the wire |
+| Findings | 32 per result, 4 KiB each |
+| gRPC message | 4,493,376 bytes |
+
+Configure your gRPC client and the OpenShell registration to allow at least these sizes.
+
+## Failure Behavior
+
+| Failure | Result |
+|---|---|
+| The policy denies the request. | OpenShell blocks the request. |
+| APF cannot evaluate or apply the result. | APF returns a deny with a reason code. It never returns an allow that drops a mandated change. |
+| APF is unreachable or times out. | OpenShell applies the sandbox policy entry's `on_error`. Set `on_error: fail_closed`. |
+| A caller fails authentication. | APF refuses the call before policy is consulted and records an `authentication` event. |
+
+## Audit
+
+Every decision writes one `authorization` record to `apf-policy-gateway-middleware-audit.jsonl`, with `reason_code` `middleware.<code>`, or `middleware.allowed` and `middleware.allowed_with_findings` for allows. The record's `correlation_id` is OpenShell's request ID, so it joins to the supervisor's log. Refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+
+## Next Steps
+
+- To register the middleware, refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell#register-the-supervisor-middleware).
+- To write the policies it evaluates, refer to [Content Controls](/author-policies/content-controls).

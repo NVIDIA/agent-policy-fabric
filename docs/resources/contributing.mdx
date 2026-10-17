@@ -1,0 +1,94 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Contributing"
+sidebar-title: "Contributing"
+description: "How to contribute code and documentation to APF: what is welcome, the review process, sign-off, local checks, and documentation conventions."
+keywords: "Generative AI, Cybersecurity, AI Agents, Contributing, Pull Request, DCO, Development, Documentation"
+position: 3
+---
+
+APF is an NVIDIA-owned project. Planning and most development happen internally, and changes are published to the repository regularly. External contributions are welcome, and NVIDIA maintainers decide what is merged based on fit with the roadmap. The repository's `CONTRIBUTING.md` is the authoritative guide, and this page summarizes it. All participants follow the repository's `CODE_OF_CONDUCT.md`, and project ownership is listed in `MAINTAINERS.md`.
+
+## What Is Welcome
+
+| Contribution | How to start |
+|---|---|
+| Bug report or focused improvement | Open an issue with the observed behavior, reproduction steps, and the outcome you expect. |
+| Documentation fix | Open a focused pull request. |
+| Larger feature or design | Open an issue or design note first, and wait for a maintainer to confirm it fits the roadmap. |
+| Policy semantics, signing, governance, or integration changes | Confirm the scope with a maintainer before you implement. |
+| New backend, adapter, or integration | Start with a design note covering ownership, supported surface, compatibility, testing, and release impact. |
+
+Maintainers aim to acknowledge issues and pull requests within five business days. A pull request may be declined if it duplicates internal work, conflicts with planned direction, or adds scope the project cannot maintain.
+
+Report security vulnerabilities privately, never in a public issue. Refer to [Support](/resources/support#report-a-security-vulnerability).
+
+## Make a Change
+
+1. Create a topic branch or fork.
+2. Make one focused change, with tests where they apply.
+3. Sign off every commit under the [Developer Certificate of Origin](https://developercertificate.org/) with `git commit -s`. Unsigned commits cannot be merged.
+4. Use a conventional commit message, such as `fix(policy-gateway): reject expired signatures` or `docs(apf): document local verification commands`.
+5. Open a pull request against the default branch, explaining the motivation, the implementation, and how you verified it.
+6. Make sure CI passes, and address review feedback.
+
+Do not push directly to the default branch. Before you request review, go through the pull request checklist in `CONTRIBUTING.md`: one scoped change, tests for behavior changes, documentation for public behavior that changed, no secrets or internal-only material, and a description a reviewer can evaluate on its own.
+
+Every change is reviewed by an NVIDIA maintainer. CI for pull requests from forks starts after a maintainer's first review.
+
+## Set Up and Run the Checks
+
+Install the pinned toolchain, trust the repository's task file, and build once to check the environment. `rustup` reads `rust-toolchain.toml`, and [mise](https://mise.jdx.dev/) runs the tasks:
+
+```shell
+rustup show
+mise trust
+cargo build
+```
+
+Read the repository's `AGENTS.md` before changing code or contracts. Then run the checks:
+
+```shell
+mise run lint       # Rust formatting and lints
+mise run test       # the Rust test suite
+mise run dag-guard  # crate dependency DAG
+mise run buf-lint   # buf lint contracts/
+```
+
+`mise tasks ls` lists every task. If `buf lint` reports missing third-party definitions under `contracts/third_party/`, export them first as the repository's CI configuration does.
+
+### End-to-End Checks
+
+To verify changes to the deployment files, the Helm chart, or the OpenShell integration, run the verification harness under `e2e/`. Each run brings up a stack, runs the shared smoke suite against it, and tears the stack down:
+
+```shell
+mise run e2e:compose            # the Compose stack, APF alone
+mise run e2e:compose:openshell  # the Compose stack with an OpenShell gateway
+mise run e2e:kind               # the Helm chart on a local kind cluster with an OpenShell gateway
+mise run e2e:parity             # the Compose stack and the chart pass the same flags; no stack
+```
+
+The harness needs Docker with Compose v2, `openssl`, `python3`, `tar`, `shasum`, `curl`, and `lsof`. The kind run also needs `kind`, `kubectl`, `helm` 3, and `yq` v4, and the OpenShell runs need the OpenShell CLI that matches the OpenShell version under test. `e2e/README.md` in the repository covers the setup, the options, and how to keep a stack running between runs.
+
+Every source file carries an SPDX copyright header. Run `pre-commit install` once after cloning, and the `verify-copyright` hook keeps headers current on the Rust, protobuf, Python, and shell files you change.
+
+If you change dependencies, regenerate `THIRD_PARTY_LICENSES.txt` with `scripts/third_party_licenses.py` in the same pull request. CI checks that it is current.
+
+If an AI tool or agent contributed materially to your change, say so in the pull request and include the verification you ran. You remain responsible for the change.
+
+## Contribute to the Documentation
+
+These pages live in `docs/` as MDX files and are built with Fern. Preview them with `mise run docs:serve`, and validate them with `mise run docs`. Both tasks need [mise](https://mise.jdx.dev/), Node.js, and uv, and the repository's `fern/README.md` explains how to install them. `docs/CONTRIBUTING.mdx` describes the conventions:
+
+- Every published page has frontmatter with a `title`, `description`, `keywords`, and `position`, and an SPDX header.
+- The navigation is defined in `docs/index.yml`. A page's URL is its path under `docs/` without the extension.
+- Document only behavior that is in the repository's `main` branch. A planned capability gets a page marked `availability: in-development` with a "Coming soon" note.
+- Write in active voice, present tense, and second person, with no em dashes.
+
+For a documentation-only change, say in the pull request that no code tests were required.
+
+## Next Steps
+
+- For the project layout, refer to [Repositories](/resources/repositories).
+- For the license that applies to contributions, refer to [License](/resources/license).

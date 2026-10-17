@@ -1,0 +1,61 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Export Audit Events"
+sidebar-title: "Export Audit Events"
+description: "Ship APF's JSON Lines audit files to an enterprise log pipeline or SIEM, correlate them with OpenShell, and handle retention, sensitive data, and integrity."
+keywords: "Generative AI, Cybersecurity, AI Agents, Audit Export, SIEM, Log Shipping, JSON Lines, Correlation, Retention"
+position: 5
+---
+
+APF writes audit records to local JSON Lines files and leaves shipping to your log pipeline. Every record validates against the published `apf.audit.event.v1` schema before it is written, so downstream consumers can rely on one stable shape.
+
+## Ship the Files
+
+Use any log collector that tails JSON Lines files.
+
+- **Tail the whole directory.** Collect `*.jsonl` from each service's audit directory so components added later are picked up.
+- **Parse each line as JSON.** Keep every field. Do not flatten or rename fields that consumers query.
+- **Select by producer fields.** Route and query on `component.name` and `enforcement_point_id`, which APF writes, rather than on file names.
+- **Handle rotation.** APF opens the file for each write, so rename-based and truncate-based rotation both work. Configure your collector to follow the rotation style you use.
+- **Run the collector with read-only access.** The files are mode `0600` and owned by the service account. Grant the collector read access without write access.
+
+APF does not ship a collector configuration in this release.
+
+## Treat the Schema as the Contract
+
+`contracts/audit/apf.audit.event.v1.schema.json` is authoritative for the record shape. Validate records against it in your pipeline if you need to detect malformed input. Refer to [Audit Event Schema](/reference/audit-event-schema).
+
+APF's records are not OCSF. OpenShell can export its own events as OCSF JSON, and APF's records join them through correlation IDs. An OCSF mapping for APF records is not in the repository.
+
+## Correlate with OpenShell
+
+| APF record | OpenShell record | Join on |
+|---|---|---|
+| Middleware `authorization` | The supervisor's log entry for the request | APF's `correlation_id` is OpenShell's request ID. |
+| Interceptor `policy_injection`, `admission_validation`, `config_governance` | The gateway's interceptor evaluation log | APF writes `apf.nvidia.com/correlation-id` into the log annotations it returns to OpenShell with denials and with successful injections. Allowed validations and allowed provider and proposal operations carry none. |
+| Interceptor admission | The sandbox | The sandbox's `apf.nvidia.com/correlation-id` annotation equals the admission's `correlation_id`. |
+
+## Sensitive Data
+
+APF's records are designed to be safe to ship:
+
+- APF never sees the provider credentials OpenShell injects. Request bodies can contain secrets an agent put there, but records never include bodies, and every string is scanned for credential-like values before it is written.
+- Effects are recorded by path and header name, never by the patched or written value.
+- Every string is scanned for credential-shaped content before writing. A record that trips the scan is replaced by a reduced record where the producer has one, and is otherwise not written. Refer to [Degraded Records](/reference/audit-event-schema#degraded-records).
+- Caller-supplied strings are length-capped and coerced to their schema patterns.
+
+Records can contain host names, tool names, sandbox IDs and names, user subjects, agent types, and policy deny reasons. Classify your audit store accordingly.
+
+## Retention
+
+APF does not delete or expire audit records. Set retention in your log pipeline and SIEM to meet your requirements. On hosts, rotate the local files and keep enough local history to cover pipeline outages.
+
+## Integrity
+
+Records are not signed or hash-chained in this release, so a local file is not tamper-evident on its own. Protect the audit directory with file permissions, ship records off the host promptly, and keep the SIEM copy as the record of authority.
+
+## Next Steps
+
+- To monitor the services themselves, refer to [Monitor Policy and Service Health](/observability/monitor-policy-and-service-health).
+- To query records locally, refer to [Access Audit Events](/observability/access-audit-events).

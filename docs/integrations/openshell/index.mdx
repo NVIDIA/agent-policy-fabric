@@ -1,0 +1,76 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "OpenShell Integration"
+sidebar-title: "OpenShell"
+description: "How APF integrates with NVIDIA OpenShell through the gateway interceptor and supervisor middleware extension points, and what each side owns."
+keywords: "Generative AI, Cybersecurity, AI Agents, OpenShell, Integration, Gateway Interceptor, Supervisor Middleware, Extension Protocol"
+position: 1
+---
+
+OpenShell is the runtime APF governs today. APF plugs into two of OpenShell's extension points, both served by the `apf-policy-gateway` process. OpenShell calls APF. APF never reaches into a sandbox.
+
+| OpenShell extension point | APF adapter | Called by | Called when |
+|---|---|---|---|
+| [Gateway interceptor](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors) | `apf-openshell-interceptor` | OpenShell gateway | On selected control-plane writes, such as sandbox creation, configuration updates, and provider changes. |
+| [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware) | `apf-openshell-middleware` | OpenShell sandbox supervisors | On each HTTP request to a host the sandbox policy routes to APF, before credentials are injected. |
+
+<Cards>
+
+<Card title="Gateway Interceptor" href="/integrations/openshell/gateway-interceptor">
+
+Bindings, governance decisions, provider profile snapshots, and failure behavior.
+</Card>
+
+<Card title="Supervisor Middleware" href="/integrations/openshell/supervisor-middleware">
+
+Manifest, request handling, decisions, limits, and failure behavior.
+</Card>
+
+</Cards>
+
+## Division of Responsibility
+
+| OpenShell owns | APF owns |
+|---|---|
+| The sandbox lifecycle and isolation boundary. | Which policy applies to a sandbox. |
+| Network mediation and Layer 1 enforcement. | Whether each routed request may proceed, and how it is rewritten. |
+| Provider credential storage and injection. | Which providers and profiles may exist. |
+| Extension registration, failure policy, and signing the extension JWTs it sends. | Verifying those JWTs against its trust profiles. |
+| Agent-driven policy proposals, which must stay disabled under APF. | Refusing direct policy edits, proposal approvals, and approval-mode changes. |
+
+## Compatibility
+
+APF `main` is built against OpenShell `v0.1.3`. Both adapters take part in OpenShell's extension protocol negotiation. APF advertises protocol `1.0` and requires one capability per extension, so a gateway that cannot negotiate refuses to start rather than run with a mismatched APF. Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility).
+
+## Configuration Summary
+
+On the APF side:
+
+| Flag | Purpose |
+|---|---|
+| `--openshell-interceptor-addr` | Listener for OpenShell gateway interceptor calls. |
+| `--openshell-middleware-addr` | Listener for OpenShell supervisor middleware calls. |
+| `--openshell-{interceptor,middleware}-auth-trust-file`, `-tls-cert-file`, `-tls-key-file` | Authenticated mode for each listener. |
+| `--openshell-{interceptor,middleware}-allow-insecure-transport` | Development-only plaintext mode for each listener. |
+| `--jwks-url` | Required by the interceptor to verify provenance tokens. |
+| `--openshell-gateway-url` | Optional outbound connection for provider profile reconciliation and sandbox policy refresh. |
+
+On the OpenShell side:
+
+- An `[[openshell.gateway.interceptors]]` registration for APF, with `failure_policy = "fail_closed"`.
+- An `[[openshell.supervisor.middleware]]` registration named `apf-content-policy`.
+- A `network_middlewares` entry in the signed sandbox policy that selects `apf-content-policy` for the hosts APF should evaluate.
+- `agent_policy_proposals_enabled` set to `false` at global scope.
+- Optionally, `provider_profile_sources` set to APF's interceptor.
+
+Refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell) for the step-by-step procedure.
+
+## Outbound Calls to the OpenShell Gateway
+
+With `--openshell-gateway-url`, the policy gateway calls the OpenShell gateway's API to import provider profiles, list sandboxes, and send refresh `UpdateConfig` requests. In this release that connection is made without a client TLS configuration and without client credentials. Use it only where the OpenShell gateway accepts such calls, such as a loopback development gateway, and review it as an explicit egress from the APF host.
+
+## Next Steps
+
+- To understand the admission flow, refer to [Sandbox Admission](/how-it-works/sandbox-admission).
+- To understand the per-request flow, refer to [Request Evaluation](/how-it-works/request-evaluation).

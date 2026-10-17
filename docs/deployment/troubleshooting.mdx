@@ -1,0 +1,150 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Troubleshooting"
+sidebar-title: "Troubleshooting"
+description: "Diagnose APF builds and services that do not start, settings that are ignored, bundles that are rejected, sandboxes that are not admitted, requests that are denied, and policy updates that do not take effect."
+keywords: "Generative AI, Cybersecurity, AI Agents, Troubleshooting, Errors, Startup Failures, Configuration, Bundle Rejection, Admission, Denials, Policy Updates"
+position: 7
+---
+
+Both APF services fail closed: a problem stops the service or denies the operation instead of running ungoverned. That makes failures visible, and the message almost always names the cause. Start with the service's standard error output or journal, then the audit records.
+
+```shell
+journalctl -u apf-policy-service -u apf-policy-gateway --since "10 min ago"
+```
+
+## The Build Fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| The first build fails with errors about missing types. | The build exports OpenShell's protobuf definitions from GitHub with `buf`. If that export fails, the build continues with a placeholder and fails later. | Install `buf` and allow access to `github.com`, then build again. Refer to [Prerequisites](/get-started/prerequisites). |
+
+## The Shipped Configurations Do Not Start
+
+The native development task and the systemd units in the repository do not start as shipped.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `mise run dev-native` waits forever for the policy service health check. | The task sets no audit directory, which both services require, and passes `--trust-root-dir` and `--counter-store` to the gateway, which no longer accepts them. The policy service exits. | Run the services with the commands in [Installation](/get-started/installation). |
+| The systemd units fail to start. | Neither env file sets `APF_AUDIT_LOG_DIR`. The gateway env file enables the interceptor and a JWKS URL on the policy service's HTTP surface, but the policy service env file leaves that surface off and its unit allows only Unix sockets, so the gateway's startup JWKS fetch fails. | Follow [Host and Workstation Deployment](/deployment/host-and-workstation-deployment), which covers both changes. |
+
+## The Verification Harness Does Not Start
+
+`e2e/with-compose-stack.sh` and `e2e/with-kind-stack.sh` check their inputs before they create anything, and a failed check leaves a kept stack as it is. Each step writes its log under `e2e/.work/compose/logs/` or `e2e/.work/kind/logs/`, and a failed step appends the last log lines of every container or pod that is not running and ready.
+
+| Message | Cause | Fix |
+|---|---|---|
+| `required command not found on PATH: <tool>` | A tool the wrapper needs is not installed. | Install it. Refer to [Contributing](/resources/contributing#end-to-end-checks) for the tools each run needs. |
+| `image apf-policy-service:dev not found; build it ...` | The harness never pulls the APF images. | Build both images with the `docker build` commands under Prerequisites in `e2e/README.md`, or pass `--build` to the Compose wrapper. |
+| `APF_IMAGE_TAG=latest is refused; pin a tag`, `OPENSHELL_IMAGE_TAG=latest is refused; pin a tag` | A floating tag would make a run unrepeatable. | Set the variable to a specific tag. |
+| `OpenShell CLI 0.1.3 is required: download ...` | No CLI of the version under test was found, and the verified download failed, for example offline. | Download the release archive and its checksum file, verify the archive, and unpack the `openshell` binary to `e2e/.work/openshell`, or set `OPENSHELL_CLI`. |
+| `port 8080 is held by host process ...` or `port 127.0.0.1:8080 is published by container ...` | Another process or Compose project holds a port the OpenShell overlay publishes. | Stop it, or set `OPENSHELL_PORT`, `OPENSHELL_HEALTH_PORT`, or `APF_EGRESS_PORT`. |
+| `Secret openshell/openshell-jwt-keys not found; the OpenShell install creates it` | OpenShell was installed without its PKI Job, so there is no extension-JWT key to build the trust profiles from. | Keep `pkiInitJob.enabled` on in `e2e/configs/kind/openshell-values.yaml`. |
+| `OpenShell gateway not ready at http://127.0.0.1:8081/readyz` on Compose, or the registration upgrade times out on kind | The OpenShell gateway calls `Describe` on every registered extension at startup and refuses to start when one is unreachable or refuses the extension protocol. The wrapper warns at the start of the run when `OPENSHELL_IMAGE_TAG` differs from the OpenShell version APF is built against. | Read the gateway's log lines in the failed step's log, or follow them on a kept stack with `e2e/with-compose-stack.sh --logs openshell-gateway` or `e2e/with-kind-stack.sh --logs openshell-gateway`. Keep `OPENSHELL_IMAGE_TAG` at `0.1.3`. |
+| `counter_content_mismatch` in the policy service log of a kept Compose stack | The bundle changed without a higher revision, and the anti-rollback counter on the `apf-state` volume refuses it. | `e2e/with-compose-stack.sh --down --volumes` resets the counter. The kind wrapper reinstalls APF on a fresh state volume by itself when it sees the change. |
+
+## The Policy Service Does Not Start
+
+| Message | Cause | Fix |
+|---|---|---|
+| `no audit log directory configured; set --audit-log-dir or APF_AUDIT_LOG_DIR` | No audit directory is set. | Set `APF_AUDIT_LOG_DIR` to a directory the service can write. |
+| `audit log dir <dir>: ...` | The audit directory cannot be created or written. | On systemd, use a path inside `/var/lib/apf/policy-service/`, which the unit can write. |
+| ``trust-root dir <dir> contains no `*.pub` keys`` | The trust-root directory has no key files. | Install the bundle signing public key. `.pem` and `.p256` files count too. |
+| `load trust roots from <dir>: ...` | The directory is missing or unreadable, or a key file is malformed. The default is the relative path `./trust-roots`. | Ed25519 keys must be one `ed25519:<base64>` line of 32 bytes. P-256 keys must be SPKI PEM. |
+| `--bundle-path (or APF_BUNDLE_PATH) is required when --policy-source=local` | No bundle path is set. | Set `APF_BUNDLE_PATH`. |
+| `--bundle-source-url required when --policy-source=http` | The HTTP source has no URL. | Set `APF_BUNDLE_SOURCE_URL`. |
+| `bundle verification failed: [...]` | The bundle failed verification. | Read the reasons. Refer to [Bundle Rejections](#bundle-rejections). |
+| `find bundle manifest: no bundle manifest (.yaml) found in extracted archive at <path>` | HTTP source only. No `.yaml` file in the archive verified against the trust roots and parsed as a bundle, for example because the signing key is not trusted. | Check the archive layout, the signature, and the trust roots. Run `apf-compile compile --verify-only` on the extracted manifest to see the reason. |
+| `compile bundle: ...` or `load bundle members: ...` | A member document does not parse. | Fix the document. Run `apf-compile compile` to reproduce offline. |
+| `load counter store: ...` | The counter files are corrupt. | Restore them from backup. Refer to [Backup and Recovery](/deployment/backup-and-recovery). |
+| `--http-addr requires --http-bearer-token-file` | The HTTP surface has no token. The configuration file has no key for the token file, so `http_addr` set in the file needs the flag or variable too. | Install the token and pass its file with `--http-bearer-token-file` or `APF_HTTP_BEARER_TOKEN_FILE`. |
+| `--http-bearer-token-file <path> is empty` | The token file is empty. | Write a token to it. |
+| ``signing key <path>: expected `ed25519:` prefix`` | The document signing key is not a seed file. | Use a seed from `apf-policy-service keygen` or `apf-compile genfixture --generate-key`. |
+| `unknown --resolver: <name>` | An unsupported resolver was named, or `--resolver claims` was set without `--claims-config`. The service checks this only after it has loaded the bundle and recorded its revision. | Use `passthrough`, or `claims` with `--claims-config`. Check resolver settings before you start the service. |
+
+## Settings Are Ignored
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A key in the `--config` file has no effect. | `socket` and `counter_store` are compared against outdated defaults, so they apply only when the flag or variable happens to hold the outdated value. `document_ttl_secs`, `[verifier] key_id`, and the `[provenance]` section are parsed and ignored. Unknown keys are ignored without a warning. | Set these options with flags or environment variables. Refer to [CLI Commands](/reference/cli-commands#configuration-file). |
+| The configuration file overrides a flag or environment variable. | A flag or variable set to its default value can lose to the file. For example, `--policy-source local` loses to `backend = "http"` in the file. | Remove the key from the file, or set the value you want in the file. |
+| The policy service starts from a local bundle when you configured the HTTP source. | Any `--policy-source` value other than `http` selects the local source without an error. The shipped env and Compose files also set a bundle path, so the service starts from that bundle. | Check the spelling of the value, and confirm the source in the startup log. |
+
+## The Policy Gateway Does Not Start
+
+| Message | Cause | Fix |
+|---|---|---|
+| `error: the following required arguments were not provided`, naming `--audit-log-dir` | No audit directory is set. | Set `APF_AUDIT_LOG_DIR` or `--audit-log-dir`. |
+| `open audit log in ...` | The audit directory cannot be created or written. | Use a directory the gateway can write. |
+| `error: unexpected argument '--trust-root-dir' found` | A script passes flags the gateway no longer accepts, such as `--trust-root-dir` or `--counter-store`. | Remove them. The gateway trusts the policy service and keeps no counter. |
+| `connect to policy-service at <path>` | The policy service is not running, or the socket path or UID does not match. | Start the policy service first. Check `--policy-service-socket` and that both run as the same user. |
+| `fetch JWKS from <url>` | The policy service's HTTP surface is disabled or unreachable. | Enable the HTTP surface on loopback, or fix `--jwks-url`. |
+| `--jwks-url required when --openshell-interceptor-addr is set` | The interceptor is enabled without a JWKS URL. | Set `--jwks-url`. |
+| `fetch apf.policy.v1 PolicySet` | The policy service does not serve the policy set. | Include `apf.policy.v1` in the policy service's `--surfaces`, and check that it loaded a bundle. |
+| `build initial Cedar evaluator` | A rule, annotator, effect, or finding fails to compile. The policy service does not build the evaluator, so it accepts and serves such a bundle. | Read the cause, fix the document, and publish a higher revision. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies). |
+| `<surface> listener requires the trust file, TLS certificate, and TLS key together, or explicit insecure transport` | A listener address is set without all three security files. | Provide all three, or use the insecure flag in development. |
+| `<surface> security settings require --<addr flag>` | Security files or the insecure flag are set without the listener address. | Set the address, or remove the stray settings. |
+| `--<insecure flag> conflicts with TLS or authentication settings` | A surface has both insecure and authenticated settings. | Choose one mode. |
+| Trust profile, certificate, or key errors | A file is a symbolic link, has unsafe permissions, or does not parse. | Use regular files. Remove group and world write permission from the profile and certificate, and all group and world permission from the key. |
+| `record initial policy activation: ...` | The audit file cannot be written. | Fix the audit directory. |
+
+## Bundle Rejections
+
+With the local source, and with the HTTP source once a manifest verifies, every verification failure writes a `policy_verification` record with `outcome` `refused`, the reason codes in `rejection_reasons`, and the full detail in `error.message`. A failure to record the revision writes a `policy_activation` refusal instead. A bundle that verifies but fails to compile writes only a successful `policy_verification` record, and the error appears in the service log, and with the local source in the refresh response.
+
+| Reason | Fix |
+|---|---|
+| `signature_invalid: trust_root_unknown: <keyid>` | Install the public key for `<keyid>`, or sign with a trusted key. |
+| `signature_invalid: ...` | The file was changed after signing, or was not signed. Re-sign it. |
+| `manifest_hash_mismatch: <path>` | A member changed after signing. Restore it, or re-sign with a higher revision. If no member changed, the template had an extra `REPLACE_WITH_DIGEST`, for example in a comment. `genfixture` fills each manifest entry with the next placeholder anywhere in the template, so one extra placeholder shifts every following digest. Use exactly one placeholder per manifest entry. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign). |
+| `manifest_hash_unset: <path>` | The manifest still has `REPLACE_WITH_DIGEST`. Sign the template with `apf-compile genfixture`. |
+| `manifest_member_unreadable: <path>` | A member file is missing on the host. Deliver the whole bundle directory. |
+| `bundle_expired`, `bundle_not_yet_valid` | Check the validity window and the host clock. Publish a bundle with a current window. |
+| `counter_regression` | The revision is not higher than the last accepted one. Publish with a higher revision. Revision `0` is always rejected, even though the schema allows it, so start at `1`. |
+| `counter_content_mismatch` | Different content reuses an accepted revision. Publish with a higher revision. |
+
+`genfixture` itself fails with a missing-placeholder error when the template contains a literal digest. Replace every digest with `REPLACE_WITH_DIGEST` before you sign.
+
+A bundle whose `id` does not fit the audit ID format is refused, because the policy service cannot write its verification record. Start the `id` with a letter or digit, use only letters, digits, and `. _ : @ / + - =`, and stay within 512 characters. Refer to [Bundle Specification](/reference/bundle-specification#manifest-fields).
+
+## Sandboxes Are Not Admitted
+
+Look for `policy_injection` and `admission_validation` records with `"outcome":"refused"` in the interceptor audit file. Refer to [Sandbox Admission](/how-it-works/sandbox-admission#admission-outcomes) for each reason code. If there is no record at all:
+
+- Confirm the OpenShell gateway's interceptor registration points at the right address and transport.
+- Check that the OpenShell gateway started. It refuses to start if it cannot reach APF or negotiate the extension protocol.
+- Check that APF is registered with OpenShell's default `binding_policy = "dynamic"`. APF declares three bindings each on `CreateSandbox` and `UpdateConfig`, so OpenShell refuses to start with `exact`, and `allowlist` cannot include sandbox admission or refresh. Refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell#register-the-gateway-interceptor).
+- Check for `authentication` records, which mean OpenShell's token did not match the trust profile. Compare the issuer, audience, and key ID.
+
+If OpenShell rejects the injected sandbox policy, check endpoint `tls` and `landlock.compatibility` values. OpenShell 0.1.x rejects `tls: terminate`, `tls: passthrough`, and the Landlock values `required` and `disabled`, which the APF JSON Schemas allow. Omit `tls` or set `skip`, and use `best_effort` or `hard_requirement` for Landlock, even though the schema check flags `skip` and `hard_requirement`. A provider with a rejected value fails provider profile reconciliation instead. Refer to [Sandbox Policies](/author-policies/sandbox-policies).
+
+## Requests Are Denied Unexpectedly
+
+Find the `authorization` record and read its reason. Refer to [Investigate a Denied Request](/observability/investigate-a-denied-request). Common causes:
+
+- **An MCP tool call has no grant.** The grant names a different action. On the OpenShell middleware path the action is the MCP tool name exactly, such as `APF::Action::"github_repo_read"`, and the request carries no user subject. Grants written for `APF::Action::"<tool>::<capability>"` or for a principal apply only to `EvaluationService` calls that send a `verb`; an `EvaluationService` call with the tool name as `resource.class` and no `verb` evaluates the same action the middleware does.
+- **A grant exists, but its conditions failed.** The reason is usually `no grant for <action>` in this case too. The more specific `<rule>: conditions not met for <action>` appears only when the rule's name contains the tool name. When you see `no grant`, also check the conditions of the grants for that tool. Refer to [Capability Grants](/author-policies/capability-grants).
+- **A body patch cannot be applied.** The request is not JSON, or lacks the patched path. The reason code is `middleware.effect_application_failed`.
+
+## Requests Are Not Evaluated
+
+If a request reaches its destination without an APF record, the sandbox policy did not route it to APF. Check that a `network_middlewares` entry with `middleware: apf-content-policy` includes the destination host, that the OpenShell middleware registration is named `apf-content-policy`, and that the sandbox was admitted or refreshed with that policy.
+
+## Policy Updates Do Not Take Effect
+
+| Symptom | Cause |
+|---|---|
+| The policy service shows the old revision. | The new bundle was rejected, failed to compile, or the HTTP source has not polled yet. Check `policy_verification` records and the service log. |
+| The policy service never picks up new bundles from the HTTP source. | `--bundle-source-poll-interval-secs 0` stops polling: the polling task fails as it starts, and the service keeps serving the bundle it loaded at startup. Use an interval of at least 1 second. |
+| `POST /v1/refresh` returns `200`, but the revision does not change. | With the HTTP source, the response does not reflect the poll it triggers, and a failed fetch writes no audit record. Compare the `version` in the response with the revision you published, and check the service log for poll failures. |
+| Callers that map to a bundle variant get `document not found`, or no bundle is ever served. | Per-caller bundle variants do not work in this release. Use a literal bundle source URL with the default `passthrough` resolver. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants). |
+| The policy service shows the new revision, the gateway the old. | The update changed no rules, annotators, effects, or findings, so the gateway saw no change. Or the gateway could not build an evaluator; check its log for `evaluator rebuild failed`, then publish a fixed bundle with a higher revision. Or the change landed after the gateway started but before its first poll, which the gateway does not act on; restart the gateway. |
+| The gateway exits right after a policy update. | The gateway could not write the audit record for the hot swap. The new policy was already active. Keep the audit directory writable and monitored, then restart the gateway. |
+| Running sandboxes keep the old sandbox policy, or provider profiles are not updated. | The update changed only `SandboxPolicy` or `Provider` documents, which does not trigger the refresher or provider profile reconciliation; include a change to a rule, annotator, effect, or finding in the same revision, or recreate the sandboxes. Or the refresher is not enabled. Or the gateway cannot reach the OpenShell gateway: the refresher and provider profile reconciliation connect to `--openshell-gateway-url` without TLS and without an extension token. Or the revision changed `landlock`, `process`, `include_workdir`, or removed a filesystem path, so OpenShell rejected the whole update; the gateway log says the change applies to new sandboxes only. Refer to [Update Policies](/manage-policy-bundles/update-policies#how-far-a-change-reaches). |
+
+## Next Steps
+
+- For every error code, refer to [Error Reference](/reference/error-reference).
+- For what APF does not inspect or enforce, refer to [Enforcement Coverage and Limitations](/security/enforcement-coverage-and-limitations).
+- To report a problem, refer to [Support](/resources/support).

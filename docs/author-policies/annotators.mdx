@@ -1,0 +1,141 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Annotators"
+sidebar-title: "Annotators"
+description: "Write PolicyAnnotator documents that detect and classify request content with regular expressions, comparisons, and length checks, and expose the results to Cedar."
+keywords: "Generative AI, Cybersecurity, AI Agents, Annotators, Detection, Regex, Secrets, PII, Cedar Context"
+position: 6
+---
+
+Annotators handle the detection logic Cedar cannot express: regular expressions, substring and suffix checks, numeric comparisons, and lengths. Each `PolicyAnnotator` derives named values from the raw request before any rule runs. Rules read the values as `context.annotations.<name>`, and effects can copy them into headers or finding labels.
+
+## A First Example
+
+This annotator flags credential-shaped text and labels its kind:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyAnnotator
+metadata:
+  name: secret-detector
+spec:
+  description: Detects known credential shapes in request body text.
+  annotations:
+    - name: secret_detected
+      output: bool
+      set_true_if: any
+      rules:
+        - field: body_text
+          op: regex_match
+          pattern: 'ghp_[A-Za-z0-9]{36}'
+        - field: body_text
+          op: regex_match
+          pattern: 'AKIA[0-9A-Z]{16}'
+
+    - name: secret_kind
+      output: string
+      set_value_from: first_match
+      rules:
+        - field: body_text
+          op: regex_match
+          pattern: 'ghp_[A-Za-z0-9]{36}'
+          value: github_pat
+        - field: body_text
+          op: regex_match
+          pattern: 'AKIA[0-9A-Z]{16}'
+          value: aws_access_key
+```
+
+A rule can now write `when { context.annotations.secret_detected }`, and an effect can set a header from `context.annotations.secret_kind`.
+
+## Annotation Outputs
+
+| `output` | Combinator | Present in context | Valid operations |
+|---|---|---|---|
+| `bool` | `set_true_if: any` (default) or `all` | Always. `false` when the rules do not match. | Predicate operations. |
+| `string` | `set_value_from: first_match` | Only when a rule matched. The value is that rule's `value`. | Predicate operations. Every rule must set `value`. |
+| `integer` | First rule that produces a value | Only when a rule produced a value. | `length` and `passthrough` only. |
+
+Guard every string and integer annotation with `has` before you read it in Cedar:
+
+```cedar
+when {
+  context.annotations has secret_kind &&
+  context.annotations.secret_kind == "github_pat"
+}
+```
+
+## Fields
+
+Each rule reads one field of the request.
+
+| `field` | Reads |
+|---|---|
+| `body_text` | The request body as text. For an MCP call this is the whole JSON-RPC envelope, including the arguments. |
+| `body_json` | The whole parsed JSON body. |
+| `body_json.<path>` | A value inside the JSON body. Use a dotted path such as `body_json.params.name`, or an RFC 6901 pointer such as `body_json./params/name`. |
+| `args.<name>` | An MCP tool argument. |
+| `target.host`, `target.path`, `target.method` | The request target. |
+| `user_subject` | The user subject the caller asserts. Empty on the OpenShell middleware path. |
+
+A field that does not exist in the request never matches.
+
+## Operations
+
+| `op` | Operand | Matches when |
+|---|---|---|
+| `regex_match` | `pattern` | The field is a string that matches the regular expression. |
+| `equals` | `value` | The field is a string equal to `value`. |
+| `startswith` | `prefix` | The field is a string that starts with `prefix`. |
+| `endswith` | `suffix` | The field is a string that ends with `suffix`. |
+| `contains` | `substring` | The field is a string that contains `substring`. |
+| `gte` | `threshold` | The field is an integer, or a string that parses as one, greater than or equal to `threshold`. |
+| `lte` | `threshold` | Same, less than or equal to `threshold`. |
+| `length` | none | Integer output only. Produces the string's length in characters. |
+| `passthrough` | none | Integer output only. Produces the field's integer value. |
+
+Patterns use the syntax of the Rust `regex` crate, which is similar to RE2. Lookaround and backreferences are not supported.
+
+## Producing Integers
+
+Use an `integer` annotation to expose a number to Cedar, for example the length of a message:
+
+```yaml
+- name: message_length
+  output: integer
+  rules:
+    - field: body_json.text
+      op: length
+```
+
+```cedar
+forbid (principal, action, resource)
+when {
+  context.annotations has message_length &&
+  context.annotations.message_length > 4000
+};
+```
+
+## Load-Time Checks
+
+The evaluator rejects an annotator, and with it the whole policy, when:
+
+- An annotation has no rules.
+- A rule is missing its operation's operand, or its pattern does not compile.
+- An operation does not fit the output type, such as `length` on a `bool` annotation.
+- A `string` annotation's rule has no `value`.
+- A field selector is not one of the supported forms.
+- Two annotations anywhere in the bundle share a name.
+
+## Writing Good Detectors
+
+- Keep detection and decision separate. An annotator should say what it saw, and a rule should decide what to do about it.
+- Use a `bool` annotation with `set_true_if: any` for a detection flag, and a `string` annotation with `set_value_from: first_match` for its classification. List the same patterns in both, in the same order.
+- Every annotation runs on every request APF evaluates. Keep patterns specific.
+- The repository's demo bundle includes `annotators/secret-detector.yaml` and `annotators/pii-detector.yaml` as starting points.
+
+## Next Steps
+
+- To act on these signals, refer to [Content Controls](/author-policies/content-controls).
+- To copy annotation values into headers and findings, refer to [Effects and Findings](/author-policies/effects-and-findings).

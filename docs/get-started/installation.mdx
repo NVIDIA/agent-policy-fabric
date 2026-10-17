@@ -1,0 +1,199 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Install and Run APF"
+sidebar-title: "Installation"
+description: "Build APF from source and run the policy service and policy gateway as native processes, as a local container stack, or as systemd services."
+keywords: "Generative AI, Cybersecurity, AI Agents, Installation, Build from Source, Docker Compose, systemd, mise"
+position: 2
+---
+
+This page builds APF from source and starts the two APF services, `apf-policy-service` and `apf-policy-gateway`, with the signed demo bundle. Choose the run mode that matches your goal. To run APF on Kubernetes with the Helm chart, refer to [Kubernetes](/deployment/kubernetes).
+
+| Run mode | Use it for | Security posture |
+|---|---|---|
+| Native processes | Fast local iteration. | Development only. Loopback, dev keys, and OpenShell caller authentication turned off. |
+| Container stack | Local development in Docker. | Development only. Dev keys, hardened containers, and nothing published on the host. |
+| systemd services | A host that runs APF next to an OpenShell gateway. | Production-oriented. Caller authentication and TLS are required. |
+
+Make sure you meet the [Prerequisites](/get-started/prerequisites) before you start.
+
+## Build APF
+
+Clone the repository and build the three binaries:
+
+```shell
+git clone https://github.com/NVIDIA/agent-policy-fabric.git apf
+cd apf
+cargo build --release -p apf-policy-service -p apf-policy-gateway -p apf-compile
+```
+
+The binaries land in `target/release/`. The first build downloads the pinned Rust toolchain and exports the OpenShell protobuf sources with `buf`.
+
+## Set an Audit Directory
+
+Both services refuse to start without an audit log directory, because they enforce policy and must record what they did. Each service reads the directory from `--audit-log-dir` or the `APF_AUDIT_LOG_DIR` environment variable and creates it if it is missing.
+
+<Note>
+The native development task, `mise run dev-native`, and the sample service configuration in the repository do not set an audit directory yet. Set `APF_AUDIT_LOG_DIR` yourself for native processes as shown below. The container stack sets the audit directory for you. Refer to [The Shipped Configurations Do Not Start](/deployment/troubleshooting#the-shipped-configurations-do-not-start).
+</Note>
+
+## Run APF
+
+<Tabs>
+<Tab title="Native processes">
+
+Run both services as background processes. Their sockets, counter store, and audit files live under `$APF_HOME`, so later pages can find them from any terminal. These commands follow the repository's `dev-native` task, with an audit directory added and the gateway flags it no longer accepts removed.
+
+```shell
+export APF_HOME="$HOME/apf-dev"
+export SOCK_DIR="$APF_HOME/run"
+export APF_AUDIT_LOG_DIR="$APF_HOME/audit"
+mkdir -p "$SOCK_DIR"
+
+./target/release/apf-policy-service serve \
+  --socket "$SOCK_DIR/policy-service.sock" \
+  --http-addr 127.0.0.1:19200 \
+  --http-bearer-token-file examples/dev-keys/http-bearer-token.dev \
+  --bundle-path examples/demo-bundle/demo-bundle.yaml \
+  --trust-root-dir examples/dev-keys \
+  --counter-store "$SOCK_DIR/counter" \
+  --document-key-id apf-dev \
+  --document-signing-key examples/dev-keys/apf-dev.seed \
+  --policy-source local &
+
+until curl -sf http://127.0.0.1:19200/healthz >/dev/null; do sleep 0.2; done
+
+./target/release/apf-policy-gateway \
+  --socket "$SOCK_DIR/policy-gateway.sock" \
+  --policy-service-socket "$SOCK_DIR/policy-service.sock" \
+  --document-key-id apf-dev \
+  --jwks-url http://127.0.0.1:19200/.well-known/jwks.json \
+  --openshell-interceptor-addr 127.0.0.1:18202 \
+  --openshell-interceptor-allow-insecure-transport \
+  --openshell-middleware-addr 127.0.0.1:9099 \
+  --openshell-middleware-allow-insecure-transport &
+```
+
+The gateway starts after the policy service is healthy because it connects to the policy service socket and fetches the policy set at startup. It logs a warning for each OpenShell listener that runs without TLS or caller authentication. Stop both services with `kill %1 %2`, or close the shell.
+
+The counter store in `$SOCK_DIR/counter` remembers the highest bundle revision the policy service accepted, so a restart with an older bundle is refused. To start over from the demo bundle, stop both services and delete `$APF_HOME`.
+
+<Note>
+`mise run dev-native` does not work on `main` yet. It passes `--trust-root-dir` and `--counter-store` to `apf-policy-gateway`, which no longer accepts them, and it does not set an audit directory. Refer to [The Shipped Configurations Do Not Start](/deployment/troubleshooting#the-shipped-configurations-do-not-start).
+</Note>
+
+</Tab>
+<Tab title="Container stack">
+
+The Compose stack in `deploy/docker/compose.yaml` runs the two services as hardened containers that share one network namespace, the same shape as the Helm chart. The policy service binds its HTTP surface to `127.0.0.1:19200` inside that namespace, the gateway serves its decision socket on the `apf-run` volume, both write audit files to the `apf-audit` volume, and nothing is published on the host. Both containers run as user `65532` with a read-only root filesystem and every capability dropped.
+
+The stack needs Docker with Compose v2 plus `openssl`, `python3`, `tar`, and `shasum`; adding an OpenShell gateway to it also needs `curl` and `lsof`. The images come from the two Dockerfiles under `deploy/docker/`; nothing pulls them.
+
+```shell
+mise run dev
+```
+
+The task builds both images, signs the demo bundle, writes the bearer token and the document signing key into the stack's volumes, starts the stack, runs the smoke suite, and leaves the stack running. The smoke suite confirms that both containers are healthy, that the policy service loaded the signed bundle, and that a decision comes back over the gateway socket with a matching audit record.
+
+Follow the logs with `mise run dev-logs`, and stop the stack with `mise run dev-down`. Stopping keeps the volumes, including the revision counter. `e2e/with-compose-stack.sh --down --volumes` also removes them.
+
+To verify the stack against a real OpenShell gateway, run `mise run e2e:compose:openshell`. It brings the same Compose project up with the verification harness's OpenShell overlay, `e2e/configs/compose/compose.openshell.yaml`, admits a sandbox through APF, and tears the stack down afterwards, volumes included, so a stack left running by `mise run dev` goes with it. The overlay publishes the OpenShell gateway and the policy gateway's middleware listener on `127.0.0.1` and gives the OpenShell gateway the Docker socket to run sandboxes, and the run downloads the matching OpenShell CLI into `e2e/.work/` when none is found. `e2e/with-compose-stack.sh --openshell --keep e2e/suites/smoke.sh` keeps that stack running instead.
+
+To run the stack without `mise`, build both images first; the staging step checks that they exist before it writes anything, and nothing pulls them. Then stage the signed bundle, the secrets, and the volumes, and start the stack with `.env` copied from the example so Compose finds the staged bundle:
+
+```shell
+docker compose -f deploy/docker/compose.yaml build
+e2e/with-compose-stack.sh --prepare
+cp deploy/docker/.env.example deploy/docker/.env
+docker compose -f deploy/docker/compose.yaml up -d
+```
+
+`deploy/docker/README.md` describes each step, and how to add an OpenShell gateway to the stack.
+
+</Tab>
+<Tab title="systemd services">
+
+The `deploy/systemd/` directory contains hardened units that run both services as the unprivileged `apf` account, with OpenShell caller authentication and TLS required. Follow [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+
+</Tab>
+</Tabs>
+
+## Set Up Each Terminal
+
+The walkthroughs that follow assume the native processes. They run commands from the repository root in more than one terminal. Run this in every new terminal so the paths resolve:
+
+```shell
+cd <path to your APF clone>
+export APF_HOME="$HOME/apf-dev"
+export SOCK_DIR="$APF_HOME/run"
+export APF_AUDIT_LOG_DIR="$APF_HOME/audit"
+export WORK="$HOME/apf-work"
+```
+
+`WORK` holds your own copy of the bundle, created in [Your First Signed Policy](/get-started/your-first-signed-policy).
+
+## Verify the Installation
+
+These checks assume the native processes. With the container stack, `mise run dev` has already run equivalent checks in its smoke suite, and nothing is published on the host. To run a check yourself, run it inside the stack's network namespace, for example `docker compose -f deploy/docker/compose.yaml exec policy-service curl -s http://127.0.0.1:19200/healthz`. The stack generates its own bearer token, at `/etc/apf/secrets/http-bearer-token` in the policy service container.
+
+Check the policy service health and readiness. These routes need no token.
+
+```shell
+curl -s http://127.0.0.1:19200/healthz
+curl -s http://127.0.0.1:19200/readyz
+```
+
+```text
+{"status":"ok","version":"0.1.0"}
+{"status":"ok"}
+```
+
+Confirm the JWKS endpoint publishes the document signing key that the gateway uses to verify provenance tokens:
+
+```shell
+curl -s http://127.0.0.1:19200/.well-known/jwks.json
+```
+
+The response lists one `OKP` key with `"crv":"Ed25519"` and `"kid":"apf-dev"`.
+
+List the sandbox policy documents the service projects from the demo bundle. This route requires the HTTP bearer token:
+
+```shell
+curl -s -H "Authorization: Bearer $(cat examples/dev-keys/http-bearer-token.dev)" \
+  http://127.0.0.1:19200/v1/documents/openshell.sandbox.v1
+```
+
+```text
+{"names":["default"]}
+```
+
+Finally, confirm both services are writing audit records. With native processes:
+
+```shell
+ls "$APF_AUDIT_LOG_DIR"
+```
+
+```text
+apf-policy-gateway-audit.jsonl
+apf-policy-gateway-interceptor-audit.jsonl
+apf-policy-gateway-middleware-audit.jsonl
+apf-policy-service-audit.jsonl
+```
+
+With the container stack, the files are in the `apf-audit` volume. The stack runs without the OpenShell listeners, so it writes only the policy service and gateway files:
+
+```shell
+docker compose -f deploy/docker/compose.yaml exec policy-gateway ls /var/log/apf/audit
+```
+
+```text
+apf-policy-gateway-audit.jsonl
+apf-policy-service-audit.jsonl
+```
+
+The policy service file starts with a `policy_service_startup` record, a `policy_verification` record for the demo bundle, and a `policy_activation` record. Refer to [Access Audit Events](/observability/access-audit-events).
+
+## Next Steps
+
+APF is running but nothing calls it yet. Continue with [Add APF to OpenShell](/get-started/add-apf-to-openshell) to register the interceptor and middleware with an OpenShell gateway.

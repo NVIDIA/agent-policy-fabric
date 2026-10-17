@@ -1,0 +1,225 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fern navigation for the NVIDIA Agent Policy Fabric (APF) documentation.
+#
+# Conventions (see docs/CONTRIBUTING.mdx):
+# - Page URLs are relative to the docs version and omit `.mdx` and trailing `/index`.
+# - Each `page:` label equals the page's `sidebar-title` (or `title` when no
+#   sidebar title is set).
+# - Pages whose capability is not yet in the repository carry
+#   `availability: in-development` so Fern renders a status badge.
+
+navigation:
+- page: "Overview"
+  path: index.mdx
+  slug: /
+
+- section: "About APF"
+  slug: about
+  contents:
+  - page: "Why APF"
+    path: about/why-apf.mdx
+  - page: "Architecture"
+    path: about/architecture.mdx
+  - page: "The Governed Path"
+    path: about/governed-path.mdx
+    slug: governed-path
+  - page: "Use Cases"
+    path: about/use-cases.mdx
+  - page: "Support and Compatibility"
+    path: about/support-and-compatibility.mdx
+
+- section: "Get Started"
+  slug: get-started
+  contents:
+  - page: "Prerequisites"
+    path: get-started/prerequisites.mdx
+  - page: "Installation"
+    path: get-started/installation.mdx
+  - page: "Add APF to OpenShell"
+    path: get-started/add-apf-to-openshell.mdx
+    slug: add-apf-to-openshell
+  - page: "Your First Signed Policy"
+    path: get-started/your-first-signed-policy.mdx
+  - page: "Your First Governed Agent"
+    path: get-started/your-first-governed-agent.mdx
+
+- section: "How It Works"
+  slug: how-it-works
+  contents:
+  - page: "Policy Service"
+    path: how-it-works/policy-service.mdx
+  - page: "Policy Gateway"
+    path: how-it-works/policy-gateway.mdx
+  - page: "Policy Projection"
+    path: how-it-works/policy-projection.mdx
+  - page: "Sandbox Admission"
+    path: how-it-works/sandbox-admission.mdx
+  - page: "Request Evaluation"
+    path: how-it-works/request-evaluation.mdx
+  - page: "Identity and Delegation"
+    path: how-it-works/identity-and-delegation.mdx
+  - page: "Credential Integration"
+    path: how-it-works/credential-integration.mdx
+
+- section: "Author Policies"
+  slug: author-policies
+  contents:
+  - page: "Policy Model"
+    path: author-policies/policy-model.mdx
+  - page: "Federated Authoring"
+    path: author-policies/federated-authoring.mdx
+  - page: "Sandbox Policies"
+    path: author-policies/sandbox-policies.mdx
+  - page: "Capability Grants"
+    path: author-policies/capability-grants.mdx
+  - page: "Content Controls"
+    path: author-policies/content-controls.mdx
+  - page: "Annotators"
+    path: author-policies/annotators.mdx
+  - page: "Effects and Findings"
+    path: author-policies/effects-and-findings.mdx
+  - page: "Validate and Test Policies"
+    path: author-policies/validate-and-test-policies.mdx
+
+- section: "Manage Policy Bundles"
+  slug: manage-policy-bundles
+  contents:
+  - page: "Bundle Structure"
+    path: manage-policy-bundles/bundle-structure.mdx
+  - page: "Configure a Signing Authority"
+    path: manage-policy-bundles/configure-a-signing-authority.mdx
+  - page: "Compile and Sign"
+    path: manage-policy-bundles/compile-and-sign.mdx
+  - page: "Publish and Distribute"
+    path: manage-policy-bundles/publish-and-distribute.mdx
+  - page: "Verify and Activate"
+    path: manage-policy-bundles/verify-and-activate.mdx
+  - page: "Update Policies"
+    path: manage-policy-bundles/update-policies.mdx
+  - page: "Expiry and Rollback Protection"
+    path: manage-policy-bundles/expiry-and-rollback-protection.mdx
+
+- section: "Integrations and Extensibility"
+  slug: integrations
+  contents:
+  - page: "Overview"
+    path: integrations/overview.mdx
+  - section: "OpenShell"
+    slug: openshell
+    path: integrations/openshell/index.mdx
+    contents:
+    - page: "Gateway Interceptor"
+      path: integrations/openshell/gateway-interceptor.mdx
+    - page: "Supervisor Middleware"
+      path: integrations/openshell/supervisor-middleware.mdx
+  - page: "External Policy Authorities"
+    path: integrations/external-policy-authorities.mdx
+  - page: "APF Adapter"
+    path: integrations/apf-adapter.mdx
+  - page: "Policy Information Providers"
+    path: integrations/policy-information-providers.mdx
+
+- section: "Observability"
+  slug: observability
+  contents:
+  - page: "Access Audit Events"
+    path: observability/access-audit-events.mdx
+  - page: "Understand Decisions and Findings"
+    path: observability/understand-decisions-and-findings.mdx
+  - page: "Trace Policy Provenance"
+    path: observability/trace-policy-provenance.mdx
+  - page: "Investigate a Denied Request"
+    path: observability/investigate-a-denied-request.mdx
+  - page: "Export Audit Events"
+    path: observability/export-audit-events.mdx
+  - page: "Monitor Policy and Service Health"
+    path: observability/monitor-policy-and-service-health.mdx
+
+- section: "Deployment and Operations"
+  slug: deployment
+  contents:
+  - page: "Deployment Models"
+    path: deployment/deployment-models.mdx
+  - page: "Kubernetes"
+    path: deployment/kubernetes.mdx
+  - page: "Host and Workstation Deployment"
+    path: deployment/host-and-workstation-deployment.mdx
+  - page: "Configure Service Authentication"
+    path: deployment/configure-service-authentication.mdx
+  - page: "Backup and Recovery"
+    path: deployment/backup-and-recovery.mdx
+  - page: "Troubleshooting"
+    path: deployment/troubleshooting.mdx
+
+- section: "Security"
+  slug: security
+  contents:
+  - page: "Security Best Practices"
+    path: security/best-practices.mdx
+    slug: best-practices
+  - page: "Trust Boundaries"
+    path: security/trust-boundaries.mdx
+  - page: "Signing Keys and Trust Roots"
+    path: security/signing-keys-and-trust-roots.mdx
+  - page: "Failure Behavior"
+    path: security/failure-behavior.mdx
+  - page: "Enforcement Coverage and Limitations"
+    path: security/enforcement-coverage-and-limitations.mdx
+
+- section: "Tutorials"
+  slug: tutorials
+  path: tutorials/index.mdx
+  contents:
+  - page: "Govern a Coding Agent"
+    path: tutorials/govern-a-coding-agent.mdx
+  - page: "Protect Sensitive Data"
+    path: tutorials/protect-sensitive-data.mdx
+  - page: "Update a Signed Policy"
+    path: tutorials/update-a-signed-policy.mdx
+  - page: "Reject a Tampered Bundle"
+    path: tutorials/reject-a-tampered-bundle.mdx
+
+- section: "Reference"
+  slug: reference
+  contents:
+  - page: "Policy Schemas"
+    path: reference/policy-schemas.mdx
+  - page: "Bundle Specification"
+    path: reference/bundle-specification.mdx
+  - page: "CLI Commands"
+    path: reference/cli-commands.mdx
+  - page: "Service APIs"
+    path: reference/service-apis.mdx
+    slug: service-apis
+  - page: "Adapter Contracts"
+    path: reference/adapter-contracts.mdx
+  - page: "Helm Configuration"
+    path: reference/helm-configuration.mdx
+  - page: "Audit Event Schema"
+    path: reference/audit-event-schema.mdx
+  - page: "Error Reference"
+    path: reference/error-reference.mdx
+
+- section: "Releases"
+  slug: releases
+  contents:
+  - page: "Release Notes"
+    path: releases/release-notes.mdx
+  - page: "Upgrade Guides"
+    path: releases/upgrade-guides.mdx
+
+- section: "Resources"
+  slug: resources
+  contents:
+  - page: "Glossary"
+    path: resources/glossary.mdx
+  - page: "Repositories"
+    path: resources/repositories.mdx
+  - page: "Contributing"
+    path: resources/contributing.mdx
+  - page: "Support"
+    path: resources/support.mdx
+  - page: "License"
+    path: resources/license.mdx

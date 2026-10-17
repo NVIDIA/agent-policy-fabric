@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 630" width="1240" height="630" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif">
+<title id="title">APF architecture</title>
+<desc id="desc">Enterprise teams author policy, review it, and sign it offline. The signed bundle lands in a policy registry, either a local file or an artifact store. The APF policy service reads and verifies the bundle and projects it for each enforcement point. The policy gateway, an APF adapter, receives the projections. Its OpenShell interceptor works with the OpenShell gateway at sandbox admission. Its OpenShell middleware can receive each governed request from the OpenShell supervisor, and the decision layer evaluates it. The decision layer can look up facts from policy information providers registered with the gateway, which run outside APF. The supervisor enforces each decision for the sandboxed agent workload. Other enforcement points are envisioned but not yet built. Every APF component writes audit events joined by correlation ID and bundle digest.</desc>
+<defs>
+<marker id="ar-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8BC53F"/></marker>
+<marker id="ar-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#60A5FA"/></marker>
+<marker id="ar-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#E0A35C"/></marker>
+<marker id="ar-v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#A78BFA"/></marker>
+<marker id="ar-n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6B7280"/></marker>
+</defs>
+<rect width="1240" height="630" fill="#0F1113"/>
+<rect x="20" y="20" width="240" height="470" rx="14" fill="#9CA3AF14" stroke="#6B7280" stroke-width="1.5"/>
+<text x="40" y="50" font-size="13" font-weight="700" letter-spacing="1.2" fill="#D1D5DB">POLICY SUPPLY</text>
+<text x="40" y="68" font-size="12" fill="#9CA3AF">Human-approved</text>
+<rect x="380" y="20" width="480" height="470" rx="14" fill="#9CA3AF14" stroke="#6B7280" stroke-width="1.5"/>
+<text x="400" y="50" font-size="13" font-weight="700" letter-spacing="1.2" fill="#D1D5DB">APF</text>
+<rect x="980" y="20" width="240" height="470" rx="14" fill="#E0A35C1A" stroke="#E0A35C" stroke-width="1.5"/>
+<text x="1000" y="50" font-size="13" font-weight="700" letter-spacing="1.2" fill="#D1D5DB">ENFORCEMENT POINTS</text>
+<text x="1000" y="68" font-size="12" fill="#9CA3AF">Where the decision is carried out</text>
+<rect x="40" y="92" width="200" height="84" rx="10" fill="#1F2D14" stroke="#8BC53F" stroke-width="1.5"/>
+<text x="140.0" y="120.0" font-size="14" font-weight="700" text-anchor="middle" fill="#C5E89A">Authored policy</text>
+<text x="140.0" y="138.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Sandbox policy, tool grants,</text>
+<text x="140.0" y="154.0" font-size="12" text-anchor="middle" fill="#A7AFBA">approved providers</text>
+<rect x="40" y="206" width="200" height="84" rx="10" fill="#1F2D14" stroke="#8BC53F" stroke-width="1.5"/>
+<text x="140.0" y="234.0" font-size="14" font-weight="700" text-anchor="middle" fill="#C5E89A">Review and sign</text>
+<text x="140.0" y="252.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Human sign-off, then compiled</text>
+<text x="140.0" y="268.0" font-size="12" text-anchor="middle" fill="#A7AFBA">and signed offline</text>
+<rect x="40" y="320" width="200" height="84" rx="10" fill="#1F2D14" stroke="#8BC53F" stroke-width="1.5"/>
+<text x="140.0" y="348.0" font-size="14" font-weight="700" text-anchor="middle" fill="#C5E89A">Policy registry</text>
+<text x="140.0" y="366.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Signed bundles: a local file</text>
+<text x="140.0" y="382.0" font-size="12" text-anchor="middle" fill="#A7AFBA">or an artifact store</text>
+<path d="M140 176V206" fill="none" stroke="#8BC53F" stroke-width="1.6" marker-end="url(#ar-g)"/>
+<path d="M140 290V320" fill="none" stroke="#8BC53F" stroke-width="1.6" marker-end="url(#ar-g)"/>
+<path d="M240 362H320V132H398" fill="none" stroke="#8BC53F" stroke-width="1.6" marker-end="url(#ar-g)"/>
+<text x="312" y="238" font-size="12" text-anchor="end" fill="#B6BDC7">read and</text>
+<text x="312" y="254" font-size="12" text-anchor="end" fill="#B6BDC7">verify</text>
+<rect x="400" y="92" width="440" height="80" rx="10" fill="#20242A" stroke="#8BC53F" stroke-width="2"/>
+<text x="620.0" y="118.0" font-size="14" font-weight="700" text-anchor="middle" fill="#C5E89A">Policy service</text>
+<text x="620.0" y="136.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Verifies the signed bundle and projects it</text>
+<text x="620.0" y="152.0" font-size="12" text-anchor="middle" fill="#A7AFBA">for each enforcement point</text>
+<rect x="400" y="210" width="440" height="260" rx="12" fill="#60A5FA1A" stroke="#60A5FA" stroke-width="2"/>
+<text x="420" y="242" font-size="14" font-weight="700" fill="#BFDBFE">Policy gateway (APF adapter)</text>
+<rect x="420" y="276" width="400" height="44" rx="8" fill="#20242A" stroke="#60A5FA" stroke-width="1.5"/>
+<text x="436" y="303.0" font-size="14" font-weight="700" fill="#BFDBFE">OpenShell interceptor</text>
+<text x="804" y="303.0" font-size="12" text-anchor="end" fill="#A7AFBA">At sandbox admission</text>
+<rect x="420" y="336" width="400" height="44" rx="8" fill="#20242A" stroke="#60A5FA" stroke-width="1.5"/>
+<text x="436" y="363.0" font-size="14" font-weight="700" fill="#BFDBFE">OpenShell middleware</text>
+<text x="804" y="363.0" font-size="12" text-anchor="end" fill="#A7AFBA">On every governed request</text>
+<rect x="420" y="396" width="400" height="44" rx="8" fill="#20242A" stroke="#60A5FA" stroke-width="1.5"/>
+<text x="436" y="423.0" font-size="14" font-weight="700" fill="#BFDBFE">Decision layer</text>
+<text x="804" y="423.0" font-size="12" text-anchor="end" fill="#A7AFBA">Evaluates each request</text>
+<path d="M620 172V210" fill="none" stroke="#8BC53F" stroke-width="1.6" marker-end="url(#ar-g)"/>
+<text x="630" y="196" font-size="12" text-anchor="start" fill="#B6BDC7">projections</text>
+<path d="M620 380V396" fill="none" stroke="#60A5FA" stroke-width="1.6" marker-end="url(#ar-b)"/>
+<rect x="400" y="508" width="440" height="48" rx="10" fill="#231A3A" stroke="#A78BFA" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="416" y="537" font-size="14" font-weight="700" fill="#DDD6FE">Policy information providers</text>
+<text x="824" y="537" font-size="12" text-anchor="end" fill="#A7AFBA">Registered with the gateway</text>
+<path d="M620 442V508" fill="none" stroke="#A78BFA" stroke-width="1.6" stroke-dasharray="6 4" marker-start="url(#ar-v)" marker-end="url(#ar-v)"/>
+<text x="610" y="480" font-size="12" text-anchor="end" fill="#B6BDC7">lookup</text>
+<text x="630" y="480" font-size="12" text-anchor="start" fill="#B6BDC7">facts</text>
+<rect x="1000" y="92" width="200" height="80" rx="10" fill="#20242A" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1100.0" y="126.0" font-size="14" font-weight="700" text-anchor="middle" fill="#B6BDC7">Other enforcement points</text>
+<text x="1100.0" y="144.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Not yet built</text>
+<path d="M840 132H998" fill="none" stroke="#6B7280" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar-n)"/>
+<text x="919" y="122" font-size="12" text-anchor="middle" fill="#B6BDC7">same signed policy</text>
+<rect x="1000" y="210" width="200" height="260" rx="12" fill="#20242A" stroke="#E0A35C" stroke-width="2"/>
+<text x="1020" y="238" font-size="14" font-weight="700" fill="#F5D0A3">OpenShell</text>
+<text x="1020" y="256" font-size="12" fill="#A7AFBA">Integrated today</text>
+<rect x="1014" y="274" width="172" height="48" rx="10" fill="#2E2113" stroke="#E0A35C" stroke-width="1.5"/>
+<text x="1100.0" y="292.0" font-size="14" font-weight="700" text-anchor="middle" fill="#F5D0A3">Gateway</text>
+<text x="1100.0" y="310.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Creates sandboxes</text>
+<rect x="1014" y="334" width="172" height="48" rx="10" fill="#2E2113" stroke="#E0A35C" stroke-width="1.5"/>
+<text x="1100.0" y="352.0" font-size="14" font-weight="700" text-anchor="middle" fill="#F5D0A3">Supervisor</text>
+<text x="1100.0" y="370.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Enforces each decision</text>
+<rect x="1014" y="410" width="172" height="48" rx="10" fill="#2E2113" stroke="#E0A35C" stroke-width="1.5"/>
+<text x="1100.0" y="428.0" font-size="14" font-weight="700" text-anchor="middle" fill="#F5D0A3">Sandbox</text>
+<text x="1100.0" y="446.0" font-size="12" text-anchor="middle" fill="#A7AFBA">Agent workload</text>
+<path d="M1100 410V382" fill="none" stroke="#E0A35C" stroke-width="1.6" marker-end="url(#ar-o)"/>
+<text x="1108" y="400" font-size="12" text-anchor="start" fill="#B6BDC7">egress</text>
+<path d="M820 298H1014" fill="none" stroke="#8BC53F" stroke-width="1.6" marker-start="url(#ar-g)" marker-end="url(#ar-g)"/>
+<text x="920" y="288" font-size="12" text-anchor="middle" fill="#B6BDC7">sandbox policy</text>
+<path d="M820 358H1014" fill="none" stroke="#60A5FA" stroke-width="1.6" stroke-dasharray="6 4" marker-start="url(#ar-b)" marker-end="url(#ar-b)"/>
+<text x="920" y="348" font-size="12" text-anchor="middle" fill="#B6BDC7">decision (optional)</text>
+<rect x="20" y="576" width="1200" height="38" rx="10" fill="#20242A" stroke="#6B7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="620" y="600" font-size="13" text-anchor="middle" fill="#D1D5DB"><tspan font-weight="700">Audit</tspan>  Every APF component writes events, joined by correlation ID and bundle digest</text>
+</svg>

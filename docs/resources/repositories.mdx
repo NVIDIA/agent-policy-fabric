@@ -1,0 +1,63 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Repositories"
+sidebar-title: "Repositories"
+description: "Where APF's source lives, how the repository is laid out, what each crate does, and the related projects APF builds on."
+keywords: "Generative AI, Cybersecurity, AI Agents, Repository, Source Code, Crates, Project Layout, OpenShell"
+position: 2
+---
+
+## APF
+
+The APF source is in the [APF repository](https://github.com/NVIDIA/agent-policy-fabric). This documentation describes its `main` branch.
+
+| Path | Contents |
+|---|---|
+| `crates/` | The Rust workspace crates. |
+| `contracts/proto/` | Protobuf contracts for APF's APIs and compiled policy. |
+| `contracts/jsonschema/` | JSON Schemas for authored policy documents. |
+| `contracts/audit/` | The `apf.audit.event.v1` audit schema. |
+| `examples/demo-bundle/` | The demo policy bundle used throughout this documentation. |
+| `examples/dev-keys/` | Development-only keys and token. Never trust them in production. |
+| `deploy/systemd/` | Hardened systemd units, env files, a polkit rule, and a security checklist. |
+| `deploy/docker/` | Dockerfiles for both services, and the Docker Compose development stack: `compose.yaml` and `.env.example`. |
+| `deploy/helm/apf/` | The APF Helm chart. |
+| `e2e/` | The verification harness: environment wrappers for the Compose stack and for kind, shared test suites, and the OpenShell fixtures they use. |
+| `docs/` | This documentation. |
+| `xtask/` | Repository automation, including `dag-guard`. |
+| `scripts/`, `licenses/` | Third-party license generation and its inputs, and the copyright header check. |
+
+### Crates
+
+| Crate | Kind | Purpose |
+|---|---|---|
+| `apf-types` | Library | Signing traits and shared vocabulary. |
+| `apf-audit` | Library | The audit schema, event builders, sanitization, and the JSON Lines writer. |
+| `apf-bundle` | Library | Bundle parsing and verification, trust roots, the counter store, and signing. |
+| `apf-policy-eval` | Library | The `Evaluator` trait and the Cedar engine with annotators and effects. |
+| `apf-compiler` | Library | Bundle compilation and the `Projector` trait. |
+| `apf-proto` | Library | Generated gRPC bindings for APF and OpenShell contracts. |
+| `apf-policy-client` | Library | gRPC client for the policy service. |
+| `apf-policy-service` | Service | The policy service binary. |
+| `apf-policy-gateway` | Service | The policy gateway binary. |
+| `apf-compile` | Service | The offline signing and verification tool. |
+| `apf-openshell-projector` | Adapter | Produces OpenShell projections. Runs in the policy service. |
+| `apf-openshell-interceptor` | Adapter | OpenShell gateway interceptor. Runs in the policy gateway. |
+| `apf-openshell-middleware` | Adapter | OpenShell supervisor middleware. Runs in the policy gateway. |
+| `apf-openshell-auth` | Adapter | OpenShell extension caller authentication, shared by both adapters. |
+
+The repository's `AGENTS.md` documents the dependency rules between these crates, which `cargo xtask dag-guard` checks.
+
+## Related Projects
+
+| Project | Relationship |
+|---|---|
+| [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) | The agent runtime APF integrates with. APF builds against OpenShell's protobufs at a pinned commit. [OpenShell documentation](https://docs.nvidia.com/openshell/latest/about/overview). |
+| [Cedar](https://www.cedarpolicy.com/) | The policy language and evaluation library APF uses for rules. |
+| yaml-sigil | The signature format and Rust crates APF uses to sign and verify bundles, published on crates.io. |
+
+## Next Steps
+
+- To build from source, refer to [Installation](/get-started/installation).
+- To contribute, refer to [Contributing](/resources/contributing).

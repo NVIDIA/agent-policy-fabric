@@ -1,0 +1,75 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "APF Security Best Practices"
+sidebar-title: "Security Best Practices"
+slug: "security/best-practices"
+description: "Every security-relevant APF control, its default, the recommended setting, and the risk of changing it."
+keywords: "Generative AI, Cybersecurity, AI Agents, Security, Best Practices, Hardening, Signing Keys, Fail Closed, OpenShell"
+position: 1
+---
+
+APF's guarantee is that the only durable authority over agent policy is a bundle signed outside the runtime. Every control on this page protects part of that guarantee. Each table lists the control, its default, what to do, and what you lose by changing it.
+
+## Signing and Trust
+
+| Control | Default | Recommendation | Risk if weakened |
+|---|---|---|---|
+| Bundle signing key | The repository's committed `apf-dev` key in development setups. | Generate your own key, ideally held by a signing service. Never trust `apf-dev.pub` outside local development. | Anyone with the repository can sign bundles your hosts accept. |
+| Private key location | Not on the host. | Keep bundle signing keys in the authoring and publish path only. | A host compromise yields a key that can sign policy for every host. |
+| Trust-root directory | `./trust-roots` unless set. | `/etc/apf/trust-roots`, owned by `root:apf`, mode `0750`, files `0640`. | Whoever can write a trust root decides which bundles are accepted. |
+| Document signing key | Ephemeral if not set, recorded as a weakened control. | Set a persistent key, `root:root 0600`, delivered as a systemd credential. Keep it distinct from the bundle signing key. | An ephemeral key changes on every restart, and the gateway's JWKS rotation must catch up before tokens verify. |
+| Key rotation | Manual. | Rotate with old and new trust roots side by side. | Without a rotation practice, a compromised key stays trusted. |
+
+## Policy Supply
+
+| Control | Default | Recommendation | Risk if weakened |
+|---|---|---|---|
+| Review | Your source control. | Require review for every policy change, including manifest order and `data` changes. | One person can change what every agent may do. |
+| Pre-publish validation | Not enforced by APF. | Validate schemas, compile offline, and build the evaluator before signing. | A Cedar error passes the policy service and splits enforcement between old and new policy. |
+| `policy_revision` | Required. | Increase it for every change. Start at 1. | Different content at an accepted revision is rejected. A reset counter reopens rollback. |
+| Validity window | Author-chosen. | Keep `expires_at` short enough to force regular re-signing, and renew ahead of expiry. | A long window keeps a superseded bundle loadable for longer. An expiry with no renewal stops the service at its next restart. |
+| Bundle source transport | Any URL. | `https://` with a token file. | An on-path attacker can withhold updates. A token in arguments is visible to local processes. |
+
+## OpenShell Integration
+
+| Control | Default | Recommendation | Risk if weakened |
+|---|---|---|---|
+| Interceptor `failure_policy` | APF declares it per binding. | Keep APF's per-binding values, and do not override them with per-binding entries in OpenShell. Set the registration's `failure_policy` to `fail_closed` as well. | An override to fail-open lets OpenShell admit sandboxes ungoverned while APF is unavailable. |
+| Middleware `on_error` | Set in sandbox policy. | `fail_closed`. | Requests flow without content decisions while APF is unavailable. |
+| Extension authentication | Required unless the insecure flag is set. | Authenticated listeners with TLS on every surface. Never set the insecure flags outside local development. | Any local process can impersonate OpenShell, and sandbox binding is lost. |
+| Interceptor `binding_policy` | OpenShell's `dynamic`. | Keep `dynamic`. APF does not work with `allowlist` or `exact` in this release. | With `dynamic`, a changed APF manifest changes APF's authority without an operator decision, so review APF's bindings when you upgrade it. |
+| Agent policy proposals | Off in OpenShell. | Set `agent_policy_proposals_enabled = false` at global scope and re-check it on every review. | The effective policy becomes whatever OpenShell accepted last, not what was signed. |
+| Middleware coverage | Only hosts listed in `network_middlewares`. | Route every host that carries credentials or sensitive data through `apf-content-policy`. | Hosts that are not listed get no content decisions. |
+| `allow_uninspected_credentials` | Always `false`. APF does not project the field in this release. | Leave it unset, so the policy reads the way it is enforced. | If a later release projects it, credentials could travel on paths no one inspects. |
+
+## Hosts
+
+| Control | Default | Recommendation | Risk if weakened |
+|---|---|---|---|
+| Service account | `apf`, from `apf.sysusers.conf`. | Run both services as `apf`. Keep OpenShell under its own account with no group overlap. | A compromise of one daemon reads both daemons' secrets. |
+| Unix sockets | Mode `0600`, peer UID checked. | Keep the defaults. | Other local accounts reach the policy service and the decision API. |
+| OpenShell listener binds | `127.0.0.1` in the shipped env file. | Loopback, plus a host firewall rule dropping non-loopback traffic to the ports. | The extension surfaces become reachable off the host. |
+| Policy service HTTP surface | Off. | Enable only on loopback, for the JWKS the gateway needs and local health checks. Firewall the port. | Document and refresh routes become one misconfiguration away from off-host exposure. |
+| Unit hardening | Strict sandboxing in the shipped units. | Keep it. Record a reason next to every relaxation. | A compromised daemon can modify its own binary or configuration. |
+| Interactive restarts | Denied by the shipped polkit rule. | Restart only through your deploy pipeline, and restrict root with a sudoers wrapper. | Ad hoc restarts can load unreviewed configuration. |
+| Tamper detection | Not configured. | Add auditd watches on the units, `/etc/apf`, and the binaries. | Changes go unnoticed. |
+
+## Evidence
+
+| Control | Default | Recommendation | Risk if weakened |
+|---|---|---|---|
+| Audit directory | Required. | Writable only by the service, readable by your collector. | Missing records or tampered evidence. |
+| Shipping | Not configured. | Ship records off the host promptly. Local files are not tamper-evident. | An attacker on the host can alter the record. |
+
+## Policy Authoring
+
+- Guard every optional attribute with `has`. A `forbid` whose condition errors does not fire.
+- Give every statement an `@id`, so deny reasons point at the statement.
+- Add `spec.schema` to rules that read arguments, so field typos fail when the evaluator is built.
+- Keep detection flags and their classification labels aligned, because a finding with `label_source` fails closed when the label is missing.
+
+## Next Steps
+
+- To see what each boundary protects, refer to [Trust Boundaries](/security/trust-boundaries).
+- To understand what APF does not cover, refer to [Enforcement Coverage and Limitations](/security/enforcement-coverage-and-limitations).

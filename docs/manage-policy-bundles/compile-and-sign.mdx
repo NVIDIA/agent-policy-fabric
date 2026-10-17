@@ -1,0 +1,118 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Compile and Sign a Bundle"
+sidebar-title: "Compile and Sign"
+description: "Fill in a bundle manifest's digests and sign it with apf-compile, verify the result offline, and package it for distribution."
+keywords: "Generative AI, Cybersecurity, AI Agents, apf-compile, genfixture, Signing, Manifest Template, CI, GitOps"
+position: 3
+---
+
+Signing turns a reviewed set of policy documents into a bundle a policy service will accept. `apf-compile genfixture` hashes every member listed in a manifest template, writes the digests into the manifest, and signs it. Run it in your authoring and publish path, not on an APF host.
+
+## Write the Manifest Template
+
+The template is the manifest with a placeholder in place of each digest. List members in [manifest order](/manage-policy-bundles/bundle-structure#manifest-order) and increase `policy_revision` for every change you publish.
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: PolicyBundle
+metadata: {}
+
+id: team-bundle
+description: "Team agent policy"
+policy_revision: 7
+not_before: "2026-10-01T00:00:00Z"
+expires_at: "2027-10-01T00:00:00Z"
+
+manifest:
+  - path: sandbox/default-policy.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: provider-profiles/github.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: annotators/secret-detector.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: findings/secret-detected.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: effects/redact-wholesale.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: rules/github-grants.yaml
+    sha256: REPLACE_WITH_DIGEST
+  - path: rules/security-content-gate.yaml
+    sha256: REPLACE_WITH_DIGEST
+```
+
+## Sign
+
+```shell
+./target/release/apf-compile genfixture \
+  --template team-bundle/team-bundle.template.yaml \
+  --base-dir team-bundle \
+  --key keys/team-signer.seed \
+  --keyid team-signer \
+  --out team-bundle/team-bundle.yaml
+```
+
+| Flag | Meaning |
+|---|---|
+| `--template` | The manifest template. |
+| `--out` | Where to write the signed manifest. Parent directories are created. |
+| `--key` | The Ed25519 seed file. |
+| `--base-dir` | Directory that member paths resolve against. Defaults to the template's directory. |
+| `--keyid` | Key ID written into the signature. Defaults to the key file's stem. It must match the public key's file stem in the verifiers' trust-root directories. |
+| `--generate-key` | Create the key pair if `--key` does not exist. |
+| `--pubkey-out` | Where to write a generated public key. Defaults to the key path with a `.pub` extension. |
+
+For each manifest entry, in order, the command reads the member file, computes the SHA-256 of its bytes, and replaces the next `REPLACE_WITH_DIGEST` placeholder in the template text. It then signs the filled-in template and writes the payload followed by the signature document.
+
+The whole template text is the signed payload, including comments. Anything you change in the signed file afterward, including whitespace, invalidates the signature.
+
+<Note>
+The command fails if the template has fewer placeholders than manifest entries. Keep exactly one placeholder per member, in manifest order. Do not write the placeholder text anywhere else in the template, including comments, and do not mix placeholders with literal digests. An extra placeholder shifts every digest after it to the wrong member, and the signed bundle is then rejected with `manifest_hash_mismatch` or `manifest_hash_unset`.
+</Note>
+
+For the demo bundle, `mise run sign-bundle` runs this command with the repository's development key.
+
+## Verify the Signed Bundle
+
+Verify the result with the trust roots your hosts use before you publish it:
+
+```shell
+./target/release/apf-compile compile \
+  --bundle-path team-bundle/team-bundle.yaml \
+  --trust-root-dir trust-roots \
+  --verify-only
+```
+
+```text
+verified  digest=<sha256 of the signed file> counter=7
+```
+
+Then build the evaluator against a local gateway to catch Cedar and annotator errors. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+
+## Package for Distribution
+
+A local policy source reads the signed manifest directly. An HTTP policy source fetches a gzipped tar archive of the bundle directory. Create it from inside the directory so paths stay relative to the manifest:
+
+```shell
+(cd team-bundle && tar czf ../team-bundle.tar.gz *)
+```
+
+Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute).
+
+## Signing in CI
+
+APF does not ship a signing pipeline. A conventional GitOps flow is:
+
+1. Teams open pull requests against the bundle directories they own.
+2. Review and checks run on the pull request: schema validation, offline compilation, and an evaluator build.
+3. On merge to the main branch, CI detects which bundles changed.
+4. CI signs each changed bundle with the signing authority's key, held in the CI system's secret manager or a signing service, never in Git or in the artifact.
+5. CI publishes each signed bundle, versioned by revision, to your artifact store.
+
+Any process that produces a correctly signed bundle and publishes it where the policy service can read it is compatible. GitOps is a convention, not a requirement.
+
+## Next Steps
+
+- To deliver the bundle to hosts, refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute).
+- To understand each check the policy service runs, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).

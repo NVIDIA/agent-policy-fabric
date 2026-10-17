@@ -1,0 +1,105 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Understand Decisions and Findings"
+sidebar-title: "Understand Decisions and Findings"
+description: "Read an APF authorization record: the decision, the reason, the policy that made it, what was observed, and what was changed."
+keywords: "Generative AI, Cybersecurity, AI Agents, Audit, Authorization, Decision, Findings, Effects, Verdict, Reason Codes"
+position: 2
+---
+
+An `authorization` record is APF's evidence for one decision on one request. It says whether the request was allowed, why, under which policy, what policy observed in it, and what policy changed before it went out.
+
+## An Example
+
+This is the shape of the record the middleware writes when the demo bundle redacts a secret from a plain HTTP request. Values are illustrative.
+
+```json
+{
+  "schema_version": "apf.audit.event.v1",
+  "event_id": "<uuid>",
+  "timestamp": "2026-10-07T10:15:02.118Z",
+  "event_type": "authorization",
+  "correlation_id": "<OpenShell request ID>",
+  "enforcement_point_id": "apf-policy-gateway:middleware",
+  "runtime_substrate": "openshell",
+  "component": {
+    "name": "apf-policy-gateway-middleware",
+    "version": "0.1.0",
+    "instance_id": "apf-policy-gateway:middleware@<host>"
+  },
+  "session_id": "<sandbox ID>",
+  "bundle_digest": "<digest of the policy set the evaluator was built from>",
+  "policy_revision": 2,
+  "trust_root_id": "apf-policy-service:signing",
+  "resource": { "type": "openshell.egress", "id": "httpbin.org" },
+  "verb": "http.post",
+  "decision": "allow",
+  "decision_id": "<id>",
+  "reason_code": "middleware.allowed_with_findings",
+  "findings": [
+    { "kind": "secret_detected", "label": "demo_secret", "severity": "critical" }
+  ],
+  "effects": {
+    "payload_replaced": true,
+    "header_mutations": [
+      { "name": "x-openshell-middleware-apf-event", "action": "set" }
+    ]
+  }
+}
+```
+
+## Decision, Verdict, and Outcome
+
+Three fields describe how something went. They are independent.
+
+| Field | Values | Appears on | Answers |
+|---|---|---|---|
+| `decision` | `allow`, `deny`. The schema reserves `require_review`, `require_step_up`, `quarantine`, and `stop_session`. | `authorization` only | May this request proceed? |
+| `verdict` | `warn`, `escalate` | Middleware `authorization` records, only when an effect raised it | Did policy attach an advisory signal to the allow? Absent means no advisory signal, not "allowed". Records from the gateway's `EvaluationService` always carry a `verdict`, and it reads `allow` on denies, so read `decision` there. |
+| `outcome` | `success`, `failure`, `refused` | Every other operation event | How did the operation go? `refused` is a deliberate rejection. `failure` is an operational error. |
+
+## Where the Record Comes From
+
+| Producer | `resource` | `verb` | `reason_code` |
+|---|---|---|---|
+| Supervisor middleware | `type` `openshell.egress`, `id` the destination host | `tool.<name>` for an MCP tool call, otherwise `http.<method>` | `middleware.allowed`, `middleware.allowed_with_findings`, or `middleware.<deny code>` |
+| Gateway `EvaluationService` | `type` the request's `resource.class`, `id` the request's `resource.id` | The request's `verb` | `policy.request_allowed` or `policy.request_denied` |
+
+On a denial, `error.code` repeats the reason code, and `error.message` carries the policy's own reason, such as `security-content-gate/deny-secret` or `no grant for github_repo_write`. A denial by a fail-closed policy information provider carries `pip_<status>:<provider>` there.
+
+When the Enrichment stage ran, the record also carries `extensions.x_apf_pip`, with one entry per provider: its `domain`, which is the registration's `context`, its `provider` name, `status`, whether it `degraded`, `cached`, which is always `false` in this release, its `age_seconds`, its `evidence_ref`, and its `latency_ms`. Refer to [Policy Information Providers](/integrations/policy-information-providers#audit-extension).
+
+Refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware#deny-reason-codes) for every middleware deny code.
+
+## Findings and Effects
+
+Findings record what policy observed. Effects record what policy did.
+
+| Field | Contents | Present when |
+|---|---|---|
+| `findings` | Up to 32 entries of `kind`, `label`, `severity`, and optional `confidence`. One entry per firing, not deduplicated, in bundle and policy order. | A fired statement or effect referenced a finding. Omitted when empty. |
+| `effects.payload_replaced` | `true` when the body was replaced wholesale. | A body replacement was applied. |
+| `effects.patch_count`, `effects.patches` | The number of body patches, and up to 64 patch records with each path and operation. Never the patched value. `patch_count` stays exact when the list is truncated. | Body patches were applied. |
+| `effects.header_mutations` | Each mutated header's name and action. Never the value. | Headers were set, added, or removed. |
+
+`effects` is omitted when the request was not changed.
+
+A finding does not change the decision, unless it cannot be resolved or the findings exceed the limits, which denies the request. A redaction record carries both: the finding that a secret was seen, and the effect that the body was replaced. Together they show the request was allowed, flagged, and neutralized.
+
+## Which Policy Decided
+
+Each component names the policy it used by the digest of the document it actually used.
+
+| Component | `bundle_digest` is the digest of |
+|---|---|
+| Policy service | The signed manifest file for verification and load records. With the HTTP source, hot-swap and distribution records use the downloaded archive instead. |
+| Policy gateway and middleware | The `apf.policy.v1` policy set the evaluator was built from. |
+| Interceptor | The sandbox policy document injected at admission, or `unverified` when the record was written before anything was verified, as for provider and proposal governance and early refusals. |
+
+To join records across components for the same bundle, use `policy_revision`. Only the policy service records `bundle_id`. The gateway's revision stays at the previous value when a bundle changes no rules, annotators, effects, or findings, and the interceptor's provider and proposal governance records omit the revision.
+
+## Next Steps
+
+- To trace a sandbox to its signed bundle, refer to [Trace Policy Provenance](/observability/trace-policy-provenance).
+- To walk a denial back to its rule, refer to [Investigate a Denied Request](/observability/investigate-a-denied-request).

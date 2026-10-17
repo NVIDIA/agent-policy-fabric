@@ -1,0 +1,115 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Investigate a Denied Request"
+sidebar-title: "Investigate a Denied Request"
+description: "A worked investigation that traces a denied agent tool call from the agent's error to the APF decision record, the policy revision in force, and the rule that decided."
+keywords: "Generative AI, Cybersecurity, AI Agents, Investigation, Denied Request, Audit, Troubleshooting, Cedar, Deny Reason"
+position: 4
+---
+
+This walkthrough traces one denied tool call back to the policy that denied it. The scenario uses the demo bundle: an agent in sandbox `apf-demo` tries to call the MCP tool `github_repo_write`, and the call fails.
+
+<Steps toc={true}>
+
+## Start from the Symptom
+
+The agent reports that its tool call was refused. OpenShell's supervisor blocked the request because APF's middleware returned a deny. A request blocked at Layer 1 by the sandbox's network policy never reaches APF and leaves no APF record, so first confirm that APF decided. Middleware records identify the sandbox by its OpenShell ID, not its name, so look up the ID first, then search the middleware audit file for denials from the sandbox:
+
+```shell
+openshell sandbox get apf-demo
+SANDBOX_ID='<the Id value>'
+
+jq -c --arg id "$SANDBOX_ID" 'select(.decision == "deny" and .session_id == $id)' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-middleware-audit.jsonl"
+```
+
+If nothing matches, the request was blocked before APF. Check OpenShell's sandbox logs and the projected network policy instead.
+
+## Read the Decision Record
+
+The matching record looks like this. Values are illustrative.
+
+```json
+{
+  "event_type": "authorization",
+  "correlation_id": "<OpenShell request ID>",
+  "session_id": "<sandbox ID>",
+  "resource": { "type": "openshell.egress", "id": "mcp.example.com" },
+  "verb": "tool.github_repo_write",
+  "decision": "deny",
+  "reason_code": "middleware.policy_denied",
+  "error": {
+    "code": "middleware.policy_denied",
+    "message": "no grant for github_repo_write",
+    "retryable": false
+  },
+  "bundle_digest": "<policy set digest>",
+  "policy_revision": 2
+}
+```
+
+The `correlation_id` is OpenShell's request ID, so you can find the same request in OpenShell's supervisor log.
+
+## Classify the Reason
+
+The `reason_code` and `error.message` say which part of the pipeline denied the request.
+
+| `reason_code` | `error.message` pattern | Meaning | Where to look |
+|---|---|---|---|
+| `middleware.policy_denied` | `<rule>/<id>` | An explicit `forbid` fired. | The statement with that `@id` in rule `<rule>`. |
+| `middleware.policy_denied` | `<rule>: conditions not met for <action>` | A grant rule for the tool exists, but none of its permits matched. | The conditions in rule `<rule>` and the call's arguments. |
+| `middleware.policy_denied` | `no grant for <action>` | No capability rule permitted the tool call. | Every `role: capability` rule's action names. |
+| `middleware.policy_denied` | `runtime_error:missing_annotation_source:<path>` | An effect or finding read an annotation the request did not produce. | The effect or finding that reads `<path>`, and the annotator that should produce it. |
+| `middleware.effect_application_failed` | | A body patch could not be applied. | The effects that fired, and the request body. |
+| Another `middleware.*` code | | The adapter refused the request before or after policy. | [Supervisor Middleware](/integrations/openshell/supervisor-middleware#deny-reason-codes) |
+
+Here the reason is `no grant for github_repo_write`. No capability rule permitted the action `APF::Action::"github_repo_write"`.
+
+## Identify the Policy in Force
+
+The record names the policy by `policy_revision` and by the digest of the policy set the gateway was using. Confirm when that policy became active:
+
+```shell
+jq -c --arg d "$POLICY_SET_DIGEST" 'select(.event_type == "policy_activation" and .bundle_digest == $d)' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-gateway-audit.jsonl"
+```
+
+Then find the bundle the policy service verified at that revision:
+
+```shell
+jq -c 'select(.event_type == "policy_verification" and .policy_revision == 2 and .outcome == "success")' \
+  "$APF_AUDIT_LOG_DIR/apf-policy-service-audit.jsonl"
+```
+
+The record's `bundle_id` and `bundle_digest` identify the signed bundle. Retrieve that revision from your artifact store.
+
+## Find the Deciding Rule
+
+List the capability rules in the bundle and the actions they permit:
+
+```shell
+grep -l 'role: capability' rules/*.yaml | xargs grep -n 'APF::Action'
+```
+
+```text
+rules/github-grants.yaml:15:      action == APF::Action::"github_repo_read",
+rules/slack-grants.yaml:...
+```
+
+`github-grants` permits only `github_repo_read`, and its description says so: "repo_write has no permit (denied by default)." The denial is the policy working as authored.
+
+The reason reads `no grant` rather than `github-grants: conditions not met` because the more specific reason is used only when a capability rule's name contains the tool name, and `github-grants` does not contain `github_repo_write`.
+
+## Decide on a Fix
+
+- **The denial is intended.** No change. Point the requester at the policy owner.
+- **The tool should be allowed.** The tool owner adds a permit to `github-grants`, for example with argument constraints, and the bundle is signed with a higher revision and published. Refer to [Update Policies](/manage-policy-bundles/update-policies).
+- **The rule is wrong for everyone.** Fix it the same way, and check other records with the same `reason_code` and `error.message` to see who else it affected.
+
+</Steps>
+
+## Next Steps
+
+- To understand every field you used, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+- To write clearer deny reasons, give every statement an `@id`. Refer to [Capability Grants](/author-policies/capability-grants#deny-reasons).

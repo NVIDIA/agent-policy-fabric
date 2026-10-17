@@ -1,0 +1,169 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Service APIs"
+sidebar-title: "Service APIs"
+description: "Reference for the APF policy service gRPC and HTTP APIs and the policy gateway EvaluationService, with messages, routes, status codes, and examples."
+keywords: "Generative AI, Cybersecurity, AI Agents, gRPC, HTTP API, PolicyService, EvaluationService, GetDocument, JWKS, Refresh"
+position: 4
+---
+
+APF exposes three local APIs. The OpenShell extension interfaces that the gateway also serves are covered in [Adapter Contracts](/reference/adapter-contracts).
+
+| API | Served by | Transport | Callers |
+|---|---|---|---|
+| [`PolicyService`](#policyservice) | `apf-policy-service` | gRPC over the Unix socket at `--socket` | The policy gateway and its OpenShell adapters. |
+| [Policy service HTTP API](#policy-service-http-api) | `apf-policy-service` | HTTP at `--http-addr`, off by default | Operators, health checks, and the gateway's JWKS fetch. |
+| [`EvaluationService`](#evaluationservice) | `apf-policy-gateway` | gRPC over the Unix socket at `--socket` | Co-located callers that need a decision. |
+
+The protobuf definitions are in `contracts/proto/nvidia/agent_policy_fabric/`. Both Unix sockets have mode `0600` and accept only the UID set by `--allowed-uid`, which defaults to the service's own UID.
+
+## PolicyService
+
+Package `nvidia.agent_policy_fabric.policy_service.v1alpha1`, file `policy_service/v1alpha1/policy_service.proto`.
+
+| RPC | Request | Response | Purpose |
+|---|---|---|---|
+| `Health` | `HealthRequest` | `HealthResponse` | Liveness. Returns `HEALTH_STATE_OK`. |
+| `GetDocument` | `GetDocumentRequest` | `GetDocumentResponse` | Fetch one projected document with its provenance token. |
+| `ListDocuments` | `ListDocumentsRequest` | `ListDocumentsResponse` | List the document names for a surface kind. |
+
+### GetDocumentRequest
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | Surface kind, such as `apf.policy.v1` or `openshell.sandbox.v1`. Required. |
+| `name` | string | Document name, such as `default`. |
+| `runtime_context` | `RuntimeContext` | Caller identity. With the `claims` resolver, `openshell.user_subject` selects a bundle variant, but variants do not work in this release. Refer to [Per-Caller Bundle Variants](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants). |
+
+### GetDocumentResponse
+
+| Field | Type | Description |
+|---|---|---|
+| `body` | bytes | The projected document. |
+| `digest` | string | Hex SHA-256 of `body`. Callers must check it before use. |
+| `version` | uint64 | The bundle's `policy_revision`. |
+| `valid_until_ms` | uint64 | Unix milliseconds after which to fetch again. `0` unless `--document-ttl-secs` is set. |
+| `provenance_token` | string | Compact EdDSA JWT binding the document to the bundle. Empty only if minting failed. Refer to [Serving Documents](/how-it-works/policy-service#serving-documents) for its claims. |
+
+Field number 4 is unused. A comment in the contract marks it as reserved.
+
+### Surface Kinds
+
+| Kind | Names | Body |
+|---|---|---|
+| `apf.policy.v1` | `default` | Protobuf `PolicySet`. |
+| `openshell.sandbox.v1` | Each `SandboxPolicy` name | Protobuf OpenShell `SandboxPolicy`. |
+| `openshell.provider-profile.v1` | `default`, and each provider name | `default` is a protobuf `ProviderProfileSet`. Named documents are OpenShell provider profile YAML. |
+| `apf.policy-rules.v1`, `apf.policy-annotators.v1`, `apf.policy-effects.v1`, `apf.policy-findings.v1` | `default` | JSON arrays of the compiled documents, served when the bundle has any. No APF component consumes them. |
+
+### Status Codes
+
+| RPC | Status | Message | Audit record |
+|---|---|---|---|
+| `GetDocument`, `ListDocuments` | `INVALID_ARGUMENT` | `kind must be non-empty`, or `kind '<kind>' is not served by this instance` | `policy.document_request_invalid` |
+| `GetDocument` | `NOT_FOUND` | `document '<kind>/<name>' not found` | `policy.document_not_found` |
+| `GetDocument` | `OK` | | `policy.document_vended`, once per document and revision for each run of the service, and `policy.provenance_mint_failed` if the token could not be signed |
+| Any | Connection closed | A peer with a disallowed UID, or whose credentials cannot be read | `auth.uds_peer_rejected` or `auth.uds_peer_cred_failed`, and `auth.uds_refusals_dropped` when refusals arrive faster than they can be recorded |
+
+## Policy Service HTTP API
+
+Enable it with `--http-addr` and `--http-bearer-token-file`. Bind it to loopback unless you have a reason not to.
+
+| Method and path | Authentication | Success response |
+|---|---|---|
+| `GET /health` | None | `200 {"state":"ok"}` |
+| `GET /healthz` | None | `200 {"status":"ok","version":"<version>"}` |
+| `GET /readyz` | None | `200 {"status":"ok"}`, or `503 {"status":"not_ready","reason":"no bundle loaded"}` |
+| `GET /.well-known/jwks.json` | None | `200` JWKS with the document signing key: `kty` `OKP`, `crv` `Ed25519`, `kid`, `x`. |
+| `GET /v1/documents/{kind}` | Bearer token | `200 {"names":[...]}` |
+| `GET /v1/documents/{kind}/{name}` | Bearer token | `200 {"body":"<base64>","digest":"<hex>","version":<n>}`. There is no provenance token on this route. Optional `user_subject`, `sandbox_id`, and `agent_type` query parameters supply the runtime context. |
+| `POST /v1/refresh` | Bearer token | `200 {"status":"refreshed","policy_digest":"<digest>","version":<n>}` |
+
+Send the token as `Authorization: Bearer <token>`.
+
+### Refresh
+
+With the local source, `POST /v1/refresh` loads the bundle named in the JSON body and runs the full verification and counter checks:
+
+```shell
+curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+  -H "Authorization: Bearer $(cat /path/to/http-bearer-token)" \
+  -H 'content-type: application/json' \
+  -d '{"bundle_path": "/etc/apf/bundle/bundle.yaml"}'
+```
+
+The body is required. The service does not fall back to `--bundle-path`. With the HTTP source, `bundle_path` is ignored and the call triggers a poll. It returns `200` even when the poll fails, so confirm the outcome in the audit log.
+
+### Error Responses
+
+| Status | Body | When | Audit record |
+|---|---|---|---|
+| `400` | `kind must be non-empty`, or `kind '<kind>' is not served by this instance` | The kind is empty or excluded by `--surfaces`. | `policy.document_request_invalid` |
+| `401` | `missing or invalid bearer token` | The header is missing, malformed, or wrong. | `auth.http_bearer_invalid` |
+| `404` | `document '<kind>/<name>' not found` | No such document. | `policy.document_not_found` |
+| `400`, `422` | Generated by the HTTP framework | A `POST /v1/refresh` JSON body that is malformed, empty, or has the wrong shape. | None |
+| `415` | Generated by the HTTP framework | A `POST /v1/refresh` body with a `Content-Type` other than JSON. A request with no `Content-Type` is treated as having no body. | None |
+| `405` | Generated by the HTTP framework | The wrong method for a route. | None |
+| `500` | `refresh failed: <reason>` | A local source refresh failed. The active bundle is unchanged. | `policy.refresh_triggered`, plus a `policy_verification` refusal when verification failed, or a `policy.bundle_rejected.counter_persist_failed` refusal when the revision could not be recorded |
+| `503` | `{"status":"not_ready",...}` | `/readyz` before a bundle is loaded. | None |
+
+Every refresh call that passes authentication and has an acceptable body writes `policy.refresh_triggered` before the refresh runs.
+
+## EvaluationService
+
+Package `nvidia.agent_policy_fabric.pdp.v1alpha1`, file `pdp/v1alpha1/pdp.proto`. The gateway serves it on its Unix socket. It decides one request against the active policy set.
+
+```shell
+grpcurl -plaintext \
+  -import-path contracts/proto \
+  -proto nvidia/agent_policy_fabric/pdp/v1alpha1/pdp.proto \
+  -d '{"verb": "repo_read", "resource": {"class": "github", "id": "octo/repo"}, "args": {"branch": "main"}}' \
+  unix:///run/apf/policy-gateway.sock \
+  nvidia.agent_policy_fabric.pdp.v1alpha1.EvaluationService/Evaluate
+```
+
+### EvaluateRequest
+
+| Field | Type | Use in evaluation |
+|---|---|---|
+| `verb` | string | The capability. With `resource.class`, forms the Cedar action `APF::Action::"<class>::<verb>"`. |
+| `resource.class` | string | The tool. Also the Cedar resource `APF::Tool::"<class>"`. When the request has a `resource`, it is treated as a tool call and needs a capability grant. Without a `resource`, the action is `APF::Action::"invoke"` and the resource `APF::Tool::"__none__"`. |
+| `resource.id` | string | Recorded in the audit record. Not used in evaluation. |
+| `resource.attributes` | map | Not used. |
+| `args` | map of string | Exposed as `context.args`. Every value is a string. APF also derives `<name>_len` for each argument and `<name>_num` for an argument that parses as an integer. Use `<name>_num` for numeric comparisons. |
+| `context.openshell.user_subject` | string | The Cedar principal `APF::User::"<subject>"`. |
+| `context.openshell.sandbox_id`, `agent_type` | string | Recorded in the audit record. |
+| `context.audit_context["correlation_id"]` | string | Used as the audit record's `correlation_id`. |
+
+The request has no body or target, so content controls that read `body_text`, `body_json`, or `target.*` see nothing.
+
+### EvaluateResponse
+
+| Field | Type | Value |
+|---|---|---|
+| `decision` | `Decision` | `DECISION_ALLOW` or `DECISION_DENY`. |
+| `reason` | string | The deny reason, empty on allow. Refer to [Error Reference](/reference/error-reference#deny-reasons). |
+| `policy_digest_hex` | string | Digest of the policy set that decided. |
+| `obligations` | list | Always empty in this release. |
+| `rejection_reasons` | list | Always empty in this release. |
+
+Effects are evaluated but not applied or returned, so an effect that reads a missing annotation still denies the request. `DECISION_REQUIRE_REVIEW`, `DECISION_REQUIRE_STEP_UP`, `DECISION_QUARANTINE`, and `DECISION_STOP_SESSION` are reserved and never returned.
+
+An evaluator error returns `INTERNAL` with `evaluator engine error: <detail>` and writes no audit record. Every decision writes an `authorization` record to `apf-policy-gateway-audit.jsonl`.
+
+## RuntimeContext
+
+Package `nvidia.agent_policy_fabric.runtime.v1alpha1`, file `runtime/v1alpha1/runtime.proto`. Shared by `GetDocument` and `Evaluate`.
+
+| Field | Type | Description |
+|---|---|---|
+| `openshell.sandbox_id` | string | Sandbox making the request. |
+| `openshell.user_subject` | string | Subject the sandbox acts for. |
+| `openshell.agent_type` | string | Informational agent type, such as `claude-code`. |
+| `audit_context` | map of string | Free-form audit metadata. The contract names `correlation_id`, `gateway_id`, `agent_id`, and `session_id` as well-known keys. Only `correlation_id` is read, by `Evaluate`. |
+
+## Next Steps
+
+- For the OpenShell interceptor and middleware interfaces, refer to [Adapter Contracts](/reference/adapter-contracts).
+- For the records these APIs write, refer to [Audit Event Schema](/reference/audit-event-schema).

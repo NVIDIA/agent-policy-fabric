@@ -12,6 +12,7 @@ python.precompiled_flavor = "install_only_stripped"
 buf = "1.72.0"
 protoc = "29.6"
 python = "3.14.5"
+uv = "0.13.1"
 "github:EmbarkStudios/cargo-deny" = { version = "0.20.2", version_prefix = "" }
 "github:nextest-rs/nextest" = { version = "0.9.143", version_prefix = "cargo-nextest-" }
 

@@ -1,0 +1,79 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Update Policies"
+sidebar-title: "Update Policies"
+description: "Publish a new policy revision, understand how it propagates to the gateway and to running sandboxes, and recover from a rejected update or roll back a change."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Update, Hot Swap, Propagation, Rollback, Policy Revision"
+position: 6
+---
+
+Updating policy means publishing a new signed bundle with a higher `policy_revision`. Nothing on an APF host is edited by hand, and no software is redeployed. This page covers the procedure, how far each kind of change reaches, and what to do when an update is rejected.
+
+## Procedure
+
+1. Change the policy documents, and review the change.
+2. Increase `policy_revision` in the manifest template.
+3. Sign the bundle. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+4. Verify it offline and build the evaluator locally. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+5. Publish it.
+6. Activate it on each policy service:
+   - **HTTP source:** wait for the next poll, or call `POST /v1/refresh` to fetch now. The call returns `200` even when the fetch or verification fails, so confirm the outcome in the audit log or by the `version` in the response.
+   - **Local source:** replace the bundle files, then restart the policy service or call `POST /v1/refresh` with the manifest path:
+
+     ```shell
+     curl -s -X POST http://127.0.0.1:19200/v1/refresh \
+       -H "Authorization: Bearer $(sudo cat /etc/apf/http-bearer-token)" \
+       -H 'content-type: application/json' \
+       -d '{"bundle_path": "/etc/apf/bundle/bundle.yaml"}'
+     ```
+
+     A successful refresh returns the new digest and revision:
+
+     ```text
+     {"status":"refreshed","policy_digest":"<digest>","version":8}
+     ```
+
+7. Confirm activation in the audit trail. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate#bundle-states).
+
+## How Far a Change Reaches
+
+Different parts of a bundle reach running workloads on different paths.
+
+| Change | Reaches | When |
+|---|---|---|
+| `PolicyRule`, `PolicyAnnotator`, `PolicyEffect`, `PolicyFinding` | Every request evaluated by the gateway, for every sandbox. | After the gateway notices the new policy set digest, within `--bundle-refresh-interval-secs`, 10 seconds by default. |
+| `SandboxPolicy` | New sandboxes. | At their admission. |
+| `SandboxPolicy` | Running sandboxes. | When OpenShell processes an `UpdateConfig` for the sandbox. With `--openshell-gateway-url` and `--jwks-url`, APF's sandbox policy refresher sends one to each Ready or Provisioning sandbox in the default workspace when the served policy set changes, as long as `--bundle-refresh-interval-secs` is greater than `0`. Refer to the note below. |
+| `Provider` and provider profiles | The OpenShell gateway's provider catalog. | At startup, and at the next reconciliation when the served policy set changes, when the gateway runs with `--openshell-gateway-url` and bundle refresh is enabled. Refer to the note below. |
+
+<Warning>
+The gateway learns about a new bundle by watching the digest of the served policy set, `apf.policy.v1`, which contains only rules, annotators, effects, and findings. A new revision that changes only `SandboxPolicy` or `Provider` documents does not change that digest, so the gateway does not refresh running sandboxes, does not reconcile provider profiles, and keeps reporting the previous `policy_revision`. New sandboxes still receive the new sandbox policy at admission. Restarting the gateway after the policy service has loaded the bundle updates OpenShell's provider catalog, because the reconciler runs at startup, but it does not refresh running sandboxes. To reach running sandboxes, include a change to a rule, annotator, effect, or finding in the same revision, or recreate the sandboxes.
+</Warning>
+
+OpenShell decides which sandbox policy fields can change on a running sandbox. Network rules can change. Filesystem paths can be added, but they take effect only after the sandbox restarts. A change to `landlock` or `process`, a removed filesystem path, or a changed `include_workdir` makes OpenShell reject the whole update, so none of the revision reaches running sandboxes, not even its network changes. When a change must reach running sandboxes, such as an emergency egress revocation, publish it in a revision whose sandbox policy changes only network rules, make sure the revision also changes the policy set so the refresher runs, and recreate sandboxes to apply the other fields. Refer to [OpenShell sandbox policies](https://docs.nvidia.com/openshell/latest/how-it-works/policies/overview).
+
+Changes to trust roots, the document signing key, or service flags are not policy updates. Restart the affected service to apply them.
+
+## Recover from a Rejected Update
+
+### Rejected by the Policy Service
+
+A bundle that fails verification or compilation on a refresh or poll is not activated, and the policy service keeps serving its current bundle. A verification failure writes a refused `policy_verification` record with every reason, except with the HTTP source when no manifest in the archive has a valid signature, which is only logged. A compilation failure writes no refusal record. The error appears in the service log, and with the local source also in the `POST /v1/refresh` response.
+
+Fix the problem and publish again. If the rejected bundle never activated, its revision was not consumed and you can reuse it. If you changed the content at a revision that was already accepted, use a higher revision, because the counter refuses different content at an accepted revision.
+
+### Rejected by the Gateway
+
+The policy service parses every document, but it does not build the Cedar evaluator, so it does not check Cedar syntax, annotator patterns and operands, or effect and finding references. A bundle with such an error passes the policy service, becomes active there, and consumes its revision. The gateway then fails to build an evaluator, logs a warning, and keeps deciding with its previous evaluator.
+
+Until you fix it, the two halves disagree: the policy service serves the new sandbox projection while the gateway decides with the old rules. Fix the error, sign with a higher revision, and publish. To avoid this state, always build the evaluator locally before you publish.
+
+## Roll Back a Change
+
+The anti-rollback counter refuses any revision lower than the last accepted one, so you cannot republish an older bundle. To undo a change, sign the previous content with a new, higher revision and publish it.
+
+## Next Steps
+
+- To try an update end to end, refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
+- To understand the counter, refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).

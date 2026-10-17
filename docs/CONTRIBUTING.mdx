@@ -1,0 +1,170 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Contributing to the NVIDIA Agent Policy Fabric Documentation"
+description: "Conventions for writing, structuring, and reviewing the APF documentation."
+---
+
+This guide covers how to write, edit, and review the APF documentation. If you change code that affects user-facing behavior, update the relevant pages in the same pull request.
+
+The published pages live in `docs/` as Fern MDX, and the navigation is defined in `docs/index.yml`. The Fern site configuration is in `fern/`. `fern/README.md` explains local preview, validation, and publishing.
+
+## Source of Truth
+
+Document what the repository's `main` branch does, and nothing else.
+
+- Verify every flag, default, field, file name, reason code, and message against the code before you write it. When code comments or crate READMEs disagree with the code, the code wins.
+- Do not document a capability that lives only on a feature branch or in a plan. Give it a coming-soon page instead.
+- When the code has a defect that users will hit, document the behavior as it is. If users see a symptom, such as an error or a service that does not start, add a row to `deployment/troubleshooting.mdx`. If the behavior is silent, add a short caveat to the page that documents the feature. Track the defect itself in the issue tracker, not in the docs.
+- Keep examples public-safe. Use placeholders such as `registry.example.com` and `<gateway-id>`, and never include internal host names, credentials, or customer and partner names that are not public. The repository address follows the rule in [Repository URL](#repository-url).
+
+### Repository URL
+
+The repository's address appears in two places: the link at the top of `resources/repositories.mdx` and the `git clone` command on `get-started/installation.mdx`. When the repository moves, change both.
+
+- Link to the repository from other pages with the relative docs path `/resources/repositories`.
+- Clone into an explicit directory, `git clone <address> apf`, so later commands do not depend on the repository's name.
+- Do not write the repository's address anywhere else, including in examples.
+
+## When to Update Docs
+
+Update the documentation when your change:
+
+- Adds, removes, or renames a command, flag, or environment variable. Update `reference/cli-commands.mdx`.
+- Changes a default, a limit, or failure behavior.
+- Changes a policy document field or its runtime handling. Update `reference/policy-schemas.mdx` and the matching page under `author-policies/`.
+- Adds, removes, or renames a reason code or audit field. Update `reference/error-reference.mdx` or `reference/audit-event-schema.mdx`.
+- Changes an API, the bundle format, or the OpenShell pin.
+- Fixes a defect described in `deployment/troubleshooting.mdx` or in a caveat on a topic page. Remove the row or the caveat.
+- Makes an in-development capability available. Replace its coming-soon page and update `about/support-and-compatibility.mdx`.
+
+## Status Labels
+
+Use the status definitions in `about/support-and-compatibility.mdx` consistently.
+
+| Status | Use for |
+|---|---|
+| Available | Implemented on `main` and exercised by tests. |
+| Limited | Implemented, with a restriction stated next to it. |
+| Development only | For local development or demonstration. |
+| In development | Not yet on `main`. |
+| Reserved | A value that exists in a contract but that no component produces. |
+| Not supported | Not implemented, and not marked In Development. |
+
+### Coming-Soon Pages
+
+A page for a capability that is not on `main` follows this pattern:
+
+1. Add `availability: in-development` to its frontmatter and to its entry in `docs/index.yml`, or to the section entry when the whole section is in development. Fern shows an **In Development** badge in the sidebar.
+2. Start the body with `<Note title="Coming soon">` stating that the capability is not yet in the repository.
+3. Add a "What Exists Today" section listing what is on `main` that relates to it, if anything.
+4. Add a "Planned Content" section listing what the page will cover, without describing unimplemented behavior as fact.
+5. End with "Related Pages".
+
+## Writing Conventions
+
+### Format
+
+- Every page starts with YAML frontmatter with `title` and `description`, and `sidebar-title`, `keywords`, and `position` where they apply.
+- Include the SPDX header as YAML comments in the frontmatter:
+
+  ```text
+  ---
+  # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  # SPDX-License-Identifier: Apache-2.0
+  title: "Page Title"
+  ---
+  ```
+
+- Do not repeat the title as a body H1.
+
+### Frontmatter Template
+
+```yaml
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Page Title"
+sidebar-title: "Short Nav Title"
+description: "One-sentence summary of the page."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy"
+position: 1
+---
+```
+
+### Navigation Rules
+
+- Keep every page URL equal to its file path under `docs/`, without `.mdx`.
+- Set each `page:` label in `docs/index.yml` to the page's `sidebar-title`, or its `title` when it has none.
+- When Fern would not derive the file name from the label, set a relative `slug:` on the entry. For example, `The Governed Path` needs `slug: governed-path`.
+- Rename the file when you rename a page.
+- Link between pages with root-relative paths such as `/manage-policy-bundles/update-policies`, and to sections with the heading's anchor, such as `#bundle-rejection-reasons`.
+
+### Page Structure
+
+1. Frontmatter.
+2. A one- or two-sentence introduction stating what the page covers.
+3. Sections organized by task or concept, using H2 and H3.
+4. A "Next Steps" section linking to related pages.
+
+### Diagrams
+
+Draw diagrams with Mermaid in a `mermaid` code block. Color them by what each part is, with the same classes on every page, so a reader learns the colors once. Boxes use a pale fill, a thin colored border, and dark text, so they read the same in light and dark mode.
+
+| Class | Use for | Definition |
+|---|---|---|
+| `pap` | `apf-policy-service` | `fill:#FFFFFF,stroke:#7CB342,stroke-width:1.5px,color:#1F2328` |
+| `pdp` | `apf-policy-gateway` | `fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1F2328` |
+| `green` | The authoring and publish path, control plane parts such as the compiler stages, the interceptor, and allowed outcomes | `fill:#EEF6DF,stroke:#7CB342,stroke-width:1.5px,color:#2E5A00` |
+| `blue` | Data plane parts, such as the middleware and the evaluation stages | `fill:#E8F1FD,stroke:#3B82F6,stroke-width:1.5px,color:#0B3D91` |
+| `orange` | OpenShell components and OpenShell-format surfaces | `fill:#FDF1E3,stroke:#C7843A,stroke-width:1.5px,color:#6B3A00` |
+| `purple` | Audit and risk components | `fill:#F3EDFD,stroke:#8B5CF6,stroke-width:1.5px,color:#4C1D95` |
+| `gray` | Inputs, callers, host configuration, and services outside APF and OpenShell | `fill:#F3F4F6,stroke:#9CA3AF,stroke-width:1.5px,color:#1F2328` |
+| `red` | Untrusted workloads and denied outcomes | `fill:#FDECEC,stroke:#D9534F,stroke-width:1.5px,color:#7A1414` |
+
+- In a flowchart, add `classDef` lines for the classes you use, assign them with `class`, and add `linkStyle default stroke-width:1.5px`. Bold the first line of a two-line label with `<b>`.
+- Tint a subgraph with its contents' color at low opacity: `fill:#7CB3421F,stroke:#7CB342` for the control plane, `fill:#3B82F61A,stroke:#3B82F6` for the data plane, `fill:#C7843A1A,stroke:#C7843A` for OpenShell, and `fill:#6B728014,stroke:#9CA3AF` for a subgraph that holds more than one kind of component. Add `stroke-width:1.5px`.
+- Draw a link that crosses into APF from another zone as a dashed line in the color of the part it reaches, such as `linkStyle 5 stroke:#7CB342,stroke-width:1.5px,stroke-dasharray:5 4`. Use red, `#D9534F`, for a link from an untrusted source. `linkStyle` counts links from zero in the order they appear.
+- In a sequence diagram, group participants with `box` and the same colors at low opacity: `rgba(124,179,66,0.18)` for the policy service, `rgba(59,130,246,0.14)` for the policy gateway, `rgba(199,132,58,0.16)` for OpenShell, and `rgba(107,114,128,0.12)` for everything else. Shade denied paths with `rect rgba(217,83,79,0.14)` and allowed paths with `rect rgba(124,179,66,0.16)`.
+- Do not name a class after a node ID in the same diagram.
+
+## Style Guide
+
+Write like you are explaining something to a colleague. Be direct, specific, and concise.
+
+- Use active voice, second person, and present tense.
+- Do not hedge with "simply," "just," "easily," or "of course."
+- Do not use em dashes, superlatives, emoji, or rhetorical questions.
+- Reserve bold for UI labels, status labels, and genuine warnings.
+- End every sentence with a period.
+- Use `code` formatting for commands, paths, flags, fields, values, and reason codes.
+- Use `shell` code blocks for copyable commands, without a `$` prompt, and `text` blocks for output.
+- Use tables for structured comparisons, and keep them simple.
+- Use `<Note>`, `<Tip>`, and `<Warning>` for callouts, and `<Steps>`, `<Tabs>`, and `<Cards>` where the page benefits.
+- Do not number section titles or use colons in titles.
+
+### Word List
+
+| Use | Do not use |
+|---|---|
+| APF, NVIDIA Agent Policy Fabric | Apf, Agent Policy Framework |
+| policy service, policy gateway | Policy Service, PolicyService (except for the gRPC service) |
+| bundle, signed bundle | package, policy pack |
+| OpenShell | Open Shell, Openshell |
+| Cedar | cedar (except in code) |
+| MCP | mcp (except in code) |
+| YAML, JSON | yaml, json (except in code) |
+| sandbox | Sandbox (unless starting a sentence) |
+
+## Validate Your Changes
+
+- Check every new link and anchor against the target page.
+- Run `markdownlint-cli2` with `docs/.markdownlint-cli2.jsonc`.
+- Run every command you document, or mark the output as illustrative with placeholders.
+- Run `mise run docs` to validate the Fern configuration, links, and navigation. It runs `fern check` and `scripts/check_docs_nav.py`.
+- Preview the site with `mise run docs:serve`.
+- Both tasks need mise, Node.js, and uv. `fern/README.md` explains how to install them.
+
+## Submitting Doc Changes
+
+Open a pull request with `docs` as the conventional commit type, for example `docs(apf): document bundle rejection reasons`. If the change accompanies a code change, include both in one pull request and use the code change's type. Sign off every commit with `git commit -s`.

@@ -1,0 +1,199 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Sandbox Policies and Providers"
+sidebar-title: "Sandbox Policies"
+description: "Author the SandboxPolicy that sets a sandbox's network, filesystem, and process perimeter, and the Provider documents that declare reachable services."
+keywords: "Generative AI, Cybersecurity, AI Agents, SandboxPolicy, Network Policy, L7 Rules, Landlock, Provider, Containment"
+position: 3
+---
+
+A `SandboxPolicy` sets the perimeter of every sandbox admitted under the bundle: which hosts it can reach and how, which paths it can read and write, and which identity its processes run as. APF projects it into OpenShell's sandbox policy when the bundle is loaded and injects it at admission, and OpenShell enforces it at Layer 1 on every call. APF does not evaluate it per request.
+
+`Provider` documents declare the services an agent may use and the credentials OpenShell injects for them.
+
+## A First Example
+
+This policy lets `gh` and `curl` read from the GitHub API and nothing else:
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.sandbox/v1alpha1
+kind: SandboxPolicy
+metadata:
+  name: default
+spec:
+  filesystem:
+    include_workdir: true
+    read_only: [/usr, /lib, /etc]
+    read_write: [/sandbox, /tmp]
+  landlock:
+    compatibility: best_effort
+  process:
+    run_as_user: sandbox
+    run_as_group: sandbox
+  network_policies:
+    github:
+      name: github
+      binaries:
+        - path: /usr/bin/gh
+        - path: /usr/bin/curl
+      endpoints:
+        - host: api.github.com
+          port: 443
+          protocol: rest
+          access: read-only
+          enforcement: enforce
+```
+
+Egress is deny-by-default. Only the endpoints listed under `network_policies` are reachable, and only by the listed binaries.
+
+## Which Sandbox Policy Is Used
+
+The interceptor injects the `SandboxPolicy` whose `metadata.name` matches the gateway's `--document-name`, which defaults to `default`. A bundle may carry several sandbox policies with different names, and each projects to its own `openshell.sandbox.v1/<name>` document.
+
+## Filesystem, Landlock, and Process
+
+| Field | Meaning |
+|---|---|
+| `filesystem.include_workdir` | Adds the sandbox working directory as read-write. |
+| `filesystem.read_only` | Paths the sandbox may read but not write. |
+| `filesystem.read_write` | Paths the sandbox may read and write. |
+| `landlock.compatibility` | How Landlock enforcement behaves on hosts with partial support. Use `best_effort`. The authoring schema also lists `required` and `disabled`, but OpenShell 0.1.x accepts only `best_effort` and `hard_requirement` and rejects other values at admission. |
+| `process.run_as_user`, `process.run_as_group` | The identity the sandbox process runs as. |
+
+These values pass through to OpenShell unchanged. Refer to [OpenShell sandbox policies](https://docs.nvidia.com/openshell/latest/how-it-works/policies/overview) for how OpenShell enforces each one.
+
+## Network Policies
+
+`network_policies` is a map of named rules. Each rule lists endpoints and, optionally, the binaries allowed to open connections to them. The map key identifies the rule. `name` defaults to the key.
+
+### Endpoints
+
+| Field | Meaning |
+|---|---|
+| `host` | Host name or host glob. |
+| `port` or `ports` | One port, or a list of ports. One of the two is required. |
+| `path` | HTTP path glob that scopes the endpoint on a shared host and port. |
+| `protocol` | `tcp`, `rest`, `websocket`, `graphql`, `sql`, `json-rpc`, or `mcp`. Omit it for Layer 4 only. |
+| `tls` | Omit it to keep OpenShell's automatic TLS termination, or set `skip` to turn TLS inspection off. The authoring schema lists `terminate` and `passthrough`, which OpenShell 0.1.x rejects, and does not list `skip`. OpenShell also refuses a fail-closed middleware entry, such as APF's, that selects a `skip` host. |
+| `enforcement` | `enforce` blocks violations. `audit` logs them without blocking. When omitted, OpenShell audits. OpenShell rejects `enforce` for `sql` endpoints. |
+| `access` | A preset: `read-only`, `read-write`, or `full`. |
+| `rules` | Explicit Layer 7 allow rules. Mutually exclusive with `access`. |
+| `deny_rules` | Explicit Layer 7 deny rules, evaluated after allow rules. |
+| `allowed_ips` | IP addresses or CIDR ranges the host may resolve to. |
+| `mcp` | MCP options: `strict_tool_names` and `allow_all_known_mcp_methods`. `max_body_bytes` is used as `json_rpc_max_body_bytes` when that field is not set. |
+
+The authoring schema enforces these combinations:
+
+- `tcp` endpoints cannot use `access`, `rules`, `deny_rules`, or `enforcement`.
+- `rest`, `websocket`, `graphql`, and `sql` endpoints need `access` or at least one rule.
+- `json-rpc` endpoints need at least one rule and cannot use `access`.
+- `mcp` endpoints need at least one rule or `mcp.allow_all_known_mcp_methods: true`, and cannot use `access`.
+- `deny_rules` require a Layer 7 protocol.
+
+### Layer 7 Rules
+
+Each entry in `rules` has one `allow` object. Each entry in `deny_rules` is the match object itself. The fields that apply depend on the protocol:
+
+| Field | Protocols |
+|---|---|
+| `method`, `path`, `query` | `rest`, and `method` for `json-rpc` and `mcp` |
+| `command` | `sql` |
+| `operation_type`, `operation_name`, `fields` | `graphql` |
+| `params` | `mcp`, where only `params.name` is supported for `tools/call` filtering |
+
+```yaml
+endpoints:
+  - host: httpbin.org
+    port: 443
+    protocol: rest
+    enforcement: enforce
+    rules:
+      - allow:
+          method: POST
+          path: /anything
+```
+
+Refer to [OpenShell network rules](https://docs.nvidia.com/openshell/latest/how-it-works/policies/network-rules) for the matching semantics of each protocol and preset.
+
+### Binaries
+
+`binaries` restricts which executables may open connections governed by the rule. Each entry has a `path`. Refer to [OpenShell network rules](https://docs.nvidia.com/openshell/latest/how-it-works/policies/network-rules) for how OpenShell identifies the calling binary.
+
+### Credential Controls
+
+Endpoints can also carry `request_body_credential_rewrite` and `websocket_credential_rewrite`. APF accepts `credential_binding` and `allow_uninspected_credentials` but does not project them in this release: OpenShell always receives no binding and `allow_uninspected_credentials: false`. Refer to [Credential Integration](/how-it-works/credential-integration#binding-credentials-to-endpoints).
+
+## Selecting APF's Middleware
+
+`network_middlewares` attaches supervisor middleware to destination hosts. Add an entry that selects APF's middleware for every host whose requests APF should evaluate at Layer 2:
+
+```yaml
+network_middlewares:
+  apf_content_policy:
+    name: APF content policy
+    middleware: apf-content-policy
+    order: 10
+    on_error: fail_closed
+    endpoints:
+      include:
+        - "api.github.com"
+        - "httpbin.org"
+```
+
+| Field | Meaning |
+|---|---|
+| `middleware` | The OpenShell registration name of APF's middleware. |
+| `order` | Run order relative to other middleware on the same host. Lower runs first. |
+| `on_error` | `fail_closed` blocks traffic when the middleware fails. `fail_open` lets it through. Use `fail_closed` for APF. |
+| `endpoints.include`, `endpoints.exclude` | Host selectors. OpenShell allows at most 32 patterns across both lists. |
+
+APF's middleware takes no configuration, so an APF `SandboxPolicy` has no `config` field for it, and a `config` key fails compilation. The authoring schema allows at most 10 middleware entries, and OpenShell requires each entry's `order` to be unique. APF does not check either limit. A host that no entry selects is never evaluated by APF, even if it is reachable at Layer 1.
+
+## Providers
+
+A `Provider` document declares a service the agent may use: its category, endpoints, permitted binaries, and credentials.
+
+```yaml
+apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
+kind: Provider
+metadata:
+  name: slack
+  title: Slack
+  description: Slack Web API, workspace messaging.
+spec:
+  type: messaging
+  endpoints:
+    - host: slack.com
+      port: 443
+      protocol: rest
+      access: read-write
+      enforcement: enforce
+  binaries:
+    - /usr/bin/curl
+  credentials:
+    - name: bot_token
+      envVars: [SLACK_TOKEN]
+      required: true
+      style: bearer
+      header: Authorization
+      source:
+        kind: host-env
+        name: SLACK_TOKEN
+```
+
+| Field | Meaning |
+|---|---|
+| `spec.type` | Provider category: `inference`, `agent`, `source-control`, `messaging`, `data`, or `knowledge`. Any other value projects as `other`. |
+| `spec.endpoints` | The destinations this provider's credentials may reach. Each needs a host and a port. Same fields as sandbox endpoints. |
+| `spec.binaries` | Executables permitted to use this provider. Each entry is a path string or an object with `path`. |
+| `spec.credentials` | Credentials the provider uses. Refer to [Credential Integration](/how-it-works/credential-integration). |
+
+Bundles may also carry OpenShell-native provider profiles as `kind: ProviderProfile` documents or as profiles with a top-level `id` and `endpoints`. They pass through unchanged. When a `Provider` and a native profile share a name, the `Provider` wins.
+
+When APF governs the OpenShell gateway, providers and profiles that the bundle does not manage cannot be created or imported. Refer to [Credential Integration](/how-it-works/credential-integration#governing-providers-at-the-gateway).
+
+## Next Steps
+
+- To govern what the agent does within reachable endpoints, refer to [Capability Grants](/author-policies/capability-grants).
+- For the full field list, refer to [Policy Schemas](/reference/policy-schemas#sandboxpolicy).

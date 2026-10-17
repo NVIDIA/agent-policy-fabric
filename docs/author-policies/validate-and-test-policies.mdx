@@ -1,0 +1,121 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Validate and Test Policies"
+sidebar-title: "Validate and Test Policies"
+description: "Catch policy errors before you sign: validate documents against the authoring schemas, verify bundles offline, build the evaluator locally, and exercise decisions."
+keywords: "Generative AI, Cybersecurity, AI Agents, Policy Testing, Validation, JSON Schema, apf-compile, Cedar, grpcurl"
+position: 8
+---
+
+A policy error found after signing costs a new revision. APF checks policy at several points, and each catches a different class of mistake. Run them in order before you sign and publish a bundle.
+
+| Check | Catches | Tool |
+|---|---|---|
+| Schema validation | Unknown fields, wrong types, invalid enum values, invalid endpoint combinations, provider credential styles without their companion field, mistyped `kind` and `role` values. | Any JSON Schema 2020-12 validator with the schemas in `contracts/jsonschema/`. |
+| Offline verification | Bad signatures, digest mismatches, an expired validity window. | `apf-compile compile --verify-only` |
+| Offline compilation | Unparseable members, missing or duplicate document names, unknown `spec` fields, unsupported `language`, malformed `data`. A member with an unrecognized `kind` is skipped without an error. | `apf-compile compile` |
+| Evaluator build | Cedar syntax and schema errors, misplaced or dangling `@apf_effect` and `@apf_finding`, invalid annotator patterns and operations, duplicate annotation keys. | A local `apf-policy-gateway` |
+| Decision tests | Rules that compile but decide the wrong thing. | The gateway's `EvaluationService`, or a sandbox and `curl`. |
+
+<Note>
+The policy service verifies and compiles a bundle, but Cedar policies, annotators, and effects are compiled into an evaluator only by the policy gateway. A bundle with a Cedar syntax error loads into the policy service and is rejected by the gateway. Build the evaluator locally before you publish.
+</Note>
+
+## Validate Documents Against the Schemas
+
+The repository ships JSON Schemas for every authored document kind:
+
+| Schema | Documents |
+|---|---|
+| `policy-bundle.v1alpha1.schema.json` | The bundle manifest template. |
+| `sandbox-policy.v1alpha1.schema.json` | `SandboxPolicy` |
+| `provider.v1alpha1.schema.json` | `Provider` |
+| `policy-rule.v1alpha1.schema.json` | `PolicyRule` |
+| `policy-annotator.v1alpha1.schema.json` | `PolicyAnnotator` |
+| `policy-effect.v1alpha1.schema.json` | `PolicyEffect` |
+| `policy-finding.v1alpha1.schema.json` | `PolicyFinding` |
+
+Validate each YAML document with a JSON Schema validator that accepts YAML input. For example, with the `check-jsonschema` CLI:
+
+```shell
+check-jsonschema \
+  --schemafile contracts/jsonschema/policy-rule.v1alpha1.schema.json \
+  bundle/rules/*.yaml
+```
+
+The bundle schema describes the manifest and requires each `sha256` to be 64 hexadecimal characters. A template still holds `REPLACE_WITH_DIGEST` placeholders, which the schema reports as invalid, so validate the member documents with their schemas and let the signer fill in the manifest digests.
+
+## Verify and Compile Offline
+
+`apf-compile compile` runs the same verification the policy service runs, against a trust-root directory you choose and a fresh, temporary anti-rollback counter:
+
+```shell
+./target/release/apf-compile compile \
+  --bundle-path bundle/my-bundle.yaml \
+  --trust-root-dir trust-roots \
+  --verify-only
+```
+
+Drop `--verify-only` to also load and parse every member. The command prints the surfaces it produced. It does not register the OpenShell projector, so the sandbox policy projection is not included in its output.
+
+Because the counter store is temporary, this command cannot tell you whether the revision is higher than the one a running policy service accepted. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+
+## Build the Evaluator Locally
+
+Run a local policy service and policy gateway on the bundle, as described in [Installation](/get-started/installation). Point `--bundle-path` and `--trust-root-dir` at your bundle and trust roots, and use a fresh `--counter-store`.
+
+If any rule, annotator, effect, or finding fails to compile, the gateway refuses to start and names the problem, for example:
+
+```text
+Error: build initial Cedar evaluator
+
+Caused by:
+    build Cedar evaluator: evaluator engine error: rule 'slack-grants': policy parse: ...
+```
+
+Errors name the document, such as `rule '<name>'` or `annotator '<name>' annotation '<key>'`, so you can go straight to the file.
+
+## Exercise Decisions
+
+### With the Evaluation Service
+
+The gateway's `EvaluationService` answers direct decision requests over its Unix socket. It is useful for testing capability grants. It maps `resource.class` to the tool and `verb` to the capability: the Cedar action is `APF::Action::"<class>::<verb>"`, or `APF::Action::"<class>"` when `verb` is empty, so an MCP tool name sent as the class exercises the same grant the OpenShell middleware evaluates for that tool call. `args` are passed as strings. The request carries no body or target, so content controls that read them are not exercised. A request without `resource` carries no tool: capability grants do not apply and the control rules decide, as for non-MCP traffic.
+
+```shell
+grpcurl -plaintext \
+  -import-path contracts/proto \
+  -proto nvidia/agent_policy_fabric/pdp/v1alpha1/pdp.proto \
+  -d '{"resource": {"class": "github_repo_write", "id": "octo/repo"}}' \
+  "unix://$SOCK_DIR/policy-gateway.sock" \
+  nvidia.agent_policy_fabric.pdp.v1alpha1.EvaluationService/Evaluate
+```
+
+Pass the socket path as a `unix://` target. The `-unix` flag of grpcurl 1.9.3 has no effect.
+
+Against the demo bundle, this request is denied: `github-grants` permits only `github_repo_read`, and nothing permits a write:
+
+```text
+{
+  "decision": "DECISION_DENY",
+  "policyDigestHex": "<digest>",
+  "reason": "no grant for github_repo_write"
+}
+```
+
+Send `github_repo_read` as the class instead and the decision is `DECISION_ALLOW`.
+
+The caller must run as the UID the gateway's `--allowed-uid` allows, which defaults to the gateway's own UID.
+
+### With a Sandbox
+
+To exercise the full Layer 2 path, including annotators, content controls, and effects, send requests from inside a governed sandbox. APF identifies MCP tool calls from the JSON-RPC body, so you can test tool grants with a `tools/call` envelope sent to any host the sandbox policy routes to APF's middleware. Refer to [Your First Governed Agent](/get-started/your-first-governed-agent) for examples, and read the decisions in the middleware audit file.
+
+### With Rust Tests
+
+The evaluator is the `apf_policy_eval::CedarEvaluator` type, built from rule, annotator, effect, and finding documents. The repository's own tests in `crates/apf-policy-eval/src/cedar/` show how to construct an evaluator and assert on decisions, deny reasons, mutations, and findings.
+
+## Next Steps
+
+- To sign the validated bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+- To understand each rejection, refer to [Error Reference](/reference/error-reference).
