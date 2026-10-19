@@ -33,7 +33,7 @@ tokio-stream       = "0.1"
 jsonwebtoken       = { version = "11.1.0", features = ["rust_crypto"] }
 base64             = "0.22"
 ed25519-dalek      = { version = "3", features = ["rand_core"] }
-reqwest            = { version = "0.12", features = ["json"] }
+reqwest            = { version = "0.13", features = ["json"] }
 serde              = { version = "1", features = ["derive"] }
 serde_json         = "1"
 serde_yaml         = "0.9"
