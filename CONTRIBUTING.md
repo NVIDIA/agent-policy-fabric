@@ -247,6 +247,17 @@ Every source file carries an SPDX header:
 // SPDX-License-Identifier: Apache-2.0
 ```
 
+Python and shell scripts and Dockerfiles use `#` in place of `//`. Helm
+`.tpl` templates hold the two lines in a template comment that renders no
+output:
+
+```text
+{{- /*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */ -}}
+```
+
 Documentation pages carry the same header as YAML comments in their
 frontmatter. Refer to [docs/CONTRIBUTING.mdx](docs/CONTRIBUTING.mdx).
 
@@ -267,8 +278,9 @@ flags missing or stale headers. Fix them locally and push the result:
 pre-commit run verify-copyright --all-files
 ```
 
-Contributed code is copyrighted to NVIDIA under the DCO terms. Do not add a
-separate personal copyright line.
+The DCO sign-off certifies that you have the right to submit your
+contribution. It does not transfer copyright. Keep existing copyright and
+license notices, including those of other contributors and upstream projects.
 
 ## License
 
