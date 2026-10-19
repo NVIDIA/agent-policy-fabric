@@ -41,13 +41,51 @@ pull request.
 
 We aim to acknowledge new issues and pull requests within 5 business days, but we do not commit to a merge timeline. Pull requests may be declined if they duplicate internal work in progress, conflict with planned direction, or expand scope we are not prepared to maintain. We will say so rather than leave a PR open indefinitely.
 
+## First-time contributors
+
+APF uses a vouch system. Maintainers and collaborators with write access can
+open pull requests directly. Everyone else must be vouched first:
+
+1. Open a [Vouch Request](https://github.com/NVIDIA/agent-policy-fabric/discussions/new?category=vouch-request)
+   discussion describing what you want to work on and why. Write it yourself;
+   requests that read like LLM output are denied.
+2. A maintainer comments `/vouch`. The `vouch-command` workflow adds your
+   username to `.github/VOUCHED.td` on the `vouched` branch.
+3. Open your pull request. A pull request from an unvouched author is closed
+   automatically with instructions. Maintainers can also denounce a user by
+   adding `-username` to `VOUCHED.td`.
+
 ## Developer Certificate of Origin
 
-All contributions must be signed off under the [DCO](https://developercertificate.org/). Add `-s` to your `git commit` to certify that you have the right to submit the work under the project's Apache-2.0 license. Unsigned commits cannot be merged.
+All contributions must be signed off under the [DCO](https://developercertificate.org/). Add `-s` to your `git commit` to certify that you have the right to submit the work under the project's Apache-2.0 license. The `DCO` workflow fails any pull request containing a commit without a matching `Signed-off-by` trailer. Fix a branch with `git rebase --signoff <base>` and a force-push. Unsigned commits cannot be merged.
 
 ## Code review and CI
 
-Every change, internal or external, goes through pull request review by an NVIDIA maintainer. CI on pull requests from forks is triggered by a maintainer after an initial review.
+Every change, internal or external, goes through pull request review by an NVIDIA maintainer.
+
+CI runs on NVIDIA self-hosted runners, gated by
+[copy-pr-bot](https://github.com/nv-gha-runners/docs/blob/main/docs/platform/apps/copy-pr-bot/index.md).
+It does not trigger on `pull_request` events; it triggers on pushes to
+`pull-request/<N>` branches that the bot creates.
+
+- **Trusted changes** (an NVIDIA org member, and every commit cryptographically
+  signed) are copied automatically, and again on each push. Sign commits with
+  [SSH commit signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification),
+  which is separate from the DCO `-s` sign-off. If you push an unsigned commit,
+  rebase to sign it and force-push.
+- **Untrusted changes** (an external author, an unsigned commit, or 250 or more
+  commits) are not run until a maintainer reviews the whole diff and comments
+  `/ok to test <full 40-character SHA of the latest commit>`. An abbreviated or
+  stale SHA is rejected, and every later push needs a new comment.
+- Draft pull requests are not synced automatically. A maintainer or you can
+  comment `/ok to test` to run CI on one.
+
+Maintainers: before approving, check the diff for changes to
+`.github/workflows/`, `tasks/`, `scripts/`, `xtask/`, `build.rs` files, and
+dependency manifests. These all run code on our runners. The pushed
+`pull-request/*` branch is deleted when the pull request closes. To stop
+fetching these branches locally, run
+`git config --global --add remote.origin.fetch '^refs/heads/pull-request/*'`.
 
 ## How to contribute
 
