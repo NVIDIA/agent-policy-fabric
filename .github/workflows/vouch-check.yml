@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: Vouch Check
+# Runs on pull_request_target so it can comment on and close fork PRs. It never
+# checks out or executes PR code; the PR author is treated as data only.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  vouch-gate:
+    if: github.repository_owner == 'NVIDIA'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check vouch status
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            // Skip bots (dependabot, github-actions, release-plz, ...).
+            if (pr.user.type === 'Bot') {
+              console.log(`${author} is a bot. Skipping vouch check.`);
+              return;
+            }
+
+            // Maintainers and collaborators with write access bypass the gate.
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner, repo, username: author,
+              });
+              if (['admin', 'maintain', 'write'].includes(data.permission)) {
+                console.log(`${author} has ${data.permission} access. Skipping vouch check.`);
+                return;
+              }
+            } catch (e) {
+              console.log(`Permission check failed (${e.status}): ${e.message}`);
+            }
+
+            // Read VOUCHED.td from the dedicated "vouched" branch, NOT the PR
+            // branch: a PR author could add themselves in their fork.
+            let vouched = false;
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner, repo, path: '.github/VOUCHED.td', ref: 'vouched',
+              });
+              const content = Buffer.from(data.content, 'base64').toString('utf-8');
+              vouched = content
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#') && !line.startsWith('-'))
+                .some(name => name.toLowerCase() === author.toLowerCase());
+            } catch (e) {
+              console.log(`Could not read VOUCHED.td: ${e.message}`);
+            }
+
+            if (vouched) {
+              console.log(`${author} is in VOUCHED.td. Approved.`);
+              return;
+            }
+
+            console.log(`${author} is not vouched. Closing PR.`);
+            const base = `https://github.com/${owner}/${repo}`;
+            await github.rest.issues.createComment({
+              owner, repo,
+              issue_number: pr.number,
+              body: [
+                `Thank you for your interest in contributing to APF, @${author}.`,
+                '',
+                'This project uses a **vouch system** for first-time contributors. Before submitting a pull request, you need to be vouched by a maintainer.',
+                '',
+                '**To get vouched:**',
+                `1. Open a [Vouch Request](${base}/discussions/new?category=vouch-request) discussion.`,
+                '2. Describe what you want to change and why.',
+                '3. Write in your own words. Do not have an AI generate the request.',
+                '4. A maintainer will comment `/vouch` if approved.',
+                '5. Once vouched, open a new PR (preferred) or reopen this one after a few minutes.',
+                '',
+                `See [CONTRIBUTING.md](${base}/blob/main/CONTRIBUTING.md#first-time-contributors) for details.`,
+              ].join('\n'),
+            });
+            await github.rest.pulls.update({
+              owner, repo, pull_number: pr.number, state: 'closed',
+            });
