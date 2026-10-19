@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // polkit rule: deny interactive/session-bus start|stop|restart|reload of the
 // APF units to everyone. Only root (the deploy pipeline, running as root via
 // its own controlled sudo path — see ../SECURITY.md "Process-level
