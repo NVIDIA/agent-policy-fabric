@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: First-time contributor? Get vouched first
+    url: https://github.com/NVIDIA/agent-policy-fabric/discussions/new?category=vouch-request
+    about: >
+      First-time contributors must be vouched before submitting PRs. Open a
+      Vouch Request discussion describing what you want to work on. A
+      maintainer will approve you with /vouch.
+  - name: Security vulnerability?
+    url: https://github.com/NVIDIA/agent-policy-fabric/blob/main/SECURITY.md
+    about: >
+      Do not report security vulnerabilities through GitHub issues. Follow
+      the disclosure process in SECURITY.md.

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: DCO
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: dco-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dco:
+    name: DCO sign-off
+    # Merge-queue commits are synthesized by GitHub; the PR commits were
+    # already checked.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify every commit carries a matching Signed-off-by
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: |
+          if [ "$PR_AUTHOR_TYPE" = "Bot" ]; then
+            echo "Bot-authored pull request; skipping DCO check."
+            exit 0
+          fi
+
+          failed=0
+          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            author_email=$(git log -1 --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')
+            committer_email=$(git log -1 --format='%ce' "$sha" | tr '[:upper:]' '[:lower:]')
+            signoffs=$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" \
+              | tr '[:upper:]' '[:lower:]')
+            # Changes are published from an internal repository, so the
+            # sign-off may come from the committer rather than the author.
+            if ! printf '%s\n' "$signoffs" | grep -qF -e "<$author_email>" -e "<$committer_email>"; then
+              subject=$(git log -1 --format='%h %s' "$sha")
+              echo "::error::Missing 'Signed-off-by: ... <$author_email>' on commit $subject"
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            {
+              echo "Every commit must be signed off under the DCO (https://developercertificate.org/)."
+              echo "Sign off the latest commit:   git commit --amend -s --no-edit"
+              echo "Sign off the whole branch:    git rebase --signoff $BASE_SHA && git push --force-with-lease"
+            } >&2
+            exit 1
+          fi
+          echo "All commits are signed off."
