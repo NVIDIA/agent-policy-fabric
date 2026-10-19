@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 name: CI
+# Pull request CI runs on self-hosted NVIDIA runners, so it never triggers on
+# `pull_request` directly. copy-pr-bot copies a vetted PR head to a
+# `pull-request/<N>` branch (automatically for trusted authors, after a
+# maintainer `/ok to test` for forks), and the push below runs the checks.
 on:
-  pull_request:
   merge_group:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "pull-request/[0-9]+"
   workflow_dispatch:
 env:
   CARGO_TERM_COLOR: always
@@ -18,7 +23,7 @@ concurrency:
 jobs:
   mise-lockfile:
     name: mise lockfile
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +38,7 @@ jobs:
 
   rust-format:
     name: Rust format
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,7 +47,7 @@ jobs:
 
   cargo-lockfile:
     name: Cargo lockfile
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +56,7 @@ jobs:
 
   rust-lint:
     name: Rust lint
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,7 +66,7 @@ jobs:
 
   rust-test:
     name: Rust test
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,7 +76,7 @@ jobs:
 
   dag-guard:
     name: Crate DAG guard
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +86,7 @@ jobs:
 
   cargo-deny:
     name: Cargo deny (licenses, bans, sources)
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,7 +95,7 @@ jobs:
 
   license-headers:
     name: License headers
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +106,7 @@ jobs:
 
   third-party-notices:
     name: Third-party notices
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +116,7 @@ jobs:
 
   python-tests:
     name: Script tests
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,7 +125,7 @@ jobs:
 
   contracts:
     name: Contracts (jsonschema, buf lint, vendored protos)
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,8 +137,8 @@ jobs:
 
   contracts-breaking:
     name: Contracts (buf breaking against main)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: linux-amd64-cpu8
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
