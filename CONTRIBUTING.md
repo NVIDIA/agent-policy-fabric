@@ -113,6 +113,14 @@ existing accepted issue when possible.
 
 Do not push directly to the default branch.
 
+## Merging
+
+Maintainers merge with **rebase merge** or **squash**. Use rebase merge when a
+pull request has several commits that each stand alone, so every commit and its
+`Signed-off-by` is kept. Use squash for a single logical change with noisy
+fix-up commits; the squash commit takes the pull request title, so it must
+follow the commit format above. Merge commits are disabled.
+
 ## Development setup
 
 Install the basic tools used by the APF repository:
