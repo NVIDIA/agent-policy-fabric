@@ -20,7 +20,7 @@ base64        = "0.22"
 clap          = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 hex           = "0.4"
-rand          = "0.8"
+rand          = "0.10"
 serde_yaml    = "0.9"
 sha2          = "0.10"
 
