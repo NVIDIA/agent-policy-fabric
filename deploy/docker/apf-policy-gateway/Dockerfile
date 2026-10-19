@@ -5,7 +5,7 @@
 #   docker build -f deploy/docker/apf-policy-gateway/Dockerfile -t apf-policy-gateway:dev .
 
 # ── build ─────────────────────────────────────────────────────────────────────
-FROM rust:1.88-bookworm AS build
+FROM rust:1.99-bookworm AS build
 
 ARG BUF_VERSION=1.50.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
