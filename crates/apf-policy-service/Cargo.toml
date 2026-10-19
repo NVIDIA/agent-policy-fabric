@@ -29,7 +29,7 @@ getrandom      = { version = "0.4", features = ["sys_rng"] }
 flate2         = "1"
 hex            = "0.4"
 jsonwebtoken   = { version = "11.1.0", features = ["rust_crypto"] }
-nix            = { version = "0.29", features = ["socket", "user"] }
+nix            = { version = "0.31", features = ["socket", "user"] }
 prost          = "0.13"
 reqwest        = { version = "0.12", features = ["json"] }
 serde          = { version = "1", features = ["derive"] }
