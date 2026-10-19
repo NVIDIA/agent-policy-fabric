@@ -1,0 +1,11 @@
+# Reviewed false positives (test fixtures and placeholders), one fingerprint per line:
+# <commit>:<file>:<rule>:<line>. See https://github.com/gitleaks/gitleaks#gitleaksignore
+0bd0175b94696c6391bb6e9c02a7cbe8bbdbf8af:crates/apf-openshell-middleware/src/auth.rs:private-key:457
+25934b0a84d6dffe2066138d5db976bfcec06cb9:crates/apf-policy-eval/src/cedar/mod.rs:generic-api-key:1216
+cfe45a49b277ed168cce7ddbbdccc0b105a384be:crates/apf-audit/tests/fixtures/valid/credential_issuance.valid.json:generic-api-key:33
+cfe45a49b277ed168cce7ddbbdccc0b105a384be:crates/apf-audit/tests/fixtures/valid/credential_issuance_refused.valid.json:generic-api-key:33
+de9b6efc1cc260aeeb5a8c512f4221eea1200f7f:crates/apf-policy-eval/src/cedar/annotator.rs:generic-api-key:466
+de9b6efc1cc260aeeb5a8c512f4221eea1200f7f:crates/apf-policy-eval/src/cedar/mod.rs:generic-api-key:725
+de9b6efc1cc260aeeb5a8c512f4221eea1200f7f:crates/apf-policy-eval/src/cedar/mod.rs:generic-api-key:877
+de9b6efc1cc260aeeb5a8c512f4221eea1200f7f:crates/apf-policy-eval/src/cedar/mod.rs:generic-api-key:898
+f3af1ce8d0e7ea9d13d36113fd7a84823d731f84:deploy/compose/README.md:curl-auth-user:138
