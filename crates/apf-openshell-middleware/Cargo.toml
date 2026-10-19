@@ -13,7 +13,7 @@ apf-policy-eval     = { path = "../apf-policy-eval" }
 apf-proto           = { path = "../apf-proto" }
 base64     = "0.22"
 hex        = "0.4"
-sha2       = "0.10"
+sha2       = "0.11"
 prost      = "0.13"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"

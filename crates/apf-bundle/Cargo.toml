@@ -18,7 +18,7 @@ p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
 
 yaml-sigil-core         = "0.6.0"
