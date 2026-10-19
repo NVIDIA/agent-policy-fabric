@@ -9,7 +9,7 @@
 #   demo     — adds apf-compile for bundle signing
 
 # ── build ─────────────────────────────────────────────────────────────────────
-FROM rust:1.88-bookworm AS build
+FROM rust:1.99-bookworm AS build
 
 ARG BUF_VERSION=1.50.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
