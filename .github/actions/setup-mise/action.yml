@@ -20,6 +20,20 @@ runs:
         fi
         echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
         rustup show
+    # reqwest's native-tls backend builds openssl-sys, which needs pkg-config
+    # and the OpenSSL headers; the runner image ships neither.
+    - name: Install OpenSSL build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v pkg-config > /dev/null 2>&1 && pkg-config --exists openssl; then
+          exit 0
+        fi
+        sudo=""
+        if [ "$(id -u)" -ne 0 ]; then sudo="sudo"; fi
+        $sudo apt-get update -y
+        $sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
     - name: Restore mise cache
       id: mise-cache
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
