@@ -2538,9 +2538,9 @@ dependencies = [
 
 [[package]]
 name = "noyalib"
-version = "0.0.46"
+version = "0.0.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "790b8ba1d9deeefaf08b90d867f9440b258675c724494a2e82dd356c7f49a88a"
+checksum = "70b8960f9f4668b69cae4ca71106c84d38ca1ea9f41a9acc20ce55473b967849"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap 2.14.2",
@@ -3371,9 +3371,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -4917,9 +4917,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-sigil-core"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0660034d8cdab8c9e43f46a40e0880d2c04538f761b11a381153e2c4e388ca2d"
+checksum = "9215b8e8716d233f46bc8017bca461e2295cb3c33913658ea9b1b076eff63d5d"
 dependencies = [
  "base64 0.23.1",
  "buf-tools",
