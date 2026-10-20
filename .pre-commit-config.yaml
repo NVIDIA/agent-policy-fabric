@@ -9,3 +9,7 @@ repos:
         # Keep in step with file_type() in scripts/verify_copyright.py.
         files: (\.(rs|proto|py|sh|rules|tpl)|(^|/)Dockerfile(\.[^/]*)?|\.Dockerfile)$
         exclude: ^contracts/third_party/
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reviewed false positives (test fixtures and placeholders). Keyed by path and
+# rule, not commit SHA, so they survive rebase merges and repository syncs. Each
+# entry names the rule it covers, so other rules still apply to the same files.
+
+title = "APF gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test key in auth.rs unit tests"
+targetRules = ["private-key"]
+paths = ['''crates/apf-openshell-middleware/src/auth\.rs''']
+
+[[allowlists]]
+description = "Placeholder tokens in Cedar tests and audit fixtures"
+targetRules = ["generic-api-key"]
+paths = [
+  '''crates/apf-policy-eval/src/cedar/(mod|annotator)\.rs''',
+  '''crates/apf-audit/tests/fixtures/valid/credential_issuance(_refused)?\.valid\.json''',
+]
+
+[[allowlists]]
+description = "Example curl credentials in the deploy README"
+targetRules = ["curl-auth-user"]
+paths = ['''deploy/(compose|docker)/README\.md''']
