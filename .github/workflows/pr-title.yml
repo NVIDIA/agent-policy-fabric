@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: PR title
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+  merge_group:
+permissions:
+  contents: read
+jobs:
+  title:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate title format
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|test|refactor|build|ci|chore|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern"; then
+            echo "::error::PR title must look like 'feat(apf): add thing' or 'fix(policy-gateway): reject expired signatures'. Got: $TITLE"
+            exit 1
+          fi
