@@ -4,6 +4,7 @@ run = "buf lint contracts/"
 
 ["contracts:breaking"]
 description = "Check the protobuf contracts for breaking changes against the base branch (origin/main, or main)"
+shell = "bash -c"
 run = """
 set -euo pipefail
 base="${APF_BREAKING_BASE:-$(git rev-parse --verify --quiet origin/main >/dev/null && echo origin/main || echo main)}"
