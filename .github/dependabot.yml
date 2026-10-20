@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    # Version updates are paused; remove this line to turn them back on.
+    open-pull-requests-limit: 0
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(deps)"
+    # Every cargo update also needs `mise run third-party-notices:update`, so
+    # batch them into one pull request.
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    # Version updates are paused; remove this line to turn them back on.
+    open-pull-requests-limit: 0
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directories:
+      - /deploy/docker/apf-policy-gateway
+      - /deploy/docker/apf-policy-service
+    # Version updates are paused; remove this line to turn them back on.
+    open-pull-requests-limit: 0
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
