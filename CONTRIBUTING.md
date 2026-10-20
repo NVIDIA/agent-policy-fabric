@@ -41,6 +41,20 @@ pull request.
 
 We aim to acknowledge new issues and pull requests within 5 business days, but we do not commit to a merge timeline. Pull requests may be declined if they duplicate internal work in progress, conflict with planned direction, or expand scope we are not prepared to maintain. We will say so rather than leave a PR open indefinitely.
 
+## First-time contributors
+
+APF uses a vouch system. Maintainers and collaborators with write access can
+open pull requests directly. Everyone else must be vouched first:
+
+1. Open a [Vouch Request](https://github.com/NVIDIA/agent-policy-fabric/discussions/new?category=vouch-request)
+   discussion describing what you want to work on and why. Write it yourself;
+   requests that read like LLM output are denied.
+2. A maintainer comments `/vouch`. The `vouch-command` workflow adds your
+   username to `.github/VOUCHED.td` on the `vouched` branch.
+3. Open your pull request. A pull request from an unvouched author is closed
+   automatically with instructions. Maintainers can also denounce a user by
+   adding `-username` to `VOUCHED.td`.
+
 ## Signing off your work
 
 - We require that all contributors "sign-off" on their commits. This certifies
@@ -48,7 +62,8 @@ We aim to acknowledge new issues and pull requests within 5 business days, but w
   under the same license, or a compatible license.
 
   - Any contribution which contains commits that are not signed off will not
-    be accepted.
+    be accepted. No workflow checks the `Signed-off-by` line on each commit;
+    reviewers do, before approving.
 
 - To sign off on a commit, use the `--signoff` (or `-s`) option when
   committing your changes:
@@ -108,7 +123,36 @@ We aim to acknowledge new issues and pull requests within 5 business days, but w
 
 ## Code review and CI
 
-Every change, internal or external, goes through pull request review by an NVIDIA maintainer. CI on pull requests from forks is triggered by a maintainer after an initial review.
+Every change, internal or external, goes through pull request review by an NVIDIA maintainer.
+
+The `CI` workflow (the required build and test checks) runs on NVIDIA
+self-hosted runners, gated by
+[copy-pr-bot](https://github.com/nv-gha-runners/docs/blob/main/docs/platform/apps/copy-pr-bot/index.md).
+It does not trigger on `pull_request` events; it triggers on pushes to
+`pull-request/<N>` branches that the bot creates. Lightweight checks (PR title,
+DCO, secret scan, CodeQL, dependency review, actionlint, docs) run on
+GitHub-hosted runners on `pull_request`.
+
+- **Trusted changes** (an NVIDIA org member, and every commit cryptographically
+  signed) are copied automatically, and again on each push. Sign commits with
+  [SSH commit signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification),
+  which is separate from the DCO `-s` sign-off. If you push an unsigned commit,
+  rebase to sign it and force-push.
+- **Untrusted changes** (an external author, an unsigned commit, or 250 or more
+  commits) are not run until a maintainer reviews the whole diff and comments
+  `/ok to test <full 40-character SHA of the latest commit>`. An abbreviated or
+  stale SHA is rejected, and every later push needs a new comment.
+- Draft pull requests are not synced automatically. Comment `/ok to test` to
+  run CI on a trusted draft; for an untrusted draft, a maintainer comments
+  `/ok to test <SHA>`.
+
+Maintainers: before approving, check the diff for changes to
+`.github/workflows/`, `.github/actions/`, `tasks/`, `scripts/`, `xtask/`,
+`build.rs` files, `mise.toml`, `rust-toolchain.toml`, `.cargo/`, and
+dependency manifests. These all run code on our runners. The pushed
+`pull-request/*` branch is deleted when the pull request closes. To stop
+fetching these branches locally, run
+`git config --global --add remote.origin.fetch '^refs/heads/pull-request/*'`.
 
 ## How to contribute
 
@@ -135,6 +179,21 @@ existing accepted issue when possible.
 7. Address maintainer review feedback.
 
 Do not push directly to the default branch.
+
+## Merging
+
+Maintainers merge with **rebase merge**, so every commit and its
+`Signed-off-by` is kept. Squash merges and merge commits are disabled. Each
+commit must stand alone and follow the commit format above.
+
+Pull request CI runs on the pull request head, not on its merge with main. The
+*Merge to main* ruleset requires branches to be up to date before merging, so
+update the branch (and get a new `/ok to test` for untrusted changes) before
+merge.
+
+Dependabot cargo pull requests change only `Cargo.lock`, so the *Third-party
+notices* check fails on them. Before merging one, check out the branch, run
+`mise run third-party-notices:update`, and push the result.
 
 ## Development setup
 
