@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "maelion-us",
+      "id": 336169217,
+      "comment_id": 6296255835,
+      "created_at": "2026-10-20T16:50:44Z",
+      "repoId": 1409483917,
+      "pullRequestNo": 16
+    }
+  ]
 }
