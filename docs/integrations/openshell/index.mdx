@@ -12,17 +12,17 @@ OpenShell is the runtime APF governs today. APF plugs into two of OpenShell's ex
 
 | OpenShell extension point | APF adapter | Called by | Called when |
 |---|---|---|---|
-| [Gateway interceptor](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors) | `apf-openshell-interceptor` | OpenShell gateway | On selected control-plane writes, such as sandbox creation, configuration updates, and provider changes. |
-| [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware) | `apf-openshell-middleware` | OpenShell sandbox supervisors | On each HTTP request to a host the sandbox policy routes to APF, before credentials are injected. |
+| [Gateway interceptor](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors) | [`apf-openshell-interceptor`](gateway-interceptor.mdx) | OpenShell gateway | On selected control-plane writes, such as sandbox creation, configuration updates, and provider changes. |
+| [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware) | [`apf-openshell-middleware`](supervisor-middleware.mdx) | OpenShell sandbox supervisors | On each HTTP request to a host the sandbox policy routes to APF, before credentials are injected. |
 
 <Cards>
 
-<Card title="Gateway Interceptor" href="/integrations/openshell/gateway-interceptor">
+<Card title="Gateway Interceptor" href="gateway-interceptor.mdx">
 
 Bindings, governance decisions, provider profile snapshots, and failure behavior.
 </Card>
 
-<Card title="Supervisor Middleware" href="/integrations/openshell/supervisor-middleware">
+<Card title="Supervisor Middleware" href="supervisor-middleware.mdx">
 
 Manifest, request handling, decisions, limits, and failure behavior.
 </Card>
@@ -41,7 +41,7 @@ Manifest, request handling, decisions, limits, and failure behavior.
 
 ## Compatibility
 
-APF `main` is built against OpenShell `v0.1.3`. Both adapters take part in OpenShell's extension protocol negotiation. APF advertises protocol `1.0` and requires one capability per extension, so a gateway that cannot negotiate refuses to start rather than run with a mismatched APF. Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility).
+APF `main` is built against OpenShell `v0.1.3`. Both adapters take part in OpenShell's extension protocol negotiation. APF advertises protocol `1.0` and requires one capability per extension, so a gateway that cannot negotiate refuses to start rather than run with a mismatched APF. Refer to [Support and Compatibility](../../about/support-and-compatibility.mdx#openshell-compatibility).
 
 ## Configuration Summary
 
@@ -64,7 +64,7 @@ On the OpenShell side:
 - `agent_policy_proposals_enabled` set to `false` at global scope.
 - Optionally, `provider_profile_sources` set to APF's interceptor.
 
-Refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell) for the step-by-step procedure.
+Refer to [Add APF to OpenShell](../../get-started/add-apf-to-openshell.mdx) for the step-by-step procedure.
 
 ## Outbound Calls to the OpenShell Gateway
 
@@ -72,5 +72,5 @@ With `--openshell-gateway-url`, the policy gateway calls the OpenShell gateway's
 
 ## Next Steps
 
-- To understand the admission flow, refer to [Sandbox Admission](/how-it-works/sandbox-admission).
-- To understand the per-request flow, refer to [Request Evaluation](/how-it-works/request-evaluation).
+- To understand the admission flow, refer to [Sandbox Admission](../../how-it-works/sandbox-admission.mdx).
+- To understand the per-request flow, refer to [Request Evaluation](../../how-it-works/request-evaluation.mdx).

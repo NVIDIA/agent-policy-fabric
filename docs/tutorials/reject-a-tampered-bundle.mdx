@@ -19,7 +19,7 @@ After completing it, you understand:
 
 ## Prerequisites
 
-- The `$WORK` directory from [Your First Signed Policy](/get-started/your-first-signed-policy), with a signed bundle in `$WORK/bundle`, your key in `$WORK/keys/my-signer.seed`, and its public key in `$WORK/trust-roots`.
+- The `$WORK` directory from [Your First Signed Policy](../get-started/your-first-signed-policy.mdx), with a signed bundle in `$WORK/bundle`, your key in `$WORK/keys/my-signer.seed`, and its public key in `$WORK/trust-roots`.
 - The native services running with that bundle, for the last steps.
 
 <Steps toc={true}>
@@ -155,7 +155,7 @@ The full detail, including both digests, is in the record's `error.message`. A b
 
 ## Try a Replay
 
-Offline verification uses a fresh anti-rollback counter on every run, so it cannot tell whether a bundle is older than the one in service. Only the policy service, with its persistent counter store, can. To see it, follow [Try to Roll Back](/tutorials/update-a-signed-policy#try-to-roll-back). The refusal is `counter_regression` for a lower revision, or `counter_content_mismatch` for different content at the active revision.
+Offline verification uses a fresh anti-rollback counter on every run, so it cannot tell whether a bundle is older than the one in service. Only the policy service, with its persistent counter store, can. To see it, follow [Try to Roll Back](update-a-signed-policy.mdx#try-to-roll-back). The refusal is `counter_regression` for a lower revision, or `counter_content_mismatch` for different content at the active revision.
 
 </Steps>
 
@@ -171,7 +171,7 @@ Offline verification uses a fresh anti-rollback counter on every run, so it cann
 | Different content is published at the active revision. | Counter store, policy service only | `counter_content_mismatch` |
 | The bundle is outside its validity window. | Validity check | `bundle_not_yet_valid` or `bundle_expired` |
 
-For every reason APF can report, refer to [Bundle Rejection Reasons](/reference/error-reference#bundle-rejection-reasons).
+For every reason APF can report, refer to [Bundle Rejection Reasons](../reference/error-reference.mdx#bundle-rejection-reasons).
 
 ## Clean Up
 
@@ -181,5 +181,5 @@ rm -rf "$WORK/tamper" "$WORK/rogue"
 
 ## Next Steps
 
-- To protect the keys these checks depend on, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
-- To learn how verification fits activation, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).
+- To protect the keys these checks depend on, refer to [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx).
+- To learn how verification fits activation, refer to [Verify and Activate](../manage-policy-bundles/verify-and-activate.mdx).

@@ -28,8 +28,8 @@ You should be comfortable with:
 | `buf` (optional) | Lint the protobuf contracts with `buf lint contracts/` and refresh the committed third-party sources with `cargo xtask vendor-protos`. The build does not use it. `mise install` provides the pinned version; otherwise refer to the [buf installation instructions](https://buf.build/docs/installation/). |
 | `mise` (optional) | Run the repository tasks, such as `mise run sign-bundle` and `mise run test`. |
 | Docker with Compose v2 (optional) | Run the local container stack. Its setup also uses `openssl`, `python3`, `tar`, and `shasum`; adding an OpenShell gateway to it also needs `curl` and `lsof`. |
-| `kind`, `kubectl`, Helm 3, and `yq` v4 (optional) | Verify the Helm chart on a local kind cluster, which runs on Docker. The harness installs OpenShell and the Agent Sandbox controller into that cluster itself and fetches the matching OpenShell CLI. Refer to [Kubernetes](/deployment/kubernetes#verify-locally-with-kind). |
-| `curl` | Check health endpoints and call the refresh API. The native run commands in [Installation](/get-started/installation) use it. |
+| `kind`, `kubectl`, Helm 3, and `yq` v4 (optional) | Verify the Helm chart on a local kind cluster, which runs on Docker. The harness installs OpenShell and the Agent Sandbox controller into that cluster itself and fetches the matching OpenShell CLI. Refer to [Kubernetes](../deployment/kubernetes.mdx#verify-locally-with-kind). |
+| `curl` | Check health endpoints and call the refresh API. The native run commands in [Installation](installation.mdx) use it. |
 | `jq` | Read and filter audit records in the walkthroughs and tutorials. |
 
 The build needs network access to crates.io only; the third-party protobuf sources are committed.
@@ -38,7 +38,7 @@ The container stack and the kind harness also pull from `ghcr.io` (the OpenShell
 
 ## OpenShell
 
-APF `main` is built against OpenShell `v0.1.3`. Install a matching OpenShell 0.1.x gateway by following the [OpenShell installation guide](https://docs.nvidia.com/openshell/latest/about/installation). Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility) for the compatibility rules.
+APF `main` is built against OpenShell `v0.1.3`. Install a matching OpenShell 0.1.x gateway by following the [OpenShell installation guide](https://docs.nvidia.com/openshell/latest/about/installation). Refer to [Support and Compatibility](../about/support-and-compatibility.mdx#openshell-compatibility) for the compatibility rules.
 
 You need permission to edit the OpenShell gateway configuration and restart the gateway, because APF is registered as a gateway interceptor and a supervisor middleware in gateway TOML.
 
@@ -53,12 +53,12 @@ APF uses two separate key pairs. Keep them distinct. The document signing key is
 | Bundle signing key | The policy bundle manifest. | `apf-policy-service`, against the public keys in its trust-root directory. | With your signing authority, offline. Never on the APF host. |
 | Document signing key | The provenance token on every document the policy service serves. | `apf-policy-gateway`, through the policy service's JWKS endpoint. | On the APF host, readable only by the policy service. |
 
-A third trust relationship, the OpenShell extension trust profile, lets the policy gateway verify calls from OpenShell. It contains OpenShell's public key, not an APF key. Refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+A third trust relationship, the OpenShell extension trust profile, lets the policy gateway verify calls from OpenShell. It contains OpenShell's public key, not an APF key. Refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx).
 
 For local development, the repository includes a committed key pair, `examples/dev-keys/apf-dev.seed` and `examples/dev-keys/apf-dev.pub`, with key ID `apf-dev`. The dev stack uses it for both bundle signing and document signing.
 
 <Warning>
-The development key has no security value. Anyone with the repository can sign bundles that a host trusting `apf-dev.pub` accepts. Generate your own keys for anything other than local experiments. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+The development key has no security value. Anyone with the repository can sign bundles that a host trusting `apf-dev.pub` accepts. Generate your own keys for anything other than local experiments. Refer to [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx).
 </Warning>
 
 ## Ports
@@ -75,4 +75,4 @@ The policy service and policy gateway also talk over Unix domain sockets, which 
 
 ## Next Steps
 
-Continue with [Installation](/get-started/installation).
+Continue with [Installation](installation.mdx).

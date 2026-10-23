@@ -22,31 +22,31 @@ APF separates stable integration contracts from the individual implementations t
 | `PolicyInformationService` | gRPC | `contracts/proto/.../pip/v1alpha1/pip.proto` | Supplying attested facts to the gateway's Enrichment stage. Providers implement it, and the gateway calls it. |
 | `apf.audit.event.v1` | JSON Schema | `contracts/audit/apf.audit.event.v1.schema.json` | Every audit record APF emits. |
 
-Refer to [Service APIs](/reference/service-apis) and [Audit Event Schema](/reference/audit-event-schema).
+Refer to [Service APIs](../reference/service-apis.mdx) and [Audit Event Schema](../reference/audit-event-schema.mdx).
 
 ## Extension Points
 
 | Extension point | Interface | Lets you |
 |---|---|---|
 | Runtime projection | `Projector` trait in `apf-compiler` | Lower APF policy into another runtime's native configuration. |
-| Enforcement point | `apf-<name>-*` adapter crates | Connect another enforcement point to APF. Refer to [APF Adapter](/integrations/apf-adapter). |
+| Enforcement point | `apf-<name>-*` adapter crates | Connect another enforcement point to APF. Refer to [APF Adapter](apf-adapter.mdx). |
 | Signing | `BundleSigner` and `BundleVerifier` traits in `apf-types`, plus the trust-root key formats | Bring your own signing authority. |
 | Policy language | `Evaluator` trait in `apf-policy-eval`, and `spec.language` | Add a decision engine. Only `cedar` is registered today. |
-| Context enrichment | `ContextEnricher` trait in `apf-policy-eval`, and the `PolicyInformationService` contract | Supply attested facts to decisions from an external system. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| Context enrichment | `ContextEnricher` trait in `apf-policy-eval`, and the `PolicyInformationService` contract | Supply attested facts to decisions from an external system. Refer to [Policy Information Providers](policy-information-providers.mdx). |
 | Bundle source | `PolicySource` trait in `apf-policy-service` | Load bundles from another kind of store. Local files and HTTP are provided. |
 | Policy name resolution | `PolicyResolver` trait in `apf-policy-service` | Choose a bundle variant per caller. |
 | Anti-rollback storage | `CounterStore` in `apf-bundle` | A concrete file-backed store, not a trait. Replacing it with a shared store means changing `apf-bundle`. |
 
-Refer to [Adapter Contracts](/reference/adapter-contracts) for each interface.
+Refer to [Adapter Contracts](../reference/adapter-contracts.mdx) for each interface.
 
 ## Available Integrations
 
 | Integration | Status | Page |
 |---|---|---|
-| NVIDIA OpenShell gateway interceptor and supervisor middleware | Available | [OpenShell](/integrations/openshell) |
-| Bring your own signing authority | Available | [External Policy Authorities](/integrations/external-policy-authorities) |
-| An adapter for another enforcement point | Available as an extension point, no second adapter ships | [APF Adapter](/integrations/apf-adapter) |
-| Policy information providers | Available | [Policy Information Providers](/integrations/policy-information-providers) |
+| NVIDIA OpenShell gateway interceptor and supervisor middleware | Available | [OpenShell](openshell/index.mdx) |
+| Bring your own signing authority | Available | [External Policy Authorities](external-policy-authorities.mdx) |
+| An adapter for another enforcement point | Available as an extension point, no second adapter ships | [APF Adapter](apf-adapter.mdx) |
+| Policy information providers | Available | [Policy Information Providers](policy-information-providers.mdx) |
 
 ## Compatibility Rules
 
@@ -73,11 +73,11 @@ cargo deny check
 buf lint contracts/
 ```
 
-For a runtime integration, also run the runtime's own extension protocol negotiation against the adapter. For OpenShell, a gateway that cannot negotiate the extension protocol refuses to start. Refer to [Support and Compatibility](/about/support-and-compatibility#openshell-compatibility).
+For a runtime integration, also run the runtime's own extension protocol negotiation against the adapter. For OpenShell, a gateway that cannot negotiate the extension protocol refuses to start. Refer to [Support and Compatibility](../about/support-and-compatibility.mdx#openshell-compatibility).
 
 A conformance suite for third-party runtimes and signing authorities is not yet in the repository.
 
 ## Next Steps
 
-- To integrate with OpenShell, refer to [OpenShell](/integrations/openshell).
-- To connect another enforcement point, refer to [APF Adapter](/integrations/apf-adapter).
+- To integrate with OpenShell, refer to [OpenShell](openshell/index.mdx).
+- To connect another enforcement point, refer to [APF Adapter](apf-adapter.mdx).

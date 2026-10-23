@@ -11,7 +11,7 @@ position: 3
 APF governs an OpenShell deployment through two OpenShell extension points. You register both in the OpenShell gateway configuration and restart the gateway. You do not change how sandboxes are created, and you do not rewrite your existing policy. You move it into a signed bundle.
 
 <Note>
-On Kubernetes, the OpenShell chart renders the gateway configuration from its values, so the registrations below go into a `gatewayConfig` values overlay rather than a TOML file. Applying the overlay with `helm upgrade` rolls the gateway pod, so there is nothing to edit or restart by hand. Refer to [Register APF through the OpenShell chart](/deployment/kubernetes#register-apf-through-the-openshell-chart).
+On Kubernetes, the OpenShell chart renders the gateway configuration from its values, so the registrations below go into a `gatewayConfig` values overlay rather than a TOML file. Applying the overlay with `helm upgrade` rolls the gateway pod, so there is nothing to edit or restart by hand. Refer to [Register APF through the OpenShell chart](../deployment/kubernetes.mdx#register-apf-through-the-openshell-chart).
 </Note>
 
 | Extension point | APF surface | Default address in the dev stack | Registration name used in this guide |
@@ -23,7 +23,7 @@ The interceptor puts sandbox admission and policy changes under APF. The middlew
 
 ## Before You Begin
 
-- APF is running. Refer to [Installation](/get-started/installation).
+- APF is running. Refer to [Installation](installation.mdx).
 - You can edit the OpenShell gateway TOML and restart the gateway. Refer to [OpenShell gateway configuration](https://docs.nvidia.com/openshell/latest/how-it-works/gateways/configuration).
 - Both APF listeners are reachable from the OpenShell gateway. The middleware listener must also be reachable from every sandbox supervisor.
 
@@ -37,7 +37,7 @@ If you already run OpenShell with your own sandbox policy, put that policy into 
 2. Put each provider your sandboxes may use under `provider-profiles/` as a `kind: Provider` document.
 3. List every file in the bundle template's `manifest` and sign the bundle.
 
-Refer to [Your First Signed Policy](/get-started/your-first-signed-policy) for the signing steps and [Sandbox Policies](/author-policies/sandbox-policies) for the document format.
+Refer to [Your First Signed Policy](your-first-signed-policy.mdx) for the signing steps and [Sandbox Policies](../author-policies/sandbox-policies.mdx) for the document format.
 
 ## Register the Gateway Interceptor
 
@@ -68,7 +68,7 @@ APF's manifest declares its own failure policy for every binding: fail-closed fo
 Keep the default `binding_policy = "dynamic"`.
 
 <Warning>
-APF does not work with OpenShell's `allowlist` or `exact` binding policies in this release. APF declares three bindings each on `CreateSandbox` and `UpdateConfig`, and the strict policies accept only one binding per configured RPC. With `exact`, the OpenShell gateway does not start. With `allowlist`, you would have to leave sandbox admission and refresh out of the allowlist, which leaves them ungoverned. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor#bindings) for the RPCs and phases APF declares.
+APF does not work with OpenShell's `allowlist` or `exact` binding policies in this release. APF declares three bindings each on `CreateSandbox` and `UpdateConfig`, and the strict policies accept only one binding per configured RPC. With `exact`, the OpenShell gateway does not start. With `allowlist`, you would have to leave sandbox admission and refresh out of the allowlist, which leaves them ungoverned. Refer to [Gateway Interceptor](../integrations/openshell/gateway-interceptor.mdx#bindings) for the RPCs and phases APF declares.
 </Warning>
 
 ## Register the Supervisor Middleware
@@ -152,6 +152,6 @@ Each record carries `"outcome":"success"` with the reason codes `interceptor.pol
 
 ## Next Steps
 
-- To sign your own bundle, refer to [Your First Signed Policy](/get-started/your-first-signed-policy).
-- To walk through admission and enforcement on a real sandbox, refer to [Your First Governed Agent](/get-started/your-first-governed-agent).
-- To configure caller authentication and TLS, refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+- To sign your own bundle, refer to [Your First Signed Policy](your-first-signed-policy.mdx).
+- To walk through admission and enforcement on a real sandbox, refer to [Your First Governed Agent](your-first-governed-agent.mdx).
+- To configure caller authentication and TLS, refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx).

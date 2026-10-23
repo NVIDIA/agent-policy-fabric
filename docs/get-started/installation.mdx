@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Installation, Build from Sou
 position: 2
 ---
 
-This page builds APF from source and starts the two APF services, `apf-policy-service` and `apf-policy-gateway`, with the signed demo bundle. Choose the run mode that matches your goal. To run APF on Kubernetes with the Helm chart, refer to [Kubernetes](/deployment/kubernetes).
+This page builds APF from source and starts the two APF services, `apf-policy-service` and `apf-policy-gateway`, with the signed demo bundle. Choose the run mode that matches your goal. To run APF on Kubernetes with the Helm chart, refer to [Kubernetes](../deployment/kubernetes.mdx).
 
 | Run mode | Use it for | Security posture |
 |---|---|---|
@@ -16,7 +16,7 @@ This page builds APF from source and starts the two APF services, `apf-policy-se
 | Container stack | Local development in Docker. | Development only. Dev keys, hardened containers, and nothing published on the host. |
 | systemd services | A host that runs APF next to an OpenShell gateway. | Production-oriented. Caller authentication and TLS are required. |
 
-Make sure you meet the [Prerequisites](/get-started/prerequisites) before you start.
+Make sure you meet the [Prerequisites](prerequisites.mdx) before you start.
 
 ## Build APF
 
@@ -35,7 +35,7 @@ The binaries land in `target/release/`. The first build downloads the pinned Rus
 Both services refuse to start without an audit log directory, because they enforce policy and must record what they did. Each service reads the directory from `--audit-log-dir` or the `APF_AUDIT_LOG_DIR` environment variable and creates it if it is missing.
 
 <Note>
-The native development task, `mise run dev-native`, and the sample service configuration in the repository do not set an audit directory yet. Set `APF_AUDIT_LOG_DIR` yourself for native processes as shown below. The container stack sets the audit directory for you. Refer to [The Shipped Configurations Do Not Start](/deployment/troubleshooting#the-shipped-configurations-do-not-start).
+The native development task, `mise run dev-native`, and the sample service configuration in the repository do not set an audit directory yet. Set `APF_AUDIT_LOG_DIR` yourself for native processes as shown below. The container stack sets the audit directory for you. Refer to [The Shipped Configurations Do Not Start](../deployment/troubleshooting.mdx#the-shipped-configurations-do-not-start).
 </Note>
 
 ## Run APF
@@ -80,7 +80,7 @@ The gateway starts after the policy service is healthy because it connects to th
 The counter store in `$SOCK_DIR/counter` remembers the highest bundle revision the policy service accepted, so a restart with an older bundle is refused. To start over from the demo bundle, stop both services and delete `$APF_HOME`.
 
 <Note>
-`mise run dev-native` does not work on `main` yet. It passes `--trust-root-dir` and `--counter-store` to `apf-policy-gateway`, which no longer accepts them, and it does not set an audit directory. Refer to [The Shipped Configurations Do Not Start](/deployment/troubleshooting#the-shipped-configurations-do-not-start).
+`mise run dev-native` does not work on `main` yet. It passes `--trust-root-dir` and `--counter-store` to `apf-policy-gateway`, which no longer accepts them, and it does not set an audit directory. Refer to [The Shipped Configurations Do Not Start](../deployment/troubleshooting.mdx#the-shipped-configurations-do-not-start).
 </Note>
 
 </Tab>
@@ -114,7 +114,7 @@ docker compose -f deploy/docker/compose.yaml up -d
 </Tab>
 <Tab title="systemd services">
 
-The `deploy/systemd/` directory contains hardened units that run both services as the unprivileged `apf` account, with OpenShell caller authentication and TLS required. Follow [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+The `deploy/systemd/` directory contains hardened units that run both services as the unprivileged `apf` account, with OpenShell caller authentication and TLS required. Follow [Host and Workstation Deployment](../deployment/host-and-workstation-deployment.mdx).
 
 </Tab>
 </Tabs>
@@ -131,7 +131,7 @@ export APF_AUDIT_LOG_DIR="$APF_HOME/audit"
 export WORK="$HOME/apf-work"
 ```
 
-`WORK` holds your own copy of the bundle, created in [Your First Signed Policy](/get-started/your-first-signed-policy).
+`WORK` holds your own copy of the bundle, created in [Your First Signed Policy](your-first-signed-policy.mdx).
 
 ## Verify the Installation
 
@@ -192,8 +192,8 @@ apf-policy-gateway-audit.jsonl
 apf-policy-service-audit.jsonl
 ```
 
-The policy service file starts with a `policy_service_startup` record, a `policy_verification` record for the demo bundle, and a `policy_activation` record. Refer to [Access Audit Events](/observability/access-audit-events).
+The policy service file starts with a `policy_service_startup` record, a `policy_verification` record for the demo bundle, and a `policy_activation` record. Refer to [Access Audit Events](../observability/access-audit-events.mdx).
 
 ## Next Steps
 
-APF is running but nothing calls it yet. Continue with [Add APF to OpenShell](/get-started/add-apf-to-openshell) to register the interceptor and middleware with an OpenShell gateway.
+APF is running but nothing calls it yet. Continue with [Add APF to OpenShell](add-apf-to-openshell.mdx) to register the interceptor and middleware with an OpenShell gateway.

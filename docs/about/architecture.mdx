@@ -22,20 +22,20 @@ Policy flows one way. The **policy service** reads a signed bundle from a regist
 
 | Component | What it does |
 |---|---|
-| [Signed bundle](/manage-policy-bundles/bundle-structure) | The unit of policy: a signed manifest of YAML documents for the sandbox perimeter, approved providers, tool grants, detectors, effects, and findings. Authored and signed outside APF. |
-| [`apf-compile`](/reference/cli-commands) | The offline CLI. Compiles and signs a bundle from a manifest template, and verifies a signed bundle. It runs in the authoring and publish path, not on the host. |
-| [Policy service](/how-it-works/policy-service) | Reads the bundle from a local file or an HTTPS source, verifies its signature, member digests, validity window, and revision counter, projects it for each enforcement point, and serves the projections with a signed provenance token. It never evaluates a request and cannot author or sign policy. |
-| [Policy gateway](/how-it-works/policy-gateway) | The APF adapter that faces the runtime. Fetches the policy set, builds the evaluator, swaps in a new one when the bundle changes, and hosts the OpenShell interceptor and the OpenShell middleware. |
-| [OpenShell interceptor](/integrations/openshell/gateway-interceptor) | Runs inside the gateway at sandbox admission. Injects the projected sandbox policy, stamps provenance onto the sandbox, validates it before OpenShell admits the sandbox, pushes bundle-managed provider profiles when configured, and refuses policy and provider changes that bypass the bundle. |
-| [OpenShell middleware](/integrations/openshell/supervisor-middleware) | Runs inside the gateway on each request OpenShell routes to it, before credentials are added. Builds the evaluation input, runs the evaluator, and returns allow or deny with body patches, header changes, and findings. |
-| [Decision layer](/how-it-works/request-evaluation) | The evaluator the gateway runs in process: enrichment from providers, annotators, Cedar rules, and effects. An evaluation error is a deny. |
-| [Policy information providers](/integrations/policy-information-providers) | Processes outside APF that an operator registers with the gateway. They attest facts the request does not carry, such as whether a change is approved, and never decide. |
-| [OpenShell](/integrations/openshell) | The enforcement point integrated today. Its gateway creates sandboxes from the projected policy, and its supervisor enforces each decision on egress. Refer to [How Enforcement Points Attach](#how-enforcement-points-attach). |
-| [Audit log](/observability/access-audit-events) | One schema-validated JSONL file per component, recording verification, activation, admission, each decision, and each refused caller. |
+| [Signed bundle](../manage-policy-bundles/bundle-structure.mdx) | The unit of policy: a signed manifest of YAML documents for the sandbox perimeter, approved providers, tool grants, detectors, effects, and findings. Authored and signed outside APF. |
+| [`apf-compile`](../reference/cli-commands.mdx) | The offline CLI. Compiles and signs a bundle from a manifest template, and verifies a signed bundle. It runs in the authoring and publish path, not on the host. |
+| [Policy service](../how-it-works/policy-service.mdx) | Reads the bundle from a local file or an HTTPS source, verifies its signature, member digests, validity window, and revision counter, projects it for each enforcement point, and serves the projections with a signed provenance token. It never evaluates a request and cannot author or sign policy. |
+| [Policy gateway](../how-it-works/policy-gateway.mdx) | The APF adapter that faces the runtime. Fetches the policy set, builds the evaluator, swaps in a new one when the bundle changes, and hosts the OpenShell interceptor and the OpenShell middleware. |
+| [OpenShell interceptor](../integrations/openshell/gateway-interceptor.mdx) | Runs inside the gateway at sandbox admission. Injects the projected sandbox policy, stamps provenance onto the sandbox, validates it before OpenShell admits the sandbox, pushes bundle-managed provider profiles when configured, and refuses policy and provider changes that bypass the bundle. |
+| [OpenShell middleware](../integrations/openshell/supervisor-middleware.mdx) | Runs inside the gateway on each request OpenShell routes to it, before credentials are added. Builds the evaluation input, runs the evaluator, and returns allow or deny with body patches, header changes, and findings. |
+| [Decision layer](../how-it-works/request-evaluation.mdx) | The evaluator the gateway runs in process: enrichment from providers, annotators, Cedar rules, and effects. An evaluation error is a deny. |
+| [Policy information providers](../integrations/policy-information-providers.mdx) | Processes outside APF that an operator registers with the gateway. They attest facts the request does not carry, such as whether a change is approved, and never decide. |
+| [OpenShell](../integrations/openshell/index.mdx) | The enforcement point integrated today. Its gateway creates sandboxes from the projected policy, and its supervisor enforces each decision on egress. Refer to [How Enforcement Points Attach](#how-enforcement-points-attach). |
+| [Audit log](../observability/access-audit-events.mdx) | One schema-validated JSONL file per component, recording verification, activation, admission, each decision, and each refused caller. |
 
-In the standard policy vocabulary, the policy service is the administration point, the policy gateway is the decision point, providers are information points, and the runtime is the enforcement point. Refer to the [Glossary](/resources/glossary). Each role is held by a different party, so no component can both write policy and enforce it.
+In the standard policy vocabulary, the policy service is the administration point, the policy gateway is the decision point, providers are information points, and the runtime is the enforcement point. Refer to the [Glossary](../resources/glossary.mdx). Each role is held by a different party, so no component can both write policy and enforce it.
 
-The repository is a Rust workspace. The two services, `apf-policy-service` and `apf-policy-gateway`, are the only long-running processes; the OpenShell adapters are libraries linked into them, with the projector in the policy service and the OpenShell interceptor, OpenShell middleware, and caller authentication in the gateway. OpenShell-specific code lives in the `apf-openshell-*` crates, so a second enforcement point adds its own adapters without changing the shared libraries. Refer to [APF Adapter](/integrations/apf-adapter). Tool invocation and credential handling are outside APF.
+The repository is a Rust workspace. The two services, `apf-policy-service` and `apf-policy-gateway`, are the only long-running processes; the OpenShell adapters are libraries linked into them, with the projector in the policy service and the OpenShell interceptor, OpenShell middleware, and caller authentication in the gateway. OpenShell-specific code lives in the `apf-openshell-*` crates, so a second enforcement point adds its own adapters without changing the shared libraries. Refer to [APF Adapter](../integrations/apf-adapter.mdx). Tool invocation and credential handling are outside APF.
 
 ## Trust Boundary
 
@@ -58,11 +58,11 @@ The signing authority, the policy service, the policy gateway, and the runtime e
 4. The decision layer looks up facts from registered providers, runs annotators, evaluates the Cedar rules, and applies effects.
 5. The OpenShell middleware returns allow or deny with any edits. OpenShell rejects the request or applies the edits and forwards it. Both sides write an audit record.
 
-Refer to [The Governed Path](/about/governed-path) for each layer in detail.
+Refer to [The Governed Path](governed-path.mdx) for each layer in detail.
 
 ## Evaluation Pipeline
 
-Up to four stages run on each governed request. If providers are registered, Enrichment looks up their facts first and exposes them to rules as `context.<domain>`. Annotators then inspect the request and set named signals, Cedar rules decide from those signals and facts together with the request's subject, tool, arguments, and target, and effects apply the edits and findings an allowing rule names. An evaluation error is a deny. Refer to [Request Evaluation](/how-it-works/request-evaluation).
+Up to four stages run on each governed request. If providers are registered, Enrichment looks up their facts first and exposes them to rules as `context.<domain>`. Annotators then inspect the request and set named signals, Cedar rules decide from those signals and facts together with the request's subject, tool, arguments, and target, and effects apply the edits and findings an allowing rule names. An evaluation error is a deny. Refer to [Request Evaluation](../how-it-works/request-evaluation.mdx).
 
 ## Control Plane and Data Plane
 
@@ -87,7 +87,7 @@ Every enforcement point follows the same contract: it receives APF's policy in i
 | OpenShell | The OpenShell interceptor injects the projected sandbox policy at admission. When the gateway is configured with the OpenShell gateway's address, it also pushes bundle-managed provider profiles and, after a bundle change, asks OpenShell to refresh each running sandbox. | The OpenShell middleware, on each request OpenShell routes to it, before credentials are added. Routing is OpenShell's choice; once a request arrives, it is always evaluated. | Integrated today. |
 | A new enforcement point | A projector in the policy service lowers the bundle into its native form. | An adapter in the policy gateway serves its hooks. | Extension point available. No second enforcement point ships. |
 
-**OpenShell owns** the sandbox lifecycle, the network namespace, extension registration, trusted service CAs, credential injection, and authenticating itself to APF. **APF owns** which policy applies, whether a request is permitted, which edits apply, and the trust anchor it uses to authenticate OpenShell as a caller. Refer to [OpenShell Integration](/integrations/openshell).
+**OpenShell owns** the sandbox lifecycle, the network namespace, extension registration, trusted service CAs, credential injection, and authenticating itself to APF. **APF owns** which policy applies, whether a request is permitted, which edits apply, and the trust anchor it uses to authenticate OpenShell as a caller. Refer to [OpenShell Integration](../integrations/openshell/index.mdx).
 
 ## How Components Authenticate
 
@@ -103,15 +103,15 @@ Each connection has its own credential, and the three trust anchors are separate
 | Operators to the policy service | Health probes, the gateway's key fetch, and operators use the HTTP surface. | Off by default. When enabled, health routes are open and the document and refresh routes require a bearer token. |
 | Anyone to a provenance token | A sandbox's token is verified against the policy service's published key set. | EdDSA signature. The key set is served over the HTTP surface. |
 
-The gateway checks the trust profile, certificate, and key files before a listener reports ready, and refuses a listener with a partial set. For local research only, a listener can opt out of TLS and caller authentication with an explicit flag. Refer to [Configure Service Authentication](/deployment/configure-service-authentication), [Trust Boundaries](/security/trust-boundaries), and [Service APIs](/reference/service-apis).
+The gateway checks the trust profile, certificate, and key files before a listener reports ready, and refuses a listener with a partial set. For local research only, a listener can opt out of TLS and caller authentication with an explicit flag. Refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx), [Trust Boundaries](../security/trust-boundaries.mdx), and [Service APIs](../reference/service-apis.mdx).
 
 ## Working With Your Existing Infrastructure
 
-APF does not prescribe the systems around it. Bring your own signing authority: the policy service accepts Ed25519 and ECDSA P-256 trust roots. Keep bundles where you keep other artifacts: a local file or any HTTPS source the service can poll. Register the systems of record you already run as providers, so rules read facts from them without code changes. Ship the audit files with your own log collector. A new runtime attaches through an adapter pair and leaves the policy model unchanged. Refer to [External Policy Authorities](/integrations/external-policy-authorities), [Policy Information Providers](/integrations/policy-information-providers), [Export Audit Events](/observability/export-audit-events), and [APF Adapter](/integrations/apf-adapter).
+APF does not prescribe the systems around it. Bring your own signing authority: the policy service accepts Ed25519 and ECDSA P-256 trust roots. Keep bundles where you keep other artifacts: a local file or any HTTPS source the service can poll. Register the systems of record you already run as providers, so rules read facts from them without code changes. Ship the audit files with your own log collector. A new runtime attaches through an adapter pair and leaves the policy model unchanged. Refer to [External Policy Authorities](../integrations/external-policy-authorities.mdx), [Policy Information Providers](../integrations/policy-information-providers.mdx), [Export Audit Events](../observability/export-audit-events.mdx), and [APF Adapter](../integrations/apf-adapter.mdx).
 
 ## Next Steps
 
-- To follow one action across both seams, refer to [The Governed Path](/about/governed-path).
-- To see how the services are deployed today, refer to [Deployment Models](/deployment/deployment-models).
-- To review what each boundary protects, refer to [Trust Boundaries](/security/trust-boundaries).
-- To check which capabilities are available today, refer to [Support and Compatibility](/about/support-and-compatibility).
+- To follow one action across both seams, refer to [The Governed Path](governed-path.mdx).
+- To see how the services are deployed today, refer to [Deployment Models](../deployment/deployment-models.mdx).
+- To review what each boundary protects, refer to [Trust Boundaries](../security/trust-boundaries.mdx).
+- To check which capabilities are available today, refer to [Support and Compatibility](support-and-compatibility.mdx).

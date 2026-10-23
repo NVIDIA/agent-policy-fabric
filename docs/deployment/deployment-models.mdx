@@ -43,10 +43,10 @@ This is the supported topology in this release. The gateway fetches documents fr
 
 | Option | Status | Use it for | Reference |
 |---|---|---|---|
-| systemd services on a Linux host | Available | Workstations and hosts that run OpenShell natively. | [Host and Workstation Deployment](/deployment/host-and-workstation-deployment) |
+| systemd services on a Linux host | Available | Workstations and hosts that run OpenShell natively. | [Host and Workstation Deployment](host-and-workstation-deployment.mdx) |
 | Container images | Available | Building your own container deployment. Each Dockerfile has a minimal `runtime` target. | `deploy/docker/apf-policy-service/Dockerfile`, `deploy/docker/apf-policy-gateway/Dockerfile` |
-| Local container stack | Development only | Local development with Docker Compose. | [Installation](/get-started/installation) |
-| Kubernetes | Limited | Cluster deployments with the Helm chart at `deploy/helm/apf`. You build and load the images yourself. | [Kubernetes](/deployment/kubernetes) |
+| Local container stack | Development only | Local development with Docker Compose. | [Installation](../get-started/installation.mdx) |
+| Kubernetes | Limited | Cluster deployments with the Helm chart at `deploy/helm/apf`. You build and load the images yourself. | [Kubernetes](kubernetes.mdx) |
 
 The policy service image also has a `demo` target that adds `apf-compile` for signing bundles inside the container.
 
@@ -63,5 +63,5 @@ The policy service is yours to run, and in this release it runs beside each gate
 
 ## Next Steps
 
-- To install on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
-- To review the boundaries in this topology, refer to [Trust Boundaries](/security/trust-boundaries).
+- To install on a host, refer to [Host and Workstation Deployment](host-and-workstation-deployment.mdx).
+- To review the boundaries in this topology, refer to [Trust Boundaries](../security/trust-boundaries.mdx).

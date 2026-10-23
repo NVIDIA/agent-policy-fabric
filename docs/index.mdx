@@ -11,25 +11,25 @@ position: 1
 NVIDIA Agent Policy Fabric (APF) lets your organization decide what its AI agents may do, once, and have every sandbox follow it. Security and compliance teams write and sign policy, and APF verifies it, hands it to the agent runtime, and records which policy allowed or blocked each action.
 
 <Note>
-APF is under active development and these pages document the `main` branch of the [APF repository](/resources/repositories). Pages and sections marked **In Development** describe planned capabilities that are not yet in the repository. Refer to [Support and Compatibility](/about/support-and-compatibility) for the status of every capability.
+APF is under active development and these pages document the `main` branch of the [APF repository](resources/repositories.mdx). Pages and sections marked **In Development** describe planned capabilities that are not yet in the repository. Refer to [Support and Compatibility](about/support-and-compatibility.mdx) for the status of every capability.
 </Note>
 
 ## Skip Ahead
 
-- [Install APF](/get-started/installation) from source and start the policy service and policy gateway.
-- [Add APF to OpenShell](/get-started/add-apf-to-openshell) so every sandbox is admitted under signed policy and every outbound request is checked against it.
-- [Run your first governed agent](/get-started/your-first-governed-agent) and find the audit evidence for its requests.
-- [Sign your first policy](/get-started/your-first-signed-policy) and load it into the policy service.
-- [Troubleshoot a deployment](/deployment/troubleshooting) when a service does not start or a request is denied unexpectedly.
+- [Install APF](get-started/installation.mdx) from source and start the policy service and policy gateway.
+- [Add APF to OpenShell](get-started/add-apf-to-openshell.mdx) so every sandbox is admitted under signed policy and every outbound request is checked against it.
+- [Run your first governed agent](get-started/your-first-governed-agent.mdx) and find the audit evidence for its requests.
+- [Sign your first policy](get-started/your-first-signed-policy.mdx) and load it into the policy service.
+- [Troubleshoot a deployment](deployment/troubleshooting.mdx) when a service does not start or a request is denied unexpectedly.
 
 ## Use Cases
 
-- **Let a coding agent read code without letting it write.** Allow repository reads and approved inference endpoints, and deny everything else. Refer to [Govern a Coding Agent](/tutorials/govern-a-coding-agent).
-- **Keep credentials and personal data inside the sandbox.** Detect secrets and personal data in outbound requests, then deny or redact them. Refer to [Protect Sensitive Data](/tutorials/protect-sensitive-data).
-- **Change agent policy without touching each host.** Edit a document, re-sign the bundle, and reload it, and every governed runtime picks up the new revision. Refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
-- **Refuse policy that someone tampered with.** Any change to a signed bundle causes APF to reject it. Refer to [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+- **Let a coding agent read code without letting it write.** Allow repository reads and approved inference endpoints, and deny everything else. Refer to [Govern a Coding Agent](tutorials/govern-a-coding-agent.mdx).
+- **Keep credentials and personal data inside the sandbox.** Detect secrets and personal data in outbound requests, then deny or redact them. Refer to [Protect Sensitive Data](tutorials/protect-sensitive-data.mdx).
+- **Change agent policy without touching each host.** Edit a document, re-sign the bundle, and reload it, and every governed runtime picks up the new revision. Refer to [Update a Signed Policy](tutorials/update-a-signed-policy.mdx).
+- **Refuse policy that someone tampered with.** Any change to a signed bundle causes APF to reject it. Refer to [Reject a Tampered Bundle](tutorials/reject-a-tampered-bundle.mdx).
 
-Refer to [Use Cases](/about/use-cases) for more scenarios and the controls each one uses.
+Refer to [Use Cases](about/use-cases.mdx) for more scenarios and the controls each one uses.
 
 ## Core Concepts
 
@@ -37,12 +37,12 @@ Refer to [Use Cases](/about/use-cases) for more scenarios and the controls each 
 - **Policy is signed outside the runtime.** Teams author and sign bundles offline. The services that read and enforce a bundle cannot change it.
 - **Every decision is traceable.** Each sandbox carries the identity of the bundle it was admitted under, and each decision is recorded with the revision of the policy that made it.
 
-Refer to [Why APF](/about/why-apf), [Architecture](/about/architecture), and [The Governed Path](/about/governed-path) for the full model.
+Refer to [Why APF](about/why-apf.mdx), [Architecture](about/architecture.mdx), and [The Governed Path](about/governed-path.mdx) for the full model.
 
 ## Learn More
 
-- [Support and Compatibility](/about/support-and-compatibility): what is available today and what is in development.
-- [Release Notes](/releases/release-notes) and [Troubleshooting](/deployment/troubleshooting).
-- [Reference](/reference/policy-schemas): policy schemas, the bundle format, CLI commands, and service APIs.
-- [Repositories](/resources/repositories) and [Contributing](/resources/contributing).
+- [Support and Compatibility](about/support-and-compatibility.mdx): what is available today and what is in development.
+- [Release Notes](releases/release-notes.mdx) and [Troubleshooting](deployment/troubleshooting.mdx).
+- [Reference](reference/policy-schemas.mdx): policy schemas, the bundle format, CLI commands, and service APIs.
+- [Repositories](resources/repositories.mdx) and [Contributing](resources/contributing.mdx).
 - [NVIDIA OpenShell documentation](https://docs.nvidia.com/openshell/latest/about/overview) (external): the agent runtime APF integrates with.

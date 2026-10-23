@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Use Cases, Coding Agents, Se
 position: 4
 ---
 
-APF is built for scenarios where an organization, not the person running the agent, decides what the agent may reach, which tool calls it may make, and what content may leave the sandbox. This page introduces representative scenarios. Each one links to a walkthrough in [Tutorials](/tutorials) that covers setup, policy configuration, expected behavior, and audit verification.
+APF is built for scenarios where an organization, not the person running the agent, decides what the agent may reach, which tool calls it may make, and what content may leave the sandbox. This page introduces representative scenarios. Each one links to a walkthrough in [Tutorials](../tutorials/index.mdx) that covers setup, policy configuration, expected behavior, and audit verification.
 
 ## Who Uses APF
 
@@ -27,11 +27,11 @@ APF separates who writes policy, who distributes it, and who enforces it.
 
 | Scenario | Governance goal | APF controls | Walkthrough |
 |---|---|---|---|
-| Governed coding agents | A coding agent can read repositories and call approved inference endpoints, but cannot write to source control or reach anything else. | `SandboxPolicy` egress allowlist with a read-only GitHub endpoint, `Provider` profiles, a capability grant for read tools. | [Govern a Coding Agent](/tutorials/govern-a-coding-agent) |
-| Sensitive-data workflows | Credentials never leave the sandbox, and personal data is withheld from outbound requests. | Secret and PII annotators, a control rule that denies or redacts, redaction effects, and a critical finding. | [Protect Sensitive Data](/tutorials/protect-sensitive-data) |
+| Governed coding agents | A coding agent can read repositories and call approved inference endpoints, but cannot write to source control or reach anything else. | `SandboxPolicy` egress allowlist with a read-only GitHub endpoint, `Provider` profiles, a capability grant for read tools. | [Govern a Coding Agent](../tutorials/govern-a-coding-agent.mdx) |
+| Sensitive-data workflows | Credentials never leave the sandbox, and personal data is withheld from outbound requests. | Secret and PII annotators, a control rule that denies or redacts, redaction effects, and a critical finding. | [Protect Sensitive Data](../tutorials/protect-sensitive-data.mdx) |
 | Approved-channel posting | An agent can post messages only to an approved channel and only within a length limit. | A data-driven capability grant on the posting tool. | [Approved-Channel Posting](#approved-channel-posting) |
-| Research agents | A research agent can read internal sources but can never write, send, or publish. | Read-only access presets in the sandbox policy and grants that permit only read tools. | [Sandbox Policies](/author-policies/sandbox-policies) and [Capability Grants](/author-policies/capability-grants) |
-| Enterprise automation | An automated workflow acts on a system only while an approved change request covers it. | Capability grants that read a change request's approval state from a policy information provider. | [Policy Information Providers](/integrations/policy-information-providers) |
+| Research agents | A research agent can read internal sources but can never write, send, or publish. | Read-only access presets in the sandbox policy and grants that permit only read tools. | [Sandbox Policies](../author-policies/sandbox-policies.mdx) and [Capability Grants](../author-policies/capability-grants.mdx) |
+| Enterprise automation | An automated workflow acts on a system only while an approved change request covers it. | Capability grants that read a change request's approval state from a policy information provider. | [Policy Information Providers](../integrations/policy-information-providers.mdx) |
 
 ## Governed Coding Agents
 
@@ -58,8 +58,8 @@ The `slack-grants` rule in the demo bundle permits the `slack_chat_post` tool on
 
 Two scenarios apply to every deployment, regardless of agent type.
 
-- **Change policy safely.** Edit a document, increase `policy_revision`, re-sign, and reload the policy service with `POST /v1/refresh`, a restart, or the HTTP source's next poll. The gateway then swaps its evaluator. Refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
-- **Refuse tampered policy.** Any change to a signed member, the manifest, or the signature causes the whole bundle to be rejected. Refer to [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+- **Change policy safely.** Edit a document, increase `policy_revision`, re-sign, and reload the policy service with `POST /v1/refresh`, a restart, or the HTTP source's next poll. The gateway then swaps its evaluator. Refer to [Update a Signed Policy](../tutorials/update-a-signed-policy.mdx).
+- **Refuse tampered policy.** Any change to a signed member, the manifest, or the signature causes the whole bundle to be rejected. Refer to [Reject a Tampered Bundle](../tutorials/reject-a-tampered-bundle.mdx).
 
 ## Common Risks and Controls
 
@@ -76,5 +76,5 @@ Each row is a way an agent can go wrong and the control that answers it. Every r
 
 ## Next Steps
 
-- To see where each control runs, refer to [The Governed Path](/about/governed-path).
-- To write your own rules, refer to [Policy Model](/author-policies/policy-model).
+- To see where each control runs, refer to [The Governed Path](governed-path.mdx).
+- To write your own rules, refer to [Policy Model](../author-policies/policy-model.mdx).

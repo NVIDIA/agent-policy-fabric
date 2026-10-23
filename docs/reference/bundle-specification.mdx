@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Policy Bundle, Specification
 position: 2
 ---
 
-This page specifies the `PolicyBundle` format version `v1alpha1` as implemented on the `main` branch. For a guided introduction, refer to [Bundle Structure](/manage-policy-bundles/bundle-structure).
+This page specifies the `PolicyBundle` format version `v1alpha1` as implemented on the `main` branch. For a guided introduction, refer to [Bundle Structure](../manage-policy-bundles/bundle-structure.mdx).
 
 ## Artifact
 
@@ -68,7 +68,7 @@ A verifier loads every file in its trust-root directory with one of these extens
 
 ## Member Files
 
-A member file is a YAML document whose `kind` decides how it is used. Refer to [Policy Schemas](/reference/policy-schemas). A member may itself carry a yaml-sigil signature. APF then uses the member's payload, but it does not verify the member's signature against a trust root. The bundle signature, through the manifest digest of the member's raw bytes, is what protects it.
+A member file is a YAML document whose `kind` decides how it is used. Refer to [Policy Schemas](policy-schemas.mdx). A member may itself carry a yaml-sigil signature. APF then uses the member's payload, but it does not verify the member's signature against a trust root. The bundle signature, through the manifest digest of the member's raw bytes, is what protects it.
 
 ## Verification Order
 
@@ -83,7 +83,7 @@ A verifier processes a bundle in this order.
 
 Steps 3 to 6 all run, and every failure is reported, except that an unparseable `not_before` or `expires_at` skips the rest of step 4. The bundle is accepted only if none fails. The policy service then loads and compiles the members, and persists the revision only if compilation succeeds.
 
-For the format of each reason, refer to [Bundle Rejection Reasons](/reference/error-reference#bundle-rejection-reasons).
+For the format of each reason, refer to [Bundle Rejection Reasons](error-reference.mdx#bundle-rejection-reasons).
 
 ## Revision Rules
 
@@ -99,7 +99,7 @@ The counter store holds a high-water mark, the highest accepted `policy_revision
 
 The payload digest is the SHA-256 of the verified manifest payload, without the signature document. Re-signing identical content therefore does not change it.
 
-One counter store serves one policy service, whatever the bundle `id`. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+One counter store serves one policy service, whatever the bundle `id`. Refer to [Expiry and Rollback Protection](../manage-policy-bundles/expiry-and-rollback-protection.mdx).
 
 ## Runtime Compatibility
 
@@ -141,5 +141,5 @@ Member paths resolve relative to the chosen manifest.
 
 ## Next Steps
 
-- To produce a conforming bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
-- To see the checks in action, follow [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+- To produce a conforming bundle, refer to [Compile and Sign](../manage-policy-bundles/compile-and-sign.mdx).
+- To see the checks in action, follow [Reject a Tampered Bundle](../tutorials/reject-a-tampered-bundle.mdx).

@@ -22,7 +22,7 @@ Document what the repository's `main` branch does, and nothing else.
 
 The repository's address appears in two places: the link at the top of `resources/repositories.mdx` and the `git clone` command on `get-started/installation.mdx`. When the repository moves, change both.
 
-- Link to the repository from other pages with the relative docs path `/resources/repositories`.
+- Link to the repository from other pages through `resources/repositories.mdx`, with a relative path such as `../resources/repositories.mdx`.
 - Clone into an explicit directory, `git clone <address> apf`, so later commands do not depend on the repository's name.
 - Do not write the repository's address anywhere else, including in examples.
 
@@ -98,7 +98,8 @@ position: 1
 - Set each `page:` label in `docs/index.yml` to the page's `sidebar-title`, or its `title` when it has none.
 - When Fern would not derive the file name from the label, set a relative `slug:` on the entry. For example, `The Governed Path` needs `slug: governed-path`.
 - Rename the file when you rename a page.
-- Link between pages with root-relative paths such as `/manage-policy-bundles/update-policies`, and to sections with the heading's anchor, such as `#bundle-rejection-reasons`.
+- Link between pages with the relative path to the target's `.mdx` file, such as `../manage-policy-bundles/update-policies.mdx`, or `update-policies.mdx` from a page in the same folder. Link to a section by adding the heading's anchor, such as `../reference/error-reference.mdx#bundle-rejection-reasons`, or use the anchor alone for a section on the same page. GitHub follows the file path, and Fern rewrites the link to the page's URL when it builds the site, so the link works in both.
+- Do not link with a site path such as `/manage-policy-bundles/update-policies`, which works only in Fern, or leave off `.mdx`, which Fern does not rewrite. `mise run docs` rejects both, and rejects links to files outside `docs/`. Name those files in code formatting instead.
 
 ### Page Structure
 

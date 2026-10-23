@@ -59,11 +59,11 @@ The bundle schema describes the manifest and requires each `sha256` to be 64 hex
 
 Drop `--verify-only` to also load and parse every member. The command prints the surfaces it produced. It does not register the OpenShell projector, so the sandbox policy projection is not included in its output.
 
-Because the counter store is temporary, this command cannot tell you whether the revision is higher than the one a running policy service accepted. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+Because the counter store is temporary, this command cannot tell you whether the revision is higher than the one a running policy service accepted. Refer to [Expiry and Rollback Protection](../manage-policy-bundles/expiry-and-rollback-protection.mdx).
 
 ## Build the Evaluator Locally
 
-Run a local policy service and policy gateway on the bundle, as described in [Installation](/get-started/installation). Point `--bundle-path` and `--trust-root-dir` at your bundle and trust roots, and use a fresh `--counter-store`.
+Run a local policy service and policy gateway on the bundle, as described in [Installation](../get-started/installation.mdx). Point `--bundle-path` and `--trust-root-dir` at your bundle and trust roots, and use a fresh `--counter-store`.
 
 If any rule, annotator, effect, or finding fails to compile, the gateway refuses to start and names the problem, for example:
 
@@ -109,7 +109,7 @@ The caller must run as the UID the gateway's `--allowed-uid` allows, which defau
 
 ### With a Sandbox
 
-To exercise the full Layer 2 path, including annotators, content controls, and effects, send requests from inside a governed sandbox. APF identifies MCP tool calls from the JSON-RPC body, so you can test tool grants with a `tools/call` envelope sent to any host the sandbox policy routes to APF's middleware. Refer to [Your First Governed Agent](/get-started/your-first-governed-agent) for examples, and read the decisions in the middleware audit file.
+To exercise the full Layer 2 path, including annotators, content controls, and effects, send requests from inside a governed sandbox. APF identifies MCP tool calls from the JSON-RPC body, so you can test tool grants with a `tools/call` envelope sent to any host the sandbox policy routes to APF's middleware. Refer to [Your First Governed Agent](../get-started/your-first-governed-agent.mdx) for examples, and read the decisions in the middleware audit file.
 
 ### With Rust Tests
 
@@ -117,5 +117,5 @@ The evaluator is the `apf_policy_eval::CedarEvaluator` type, built from rule, an
 
 ## Next Steps
 
-- To sign the validated bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
-- To understand each rejection, refer to [Error Reference](/reference/error-reference).
+- To sign the validated bundle, refer to [Compile and Sign](../manage-policy-bundles/compile-and-sign.mdx).
+- To understand each rejection, refer to [Error Reference](../reference/error-reference.mdx).

@@ -36,15 +36,15 @@ APF has not published a tagged release. Every workspace crate is at version `0.1
 
 - Hardened systemd units with a polkit rule, under `deploy/systemd/`.
 - Dockerfiles and a Docker Compose development stack (`compose.yaml`), under `deploy/docker/`.
-- A Helm chart for Kubernetes, under `deploy/helm/apf/`. You build and load the images yourself. Refer to [Kubernetes](/deployment/kubernetes).
+- A Helm chart for Kubernetes, under `deploy/helm/apf/`. You build and load the images yourself. Refer to [Kubernetes](../deployment/kubernetes.mdx).
 - A verification harness under `e2e/` that runs the Compose stack and the Helm chart against a real OpenShell gateway.
 - CI that builds release binaries of both services with SHA-256 checksums and third-party license notices.
 
 ## Not Yet Available
 
-The capabilities marked **In Development** in this documentation, a metrics endpoint and a delegation model, are not on `main`. Published container images and a published Helm chart, a shared policy service, and a verified user identity on the OpenShell request path are not in the repository either. Refer to [Support and Compatibility](/about/support-and-compatibility#capability-matrix).
+The capabilities marked **In Development** in this documentation, a metrics endpoint and a delegation model, are not on `main`. Published container images and a published Helm chart, a shared policy service, and a verified user identity on the OpenShell request path are not in the repository either. Refer to [Support and Compatibility](../about/support-and-compatibility.mdx#capability-matrix).
 
 ## Next Steps
 
-- If something does not work as expected, refer to [Troubleshooting](/deployment/troubleshooting).
-- To move between builds, refer to [Upgrade Guides](/releases/upgrade-guides).
+- If something does not work as expected, refer to [Troubleshooting](../deployment/troubleshooting.mdx).
+- To move between builds, refer to [Upgrade Guides](upgrade-guides.mdx).

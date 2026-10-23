@@ -24,7 +24,7 @@ APF does not ship a collector configuration in this release.
 
 ## Treat the Schema as the Contract
 
-`contracts/audit/apf.audit.event.v1.schema.json` is authoritative for the record shape. Validate records against it in your pipeline if you need to detect malformed input. Refer to [Audit Event Schema](/reference/audit-event-schema).
+`contracts/audit/apf.audit.event.v1.schema.json` is authoritative for the record shape. Validate records against it in your pipeline if you need to detect malformed input. Refer to [Audit Event Schema](../reference/audit-event-schema.mdx).
 
 APF's records are not OCSF. OpenShell can export its own events as OCSF JSON, and APF's records join them through correlation IDs. An OCSF mapping for APF records is not in the repository.
 
@@ -42,7 +42,7 @@ APF's records are designed to be safe to ship:
 
 - APF never sees the provider credentials OpenShell injects. Request bodies can contain secrets an agent put there, but records never include bodies, and every string is scanned for credential-like values before it is written.
 - Effects are recorded by path and header name, never by the patched or written value.
-- Every string is scanned for credential-shaped content before writing. A record that trips the scan is replaced by a reduced record where the producer has one, and is otherwise not written. Refer to [Degraded Records](/reference/audit-event-schema#degraded-records).
+- Every string is scanned for credential-shaped content before writing. A record that trips the scan is replaced by a reduced record where the producer has one, and is otherwise not written. Refer to [Degraded Records](../reference/audit-event-schema.mdx#degraded-records).
 - Caller-supplied strings are length-capped and coerced to their schema patterns.
 
 Records can contain host names, tool names, sandbox IDs and names, user subjects, agent types, and policy deny reasons. Classify your audit store accordingly.
@@ -57,5 +57,5 @@ Records are not signed or hash-chained in this release, so a local file is not t
 
 ## Next Steps
 
-- To monitor the services themselves, refer to [Monitor Policy and Service Health](/observability/monitor-policy-and-service-health).
-- To query records locally, refer to [Access Audit Events](/observability/access-audit-events).
+- To monitor the services themselves, refer to [Monitor Policy and Service Health](monitor-policy-and-service-health.mdx).
+- To query records locally, refer to [Access Audit Events](access-audit-events.mdx).

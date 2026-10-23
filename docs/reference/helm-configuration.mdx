@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Helm, Kubernetes, Values, Co
 position: 6
 ---
 
-The chart at `deploy/helm/apf` documents every value in its `values.yaml`; this page is the map of its top-level groups. The chart's `README.md` carries the install and operations narrative, and [Kubernetes](/deployment/kubernetes) the topology and install order. Install the chart from the repository checkout, or package it and push it to a registry you control as the README describes.
+The chart at `deploy/helm/apf` documents every value in its `values.yaml`; this page is the map of its top-level groups. The chart's `README.md` carries the install and operations narrative, and [Kubernetes](../deployment/kubernetes.mdx) the topology and install order. Install the chart from the repository checkout, or package it and push it to a registry you control as the README describes.
 
 Run `helm show values deploy/helm/apf` for the annotated defaults. Each key carries a one-line comment, and keys that name a Secret or ConfigMap created outside the chart are marked `(prerequisite)`. `values.schema.json` rejects unknown keys, wrong types, out-of-range ports and counters, and malformed image digests, so a misspelled value fails `helm lint` instead of being ignored.
 
@@ -37,6 +37,6 @@ Beyond the schema, the templates fail when the sandbox admission port equals the
 
 ## Related Pages
 
-- [Kubernetes](/deployment/kubernetes)
-- [CLI Commands](/reference/cli-commands)
-- [Configure Service Authentication](/deployment/configure-service-authentication)
+- [Kubernetes](../deployment/kubernetes.mdx)
+- [CLI Commands](cli-commands.mdx)
+- [Configure Service Authentication](../deployment/configure-service-authentication.mdx)

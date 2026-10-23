@@ -10,7 +10,7 @@ position: 4
 
 An APF adapter connects APF to one enforcement point. It has two halves. A projector in the policy service lowers the signed bundle into the enforcement point's native policy, and hooks in the policy gateway serve the enforcement point's extension points: delivering the projection at admission, and returning a decision for each request routed to APF. Everything between those halves, from bundle verification to evaluation and audit, is shared. A new enforcement point adds an adapter, and nothing else changes.
 
-One adapter ships today, for OpenShell, which is why the architecture diagram labels the policy gateway as the APF adapter. Its projector is `apf-openshell-projector`. Its hooks are the OpenShell interceptor, `apf-openshell-interceptor`, and the OpenShell middleware, `apf-openshell-middleware`, with caller authentication in `apf-openshell-auth`. Refer to [OpenShell Integration](/integrations/openshell).
+One adapter ships today, for OpenShell, which is why the architecture diagram labels the policy gateway as the APF adapter. Its projector is `apf-openshell-projector`. Its hooks are the OpenShell interceptor, `apf-openshell-interceptor`, and the OpenShell middleware, `apf-openshell-middleware`, with caller authentication in `apf-openshell-auth`. Refer to [OpenShell Integration](openshell/index.mdx).
 
 | Half | Plane | Where it runs | OpenShell adapter |
 |---|---|---|---|
@@ -89,6 +89,6 @@ The extension point is available. The OpenShell adapter is the only one in the r
 
 ## Next Steps
 
-- For the trait and wire contracts, refer to [Adapter Contracts](/reference/adapter-contracts).
-- To see the one adapter that ships, refer to [OpenShell Integration](/integrations/openshell).
-- To see how an adapter fits the whole system, refer to [Architecture](/about/architecture#how-enforcement-points-attach).
+- For the trait and wire contracts, refer to [Adapter Contracts](../reference/adapter-contracts.mdx).
+- To see the one adapter that ships, refer to [OpenShell Integration](openshell/index.mdx).
+- To see how an adapter fits the whole system, refer to [Architecture](../about/architecture.mdx#how-enforcement-points-attach).

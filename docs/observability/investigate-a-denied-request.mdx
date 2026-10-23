@@ -62,7 +62,7 @@ The `reason_code` and `error.message` say which part of the pipeline denied the 
 | `middleware.policy_denied` | `no grant for <action>` | No capability rule permitted the tool call. | Every `role: capability` rule's action names. |
 | `middleware.policy_denied` | `runtime_error:missing_annotation_source:<path>` | An effect or finding read an annotation the request did not produce. | The effect or finding that reads `<path>`, and the annotator that should produce it. |
 | `middleware.effect_application_failed` | | A body patch could not be applied. | The effects that fired, and the request body. |
-| Another `middleware.*` code | | The adapter refused the request before or after policy. | [Supervisor Middleware](/integrations/openshell/supervisor-middleware#deny-reason-codes) |
+| Another `middleware.*` code | | The adapter refused the request before or after policy. | [Supervisor Middleware](../integrations/openshell/supervisor-middleware.mdx#deny-reason-codes) |
 
 Here the reason is `no grant for github_repo_write`. No capability rule permitted the action `APF::Action::"github_repo_write"`.
 
@@ -104,12 +104,12 @@ The reason reads `no grant` rather than `github-grants: conditions not met` beca
 ## Decide on a Fix
 
 - **The denial is intended.** No change. Point the requester at the policy owner.
-- **The tool should be allowed.** The tool owner adds a permit to `github-grants`, for example with argument constraints, and the bundle is signed with a higher revision and published. Refer to [Update Policies](/manage-policy-bundles/update-policies).
+- **The tool should be allowed.** The tool owner adds a permit to `github-grants`, for example with argument constraints, and the bundle is signed with a higher revision and published. Refer to [Update Policies](../manage-policy-bundles/update-policies.mdx).
 - **The rule is wrong for everyone.** Fix it the same way, and check other records with the same `reason_code` and `error.message` to see who else it affected.
 
 </Steps>
 
 ## Next Steps
 
-- To understand every field you used, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
-- To write clearer deny reasons, give every statement an `@id`. Refer to [Capability Grants](/author-policies/capability-grants#deny-reasons).
+- To understand every field you used, refer to [Understand Decisions and Findings](understand-decisions-and-findings.mdx).
+- To write clearer deny reasons, give every statement an `@id`. Refer to [Capability Grants](../author-policies/capability-grants.mdx#deny-reasons).

@@ -18,15 +18,17 @@ npx --yes "fern-api@${FERN_VERSION}" check
 """
 
 ["docs:nav"]
-description = "Check that docs page URLs match their file paths"
+description = "Check that docs page URLs match their file paths and page links point to .mdx files"
 run = "uv run scripts/check_docs_nav.py"
 
 ["docs:serve"]
 description = "Serve the Fern docs locally"
 depends = ["docs:deps"]
+# --legacy: the default preview server in the pinned Fern CLI fails every page
+# with "Something went wrong!" (HTTP 500). The legacy server renders them.
 run = """
 FERN_VERSION=$(node -p "require('./fern/fern.config.json').version")
-npx --yes "fern-api@${FERN_VERSION}" docs dev
+npx --yes "fern-api@${FERN_VERSION}" docs dev --legacy
 """
 
 ["docs:clean"]

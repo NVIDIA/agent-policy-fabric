@@ -77,7 +77,7 @@ The shipped `apf-policy-service.service` restricts the service to Unix sockets. 
 3. In `/etc/apf/policy-service.env`, set `APF_POLICY_SOURCE=http`, `APF_BUNDLE_SOURCE_URL`, and `APF_BUNDLE_SOURCE_TOKEN_FILE=/run/credentials/apf-policy-service.service/bundle-source-token`.
 4. Set the poll interval with `APF_BUNDLE_SOURCE_POLL_INTERVAL`. The commented example in the shipped env file uses a different name, `APF_BUNDLE_SOURCE_POLL_INTERVAL_SECS`, which the service does not read.
 
-Refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
+Refer to [Host and Workstation Deployment](../deployment/host-and-workstation-deployment.mdx).
 
 ## Per-Caller Bundle Variants
 
@@ -98,9 +98,9 @@ Per-caller variants do not work end to end in this release. With a `{variant}` U
 
 ## How Updates Propagate
 
-Each policy service fetches and verifies independently, and each policy gateway polls its own policy service. A newly published bundle therefore reaches each host within one poll interval of the policy service plus one refresh interval of the gateway, 10 seconds by default, with no restart and no software deployment. Refer to [Update Policies](/manage-policy-bundles/update-policies).
+Each policy service fetches and verifies independently, and each policy gateway polls its own policy service. A newly published bundle therefore reaches each host within one poll interval of the policy service plus one refresh interval of the gateway, 10 seconds by default, with no restart and no software deployment. Refer to [Update Policies](update-policies.mdx).
 
 ## Next Steps
 
-- To see what the policy service checks before it activates a bundle, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).
-- To plan a policy service shared by many hosts, refer to [Deployment Models](/deployment/deployment-models).
+- To see what the policy service checks before it activates a bundle, refer to [Verify and Activate](verify-and-activate.mdx).
+- To plan a policy service shared by many hosts, refer to [Deployment Models](../deployment/deployment-models.mdx).

@@ -38,7 +38,7 @@ spec:
     };
 ```
 
-The Cedar statement decides. `text_len` is derived by APF from the `text` argument's length. The demo bundle's copy of this rule reads `textLen` instead, which only a caller can supply. The `data` block holds the values an operator tunes, so changing the approved channel is a data change, not a logic change. The `role: capability` marks the rule as a grant for a tool. Any `role` other than exactly `control`, including a misspelling or `Control`, also makes the rule a grant, so validate rules against the [JSON Schemas](/reference/policy-schemas).
+The Cedar statement decides. `text_len` is derived by APF from the `text` argument's length. The demo bundle's copy of this rule reads `textLen` instead, which only a caller can supply. The `data` block holds the values an operator tunes, so changing the approved channel is a data change, not a logic change. The `role: capability` marks the rule as a grant for a tool. Any `role` other than exactly `control`, including a misspelling or `Control`, also makes the rule a grant, so validate rules against the [JSON Schemas](../reference/policy-schemas.mdx).
 
 ## Three Control Families
 
@@ -59,9 +59,9 @@ The Cedar statement decides. `text_len` is derived by APF from the `text` argume
 | `PolicyEffect` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Enforcement: rewrite the body, set headers, raise the verdict. | Stage 4, when a permit that references it fires. | Security or compliance. |
 | `PolicyFinding` | `nvidia.agent-policy-fabric.policy/v1alpha1` | Observability: a named audit signal. | Alongside any decision that references it. | Security or compliance. |
 
-A bundle may also carry OpenShell-native provider profiles. Refer to [Sandbox Policies](/author-policies/sandbox-policies#providers).
+A bundle may also carry OpenShell-native provider profiles. Refer to [Sandbox Policies](sandbox-policies.mdx#providers).
 
-Policy information providers are not documents. They are registered with the gateway, and their facts reach rules through the context in Stage 1. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+Policy information providers are not documents. They are registered with the gateway, and their facts reach rules through the context in Stage 1. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx).
 
 Every document shares the same envelope. `metadata.name` is required and identifies the document within its kind. `metadata.title`, `metadata.description`, and `metadata.version` are optional. The authoring schemas reject `metadata.namespace`.
 
@@ -85,7 +85,7 @@ Cedar evaluates each request as a principal performing an action on a resource, 
 | `resource` | The tool being called. | `APF::Tool::"github_repo_read"` |
 | `context` | Body, target, arguments, annotations, provider facts, and the rule's data. | `context.args.channel` |
 
-On the OpenShell middleware path, the action and resource come from the MCP tool name, and the principal subject is empty. Refer to [Request Evaluation](/how-it-works/request-evaluation#cedar-request-mapping) for the exact mapping and every context attribute.
+On the OpenShell middleware path, the action and resource come from the MCP tool name, and the principal subject is empty. Refer to [Request Evaluation](../how-it-works/request-evaluation.mdx#cedar-request-mapping) for the exact mapping and every context attribute.
 
 ### Provider Context
 
@@ -106,7 +106,7 @@ when {
 };
 ```
 
-Guard a permit with `has`. When the provider degraded or holds nothing for the request, the record carries only `_meta`, and the guard keeps the grant off. A forbid that reads a missing provider fact fails to evaluate and denies the request. Providers are registered with the gateway, not in the bundle. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+Guard a permit with `has`. When the provider degraded or holds nothing for the request, the record carries only `_meta`, and the guard keeps the grant off. A forbid that reads a missing provider fact fails to evaluate and denies the request. Providers are registered with the gateway, not in the bundle. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx).
 
 ## Decisions
 
@@ -135,7 +135,7 @@ APF fails closed at both load time and request time.
 - **Load time.** A Cedar syntax error, a schema type error, an `@apf_effect` on a `forbid`, an unresolved effect or finding reference, an invalid annotator pattern, or a duplicate annotation name stops the evaluator from being built. The gateway refuses to start with that policy, or keeps its current evaluator when the bad policy arrives as an update.
 - **Request time.** On the OpenShell path, an evaluation error, a missing annotation that an effect reads with `source`, or an effect that cannot be applied denies the request. `EvaluationService` returns an `INTERNAL` error for an evaluation error instead. A Cedar error inside a `permit`, such as reading a missing attribute, means that permit grants nothing. The same error inside a `forbid` denies the request, because a forbid that silently stops applying would turn a missing attribute into a grant. A policy information provider registered to fail closed that cannot answer denies the request with the reason `pip_<status>:<provider>` before any rule runs.
 
-Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies) to catch load-time errors before you sign.
+Refer to [Validate and Test Policies](validate-and-test-policies.mdx) to catch load-time errors before you sign.
 
 ## Why Cedar
 
@@ -150,6 +150,6 @@ Cedar alone cannot express detection, such as regular expressions, length checks
 
 ## Next Steps
 
-- To divide ownership across teams, refer to [Federated Authoring](/author-policies/federated-authoring).
-- To write the perimeter, refer to [Sandbox Policies](/author-policies/sandbox-policies).
-- To write tool grants, refer to [Capability Grants](/author-policies/capability-grants).
+- To divide ownership across teams, refer to [Federated Authoring](federated-authoring.mdx).
+- To write the perimeter, refer to [Sandbox Policies](sandbox-policies.mdx).
+- To write tool grants, refer to [Capability Grants](capability-grants.mdx).

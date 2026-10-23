@@ -12,10 +12,10 @@ APF has no tagged releases yet, so an upgrade means moving to a newer build of `
 
 ## General Procedure
 
-1. **Read the changes.** Compare the two commits, and read the [Release Notes](/releases/release-notes).
+1. **Read the changes.** Compare the two commits, and read the [Release Notes](release-notes.mdx).
 2. **Check the OpenShell pin.** The OpenShell commit APF is built against is recorded in `contracts/third_party/pins.toml`, with the sources committed under `contracts/third_party/openshell/proto`. If it changed, upgrade OpenShell and APF together. Refer to [OpenShell 0.1.x](#openshell-01x).
-3. **Validate your bundle with the new build.** Run `apf-compile compile` against your signed bundle and build the evaluator with the new gateway, as described in [Validate and Test Policies](/author-policies/validate-and-test-policies). A Cedar or annotator change in the new build can reject a policy the old one accepted.
-4. **Keep state in place.** Leave the counter store, trust roots, and audit directories where they are. A new counter store would accept older bundles again. Refer to [Backup and Recovery](/deployment/backup-and-recovery).
+3. **Validate your bundle with the new build.** Run `apf-compile compile` against your signed bundle and build the evaluator with the new gateway, as described in [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx). A Cedar or annotator change in the new build can reject a policy the old one accepted.
+4. **Keep state in place.** Leave the counter store, trust roots, and audit directories where they are. A new counter store would accept older bundles again. Refer to [Backup and Recovery](../deployment/backup-and-recovery.mdx).
 5. **Restart the policy service, then the gateway.** The gateway connects to the policy service at startup and exits if it cannot.
 6. **Confirm.** Check the policy service's `policy_service_startup` and `policy_verification` records and the gateway's `policy.bundle_activated` record. Create a test sandbox and confirm it is admitted.
 
@@ -54,5 +54,5 @@ Bundle formats, policy documents, signatures, the counter store, and caller auth
 
 ## Next Steps
 
-- For what each build contains, refer to [Release Notes](/releases/release-notes).
-- For compatibility status, refer to [Support and Compatibility](/about/support-and-compatibility).
+- For what each build contains, refer to [Release Notes](release-notes.mdx).
+- For compatibility status, refer to [Support and Compatibility](../about/support-and-compatibility.mdx).

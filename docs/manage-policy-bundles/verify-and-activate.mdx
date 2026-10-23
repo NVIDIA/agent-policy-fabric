@@ -42,7 +42,7 @@ With the HTTP source, the policy service picks the manifest from the archive by 
 
 `manifest_hash_unset` means the manifest still carries an empty digest or the `REPLACE_WITH_DIGEST` placeholder. Sign the template before you publish it.
 
-Refer to [Error Reference](/reference/error-reference#bundle-rejection-reasons) for every reason.
+Refer to [Error Reference](../reference/error-reference.mdx#bundle-rejection-reasons) for every reason.
 
 ### Runtime Compatibility
 
@@ -75,9 +75,9 @@ What happens to a rejected bundle depends on when it arrives:
 
 ## Expiry While Active
 
-The validity window is checked when the bundle is ingested. A bundle that expires while it is active keeps being served and enforced until it is replaced. The next restart or reload rejects it with `bundle_expired`, and a policy service that is restarted with only an expired bundle does not start. Publish a replacement well before `expires_at`. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+The validity window is checked when the bundle is ingested. A bundle that expires while it is active keeps being served and enforced until it is replaced. The next restart or reload rejects it with `bundle_expired`, and a policy service that is restarted with only an expired bundle does not start. Publish a replacement well before `expires_at`. Refer to [Expiry and Rollback Protection](expiry-and-rollback-protection.mdx).
 
 ## Next Steps
 
-- To publish a new revision, refer to [Update Policies](/manage-policy-bundles/update-policies).
-- To find these records, refer to [Access Audit Events](/observability/access-audit-events).
+- To publish a new revision, refer to [Update Policies](update-policies.mdx).
+- To find these records, refer to [Access Audit Events](../observability/access-audit-events.mdx).

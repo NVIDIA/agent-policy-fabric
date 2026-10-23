@@ -18,7 +18,7 @@ After completing it, you understand:
 
 ## Prerequisites
 
-- APF built from source and running as native processes, as described in [Installation](/get-started/installation). The commands below use the variables from [Set Up Each Terminal](/get-started/installation#set-up-each-terminal).
+- APF built from source and running as native processes, as described in [Installation](installation.mdx). The commands below use the variables from [Set Up Each Terminal](installation.mdx#set-up-each-terminal).
 - A shell in the root of the APF repository.
 
 <Steps toc={true}>
@@ -186,10 +186,10 @@ The signature covers the manifest payload. The manifest lists each member file b
 - Changing the manifest invalidates the signature, and the policy service rejects the bundle with `signature_invalid`.
 - Re-serving an older bundle fails the revision check with `counter_regression`.
 
-Try each of these in [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
+Try each of these in [Reject a Tampered Bundle](../tutorials/reject-a-tampered-bundle.mdx).
 
 ## Next Steps
 
-- To admit a sandbox under this bundle, continue with [Your First Governed Agent](/get-started/your-first-governed-agent).
-- To learn every manifest field, refer to [Bundle Structure](/manage-policy-bundles/bundle-structure).
-- To use a production signing authority, refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority).
+- To admit a sandbox under this bundle, continue with [Your First Governed Agent](your-first-governed-agent.mdx).
+- To learn every manifest field, refer to [Bundle Structure](../manage-policy-bundles/bundle-structure.mdx).
+- To use a production signing authority, refer to [Configure a Signing Authority](../manage-policy-bundles/configure-a-signing-authority.mdx).

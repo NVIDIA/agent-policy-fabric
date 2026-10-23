@@ -110,7 +110,7 @@ when {
 };
 ```
 
-What happens when the provider cannot answer depends on its registration. With `on_failure: degrade`, `context.change` holds only its `_meta` record, with `degraded` set to `true`, so the guard keeps the grant off and the call is denied with `no grant for <action>`. With `on_failure: fail_closed`, the request is denied before any rule runs, with the reason `pip_<status>:<provider>`. The provider looks the change up by the repository the tool acts on, so the agent cannot choose which record gates its request. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+What happens when the provider cannot answer depends on its registration. With `on_failure: degrade`, `context.change` holds only its `_meta` record, with `degraded` set to `true`, so the guard keeps the grant off and the call is denied with `no grant for <action>`. With `on_failure: fail_closed`, the request is denied before any rule runs, with the reason `pip_<status>:<provider>`. The provider looks the change up by the repository the tool acts on, so the agent cannot choose which record gates its request. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx).
 
 ## Type-Checking with a Schema
 
@@ -182,5 +182,5 @@ An explicit `forbid` returns `<rule>/<@id>` instead, or the `@id` itself when it
 
 ## Next Steps
 
-- To inspect and rewrite content on allowed calls, refer to [Content Controls](/author-policies/content-controls).
-- To exercise grants without a live agent, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+- To inspect and rewrite content on allowed calls, refer to [Content Controls](content-controls.mdx).
+- To exercise grants without a live agent, refer to [Validate and Test Policies](validate-and-test-policies.mdx).

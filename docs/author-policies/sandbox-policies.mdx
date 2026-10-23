@@ -122,7 +122,7 @@ Refer to [OpenShell network rules](https://docs.nvidia.com/openshell/latest/how-
 
 ### Credential Controls
 
-Endpoints can also carry `request_body_credential_rewrite` and `websocket_credential_rewrite`. APF accepts `credential_binding` and `allow_uninspected_credentials` but does not project them in this release: OpenShell always receives no binding and `allow_uninspected_credentials: false`. Refer to [Credential Integration](/how-it-works/credential-integration#binding-credentials-to-endpoints).
+Endpoints can also carry `request_body_credential_rewrite` and `websocket_credential_rewrite`. APF accepts `credential_binding` and `allow_uninspected_credentials` but does not project them in this release: OpenShell always receives no binding and `allow_uninspected_credentials: false`. Refer to [Credential Integration](../how-it-works/credential-integration.mdx#binding-credentials-to-endpoints).
 
 ## Selecting APF's Middleware
 
@@ -187,13 +187,13 @@ spec:
 | `spec.type` | Provider category: `inference`, `agent`, `source-control`, `messaging`, `data`, or `knowledge`. Any other value projects as `other`. |
 | `spec.endpoints` | The destinations this provider's credentials may reach. Each needs a host and a port. Same fields as sandbox endpoints. |
 | `spec.binaries` | Executables permitted to use this provider. Each entry is a path string or an object with `path`. |
-| `spec.credentials` | Credentials the provider uses. Refer to [Credential Integration](/how-it-works/credential-integration). |
+| `spec.credentials` | Credentials the provider uses. Refer to [Credential Integration](../how-it-works/credential-integration.mdx). |
 
 Bundles may also carry OpenShell-native provider profiles as `kind: ProviderProfile` documents or as profiles with a top-level `id` and `endpoints`. They pass through unchanged. When a `Provider` and a native profile share a name, the `Provider` wins.
 
-When APF governs the OpenShell gateway, providers and profiles that the bundle does not manage cannot be created or imported. Refer to [Credential Integration](/how-it-works/credential-integration#governing-providers-at-the-gateway).
+When APF governs the OpenShell gateway, providers and profiles that the bundle does not manage cannot be created or imported. Refer to [Credential Integration](../how-it-works/credential-integration.mdx#governing-providers-at-the-gateway).
 
 ## Next Steps
 
-- To govern what the agent does within reachable endpoints, refer to [Capability Grants](/author-policies/capability-grants).
-- For the full field list, refer to [Policy Schemas](/reference/policy-schemas#sandboxpolicy).
+- To govern what the agent does within reachable endpoints, refer to [Capability Grants](capability-grants.mdx).
+- For the full field list, refer to [Policy Schemas](../reference/policy-schemas.mdx#sandboxpolicy).

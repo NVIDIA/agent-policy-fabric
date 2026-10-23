@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Adapter, Projector, Evaluato
 position: 5
 ---
 
-This page lists the contracts an APF adapter is written against. For the design and a walkthrough, refer to [APF Adapter](/integrations/apf-adapter).
+This page lists the contracts an APF adapter is written against. For the design and a walkthrough, refer to [APF Adapter](../integrations/apf-adapter.mdx).
 
 | Contract | Kind | Defined in | Implemented by |
 |---|---|---|---|
@@ -143,11 +143,11 @@ The gateway publishes the active policy on a watch channel. Read it once per req
 | `get_document(kind, name, runtime_context)` | Call `GetDocument`. |
 | `list_documents(kind)` | Call `ListDocuments`. |
 
-An admission adapter should check the response `digest` against the body and verify the `provenance_token` against the policy service's JWKS before it hands a document to the runtime. APF's interceptor does both at sandbox creation. On a configuration refresh it checks the body digest against the token's claims without verifying the token's signature, and relies on the validate phase to verify it. Refer to [Sandbox Admission](/how-it-works/sandbox-admission).
+An admission adapter should check the response `digest` against the body and verify the `provenance_token` against the policy service's JWKS before it hands a document to the runtime. APF's interceptor does both at sandbox creation. On a configuration refresh it checks the body digest against the token's claims without verifying the token's signature, and relies on the validate phase to verify it. Refer to [Sandbox Admission](../how-it-works/sandbox-admission.mdx).
 
 ## Audit
 
-Each component writes its own JSONL file through `apf-audit`. `ComponentAudit::to_jsonl_in(dir, identity)` opens `<dir>/<component>-audit.jsonl`. `emit_required` returns an error the caller must treat as fatal for the operation, and `emit_best_effort` returns an error the caller may log. Every record is validated against the `apf.audit.event.v1` schema and scanned for credential-like strings before it is written. Refer to [Audit Event Schema](/reference/audit-event-schema).
+Each component writes its own JSONL file through `apf-audit`. `ComponentAudit::to_jsonl_in(dir, identity)` opens `<dir>/<component>-audit.jsonl`. `emit_required` returns an error the caller must treat as fatal for the operation, and `emit_best_effort` returns an error the caller may log. Every record is validated against the `apf.audit.event.v1` schema and scanned for credential-like strings before it is written. Refer to [Audit Event Schema](audit-event-schema.mdx).
 
 ## OpenShell Gateway Interceptor
 
@@ -159,7 +159,7 @@ Each component writes its own JSONL file through `apf-audit`. `ComponentAudit::t
 | `Evaluate` | OpenShell gateway | Runs the bound handler for the RPC and phase, and returns an `InterceptorResult` with `allowed`, `reason`, `patches`, and `log_annotations`. |
 | `SnapshotProviderProfiles` | OpenShell gateway | Returns the bundle-managed provider profiles after verifying their provenance. |
 
-A governance denial returns gRPC `OK` with `allowed: false`. On `CreateSandbox` and `UpdateConfig` modify, infrastructure failures return a gRPC status: `INVALID_ARGUMENT` for a `CreateSandbox` operation with no `name`, `UNAVAILABLE` when the policy service cannot be reached, and `INTERNAL` when patch generation fails. Provider bindings report an unreachable policy service as a denial instead. APF's manifest declares every governance binding fail-closed and the two post-commit bindings fail-open, so with OpenShell's default `dynamic` binding policy, OpenShell refuses the operation in all of these cases. `Describe` and `SnapshotProviderProfiles` are RPCs, not bindings: a `Describe` failure stops the OpenShell gateway from starting, and a snapshot failure returns `FAILED_PRECONDITION` or `INTERNAL`. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor) for the bindings and their checks.
+A governance denial returns gRPC `OK` with `allowed: false`. On `CreateSandbox` and `UpdateConfig` modify, infrastructure failures return a gRPC status: `INVALID_ARGUMENT` for a `CreateSandbox` operation with no `name`, `UNAVAILABLE` when the policy service cannot be reached, and `INTERNAL` when patch generation fails. Provider bindings report an unreachable policy service as a denial instead. APF's manifest declares every governance binding fail-closed and the two post-commit bindings fail-open, so with OpenShell's default `dynamic` binding policy, OpenShell refuses the operation in all of these cases. `Describe` and `SnapshotProviderProfiles` are RPCs, not bindings: a `Describe` failure stops the OpenShell gateway from starting, and a snapshot failure returns `FAILED_PRECONDITION` or `INTERNAL`. Refer to [Gateway Interceptor](../integrations/openshell/gateway-interceptor.mdx) for the bindings and their checks.
 
 ## OpenShell Supervisor Middleware
 
@@ -172,7 +172,7 @@ A governance denial returns gRPC `OK` with `allowed: false`. On `CreateSandbox` 
 | `EvaluateHttpRequest` | Supervisor | Returns `HttpRequestResult` with `decision`, `reason`, `reason_code`, `findings`, and the rewritten body and headers. |
 | `EvaluateWebSocketSession` | Any authenticated caller | Returns `UNIMPLEMENTED`. |
 
-Every decision returns gRPC `OK`. A supervisor whose token is bound to a different sandbox than the request gets `PERMISSION_DENIED`. Refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware) for the request mapping, limits, and reason codes.
+Every decision returns gRPC `OK`. A supervisor whose token is bound to a different sandbox than the request gets `PERMISSION_DENIED`. Refer to [Supervisor Middleware](../integrations/openshell/supervisor-middleware.mdx) for the request mapping, limits, and reason codes.
 
 ## Extension Authentication
 
@@ -188,7 +188,7 @@ Both OpenShell listeners use the same contract unless they run in insecure mode.
 | Supervisor caller | `caller_kind` `supervisor`, `sub` of `spiffe://openshell/sandbox/<sandbox_id>`, and a matching `sandbox_id` claim. |
 | Protocol metadata | `Describe` requires OpenShell extension protocol metadata with major version `1` and the capability `openshell.gateway-interceptor.contract` or `openshell.supervisor-middleware.contract`. Missing or incompatible metadata fails with `FAILED_PRECONDITION`. |
 
-Failures are recorded as `extension_auth.*` `authentication` events in the surface's audit file. Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile.
+Failures are recorded as `extension_auth.*` `authentication` events in the surface's audit file. Refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx) for the trust profile.
 
 ## Dependency Rules
 
@@ -202,5 +202,5 @@ Failures are recorded as `extension_auth.*` `authentication` events in the surfa
 
 ## Next Steps
 
-- For the APIs adapters call, refer to [Service APIs](/reference/service-apis).
-- For the existing adapters, refer to [OpenShell Integration](/integrations/openshell).
+- For the APIs adapters call, refer to [Service APIs](service-apis.mdx).
+- For the existing adapters, refer to [OpenShell Integration](../integrations/openshell/index.mdx).

@@ -17,7 +17,7 @@ The signing authority is whoever holds the private key that signs your bundles. 
 | Signing authority | The bundle signing private key. | Offline, in your authoring and publish path, ideally in a signing service or hardware security module. Never on an APF host. |
 | Policy service | Trust-root public keys in `--trust-root-dir`. | On every APF host. |
 
-The policy service's document signing key, which signs provenance tokens on served documents, is a different key with a different job. Do not reuse the bundle signing key for it. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+The policy service's document signing key, which signs provenance tokens on served documents, is a different key with a different job. Do not reuse the bundle signing key for it. Refer to [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx).
 
 ## Supported Keys
 
@@ -59,7 +59,7 @@ A seed file on disk is suitable for development and testing only. The repository
 
 For production, sign bundles with a signing service that keeps the private key in hardware and produces yaml-sigil signatures. The trust store accepts ECDSA P-256 public keys, so a service that signs with P-256 works without changes to APF. Publish the service's public key to your APF hosts as a `.pem` file named after the key ID the service writes into `keyid`.
 
-APF's signing seam is the pair of traits `BundleSigner` and `BundleVerifier` in the `apf-types` crate. Organization-specific signing integrations belong in a separate composition binary built on those traits, so the public service binaries compile without private dependencies. Refer to [External Policy Authorities](/integrations/external-policy-authorities).
+APF's signing seam is the pair of traits `BundleSigner` and `BundleVerifier` in the `apf-types` crate. Organization-specific signing integrations belong in a separate composition binary built on those traits, so the public service binaries compile without private dependencies. Refer to [External Policy Authorities](../integrations/external-policy-authorities.mdx).
 
 ## Install Trust Roots
 
@@ -91,5 +91,5 @@ Trust in a key ends when its public key leaves the trust-root directory; there i
 
 ## Next Steps
 
-- To sign a bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
-- To review key custody and separation of duties, refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+- To sign a bundle, refer to [Compile and Sign](compile-and-sign.mdx).
+- To review key custody and separation of duties, refer to [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx).
