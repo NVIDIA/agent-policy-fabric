@@ -12,8 +12,8 @@ OpenShell is the runtime APF governs today. APF plugs into two of OpenShell's ex
 
 | OpenShell extension point | APF adapter | Called by | Called when |
 |---|---|---|---|
-| [Gateway interceptor](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors) | `apf-openshell-interceptor` | OpenShell gateway | On selected control-plane writes, such as sandbox creation, configuration updates, and provider changes. |
-| [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware) | `apf-openshell-middleware` | OpenShell sandbox supervisors | On each HTTP request to a host the sandbox policy routes to APF, before credentials are injected. |
+| [Gateway interceptor](https://docs.nvidia.com/openshell/latest/extensibility/gateway-interceptors) | [`apf-openshell-interceptor`](gateway-interceptor.mdx) | OpenShell gateway | On selected control-plane writes, such as sandbox creation, configuration updates, and provider changes. |
+| [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware) | [`apf-openshell-middleware`](supervisor-middleware.mdx) | OpenShell sandbox supervisors | On each HTTP request to a host the sandbox policy routes to APF, before credentials are injected. |
 
 <Cards>
 
