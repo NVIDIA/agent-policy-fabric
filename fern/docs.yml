@@ -15,6 +15,12 @@ title: NVIDIA Agent Policy Fabric
 
 global-theme: nvidia
 
+# Fail `fern check` on links that do not resolve to a page. Pages link to each
+# other's .mdx files, which Fern rewrites to page URLs at build time.
+check:
+  rules:
+    broken-links: error
+
 versions:
   - display-name: Dev
     path: ../docs/index.yml

@@ -68,9 +68,9 @@ Three fields describe how something went. They are independent.
 
 On a denial, `error.code` repeats the reason code, and `error.message` carries the policy's own reason, such as `security-content-gate/deny-secret` or `no grant for github_repo_write`. A denial by a fail-closed policy information provider carries `pip_<status>:<provider>` there.
 
-When the Enrichment stage ran, the record also carries `extensions.x_apf_pip`, with one entry per provider: its `domain`, which is the registration's `context`, its `provider` name, `status`, whether it `degraded`, `cached`, which is always `false` in this release, its `age_seconds`, its `evidence_ref`, and its `latency_ms`. Refer to [Policy Information Providers](/integrations/policy-information-providers#audit-extension).
+When the Enrichment stage ran, the record also carries `extensions.x_apf_pip`, with one entry per provider: its `domain`, which is the registration's `context`, its `provider` name, `status`, whether it `degraded`, `cached`, which is always `false` in this release, its `age_seconds`, its `evidence_ref`, and its `latency_ms`. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx#audit-extension).
 
-Refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware#deny-reason-codes) for every middleware deny code.
+Refer to [Supervisor Middleware](../integrations/openshell/supervisor-middleware.mdx#deny-reason-codes) for every middleware deny code.
 
 ## Findings and Effects
 
@@ -101,5 +101,5 @@ To join records across components for the same bundle, use `policy_revision`. On
 
 ## Next Steps
 
-- To trace a sandbox to its signed bundle, refer to [Trace Policy Provenance](/observability/trace-policy-provenance).
-- To walk a denial back to its rule, refer to [Investigate a Denied Request](/observability/investigate-a-denied-request).
+- To trace a sandbox to its signed bundle, refer to [Trace Policy Provenance](trace-policy-provenance.mdx).
+- To walk a denial back to its rule, refer to [Investigate a Denied Request](investigate-a-denied-request.mdx).

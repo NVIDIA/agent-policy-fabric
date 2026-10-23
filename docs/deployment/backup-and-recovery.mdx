@@ -39,11 +39,11 @@ The counter records the highest bundle revision the policy service accepted. Los
 |---|---|---|
 | The policy service stops while the gateway runs. | The gateway keeps deciding requests with its current evaluator and logs failed polls. New sandbox admissions fail closed because the interceptor cannot fetch the projection. | Restart the policy service. |
 | The gateway restarts while the policy service is down. | The gateway cannot fetch the policy set and does not start. With `fail_closed` registrations, OpenShell refuses governed operations. | Start the policy service first, then the gateway. |
-| A bad bundle is delivered by refresh or poll. | The policy service keeps the current bundle. A verification failure is recorded. A compilation or fetch failure is only logged. | Fix the bundle and publish a higher revision. Refer to [Update Policies](/manage-policy-bundles/update-policies#recover-from-a-rejected-update). |
+| A bad bundle is delivered by refresh or poll. | The policy service keeps the current bundle. A verification failure is recorded. A compilation or fetch failure is only logged. | Fix the bundle and publish a higher revision. Refer to [Update Policies](../manage-policy-bundles/update-policies.mdx#recover-from-a-rejected-update). |
 | A bad bundle is installed in place and the policy service restarts. | The policy service rejects the bundle and does not start. | Restore the previous bundle files, or install a fixed bundle with a higher revision. |
 | The active bundle expires and the policy service restarts. | The policy service rejects the bundle and does not start. | Publish a re-signed bundle with a later `expires_at` and a higher revision. |
 | A host is rebuilt. | All local state is gone. | Reinstall from your pipelines, restore the counter from backup, then start the services. |
-| A signing key is compromised. | Bundles signed with it are accepted until its trust root is removed. | Sign a replacement bundle with a new key, put it where each policy service loads it at startup, install the new trust root, remove the compromised one, and restart. Refer to [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots). |
+| A signing key is compromised. | Bundles signed with it are accepted until its trust root is removed. | Sign a replacement bundle with a new key, put it where each policy service loads it at startup, install the new trust root, remove the compromised one, and restart. Refer to [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx). |
 
 ## Backup Tooling
 
@@ -51,5 +51,5 @@ The repository does not include backup or restore tooling. Use your platform's t
 
 ## Next Steps
 
-- To diagnose a service that does not start, refer to [Troubleshooting](/deployment/troubleshooting).
-- To understand the counter in depth, refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+- To diagnose a service that does not start, refer to [Troubleshooting](troubleshooting.mdx).
+- To understand the counter in depth, refer to [Expiry and Rollback Protection](../manage-policy-bundles/expiry-and-rollback-protection.mdx).

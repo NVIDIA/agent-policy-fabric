@@ -19,8 +19,8 @@ After completing it, you understand:
 
 ## Prerequisites
 
-- The setup from [Your First Signed Policy](/get-started/your-first-signed-policy): native services running with your `$WORK/bundle` active, your key in `$WORK/trust-roots`, and the policy service HTTP surface on `127.0.0.1:19200`. This page calls the active revision `N`. It is `2` if you have followed only that walkthrough.
-- APF registered with OpenShell as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell), a workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group, and terminals set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal).
+- The setup from [Your First Signed Policy](../get-started/your-first-signed-policy.mdx): native services running with your `$WORK/bundle` active, your key in `$WORK/trust-roots`, and the policy service HTTP surface on `127.0.0.1:19200`. This page calls the active revision `N`. It is `2` if you have followed only that walkthrough.
+- APF registered with OpenShell as described in [Add APF to OpenShell](../get-started/add-apf-to-openshell.mdx), a workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group, and terminals set up as in [Set Up Each Terminal](../get-started/installation.mdx#set-up-each-terminal).
 
 <Steps toc={true}>
 
@@ -134,7 +134,7 @@ curl -s https://httpbin.org/anything -H 'content-type: application/json' \
 
 The request is denied. Its `authorization` record carries `keyword-gate/deny-classified` in `error.message` and the new `policy_revision`.
 
-Rules, annotators, effects, and findings reach every sandbox as soon as the gateway swaps its evaluator. The sandbox's admission annotations are different: `openshell sandbox get update-demo` still shows `apf.nvidia.com/policy-version` at `N`, the revision the sandbox was admitted at. The annotations change only when a running sandbox is refreshed, and the gateway in this setup runs without `--openshell-gateway-url`, so its sandbox policy refresher is off. A sandbox created now is admitted at `N+1`. Refer to [How Far a Change Reaches](/manage-policy-bundles/update-policies#how-far-a-change-reaches).
+Rules, annotators, effects, and findings reach every sandbox as soon as the gateway swaps its evaluator. The sandbox's admission annotations are different: `openshell sandbox get update-demo` still shows `apf.nvidia.com/policy-version` at `N`, the revision the sandbox was admitted at. The annotations change only when a running sandbox is refreshed, and the gateway in this setup runs without `--openshell-gateway-url`, so its sandbox policy refresher is off. A sandbox created now is admitted at `N+1`. Refer to [How Far a Change Reaches](../manage-policy-bundles/update-policies.mdx#how-far-a-change-reaches).
 
 ## Try to Roll Back
 
@@ -166,5 +166,5 @@ rm -rf "$WORK/previous"
 
 ## Next Steps
 
-- To see how tampering is refused, continue with [Reject a Tampered Bundle](/tutorials/reject-a-tampered-bundle).
-- For the full procedure, refer to [Update Policies](/manage-policy-bundles/update-policies).
+- To see how tampering is refused, continue with [Reject a Tampered Bundle](reject-a-tampered-bundle.mdx).
+- For the full procedure, refer to [Update Policies](../manage-policy-bundles/update-policies.mdx).

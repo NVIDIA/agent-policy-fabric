@@ -10,7 +10,7 @@ position: 4
 
 Admission is the one-time gate at sandbox creation. The APF interceptor replaces whatever policy the caller asked for with the signed projection from the active bundle, stamps the sandbox with the identity of that policy, and checks the stamp again before OpenShell commits the sandbox. If any step fails, OpenShell does not create the sandbox.
 
-The interceptor runs inside `apf-policy-gateway` and answers OpenShell's gateway interceptor calls. In authenticated mode, only the OpenShell gateway may call it. Refer to [Gateway Interceptor](/integrations/openshell/gateway-interceptor) for the full list of operations APF governs.
+The interceptor runs inside `apf-policy-gateway` and answers OpenShell's gateway interceptor calls. In authenticated mode, only the OpenShell gateway may call it. Refer to [Gateway Interceptor](../integrations/openshell/gateway-interceptor.mdx) for the full list of operations APF governs.
 
 ## Admission Phases
 
@@ -86,15 +86,15 @@ After admission, a sandbox's source policy changes only through `UpdateConfig`, 
 - **Approval mode.** Any attempt to change the proposal approval mode is denied with `approval mode is managed by APF`.
 - **Other settings.** A settings-only update passes through unchanged.
 
-Refer to [Update Policies](/manage-policy-bundles/update-policies) for when running sandboxes pick up a new bundle.
+Refer to [Update Policies](../manage-policy-bundles/update-policies.mdx) for when running sandboxes pick up a new bundle.
 
 ## Trust Model
 
 The interceptor verifies provenance tokens, not the bundle signature. The policy service verified the bundle once when it ingested it, and it signs a provenance token for every document it serves. The interceptor's checks prove that the policy admitted with the sandbox is the document the policy service served, unchanged in transit or between injection and validation. OpenShell's supervisor may later add filesystem paths to the stored policy, which OpenShell allows.
 
-The provenance token attests to the policy, not to the caller. The sandbox ID and the caller subject come from OpenShell's request and are not independently attested by APF. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation).
+The provenance token attests to the policy, not to the caller. The sandbox ID and the caller subject come from OpenShell's request and are not independently attested by APF. Refer to [Identity and Delegation](identity-and-delegation.mdx).
 
 ## Next Steps
 
-- To see how each request is decided after admission, refer to [Request Evaluation](/how-it-works/request-evaluation).
-- To tie a running sandbox to its signed policy, refer to [Trace Policy Provenance](/observability/trace-policy-provenance).
+- To see how each request is decided after admission, refer to [Request Evaluation](request-evaluation.mdx).
+- To tie a running sandbox to its signed policy, refer to [Trace Policy Provenance](../observability/trace-policy-provenance.mdx).

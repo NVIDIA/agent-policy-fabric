@@ -33,11 +33,11 @@ APF does not bind HTTP responses or WebSocket messages. A WebSocket session requ
 | `ValidateConfig` | OpenShell gateway | Accepts only an empty `config`. A non-empty config is reported invalid, and OpenShell rejects the policy that carries it. |
 | `EvaluateHttpRequest` | Sandbox supervisor | Evaluates the request. The supervisor token's `sandbox_id` must equal the request context's sandbox ID. |
 
-Refer to [Identity and Delegation](/how-it-works/identity-and-delegation#identities-apf-verifies) for how callers are recognized.
+Refer to [Identity and Delegation](../../how-it-works/identity-and-delegation.mdx#identities-apf-verifies) for how callers are recognized.
 
 ## Request Handling
 
-APF parses the request, detects an MCP `tools/call` from its JSON-RPC body, builds an evaluation input, and runs the annotator, Cedar, and effect stages against the active policy. It then applies any body replacement, body patches, and header mutations, and returns the result. Refer to [Request Evaluation](/how-it-works/request-evaluation) for every step.
+APF parses the request, detects an MCP `tools/call` from its JSON-RPC body, builds an evaluation input, and runs the annotator, Cedar, and effect stages against the active policy. It then applies any body replacement, body patches, and header mutations, and returns the result. Refer to [Request Evaluation](../../how-it-works/request-evaluation.mdx) for every step.
 
 ## Results
 
@@ -86,9 +86,9 @@ Configure your gRPC client and the OpenShell registration to allow at least thes
 
 ## Audit
 
-Every decision writes one `authorization` record to `apf-policy-gateway-middleware-audit.jsonl`, with `reason_code` `middleware.<code>`, or `middleware.allowed` and `middleware.allowed_with_findings` for allows. The record's `correlation_id` is OpenShell's request ID, so it joins to the supervisor's log. Refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+Every decision writes one `authorization` record to `apf-policy-gateway-middleware-audit.jsonl`, with `reason_code` `middleware.<code>`, or `middleware.allowed` and `middleware.allowed_with_findings` for allows. The record's `correlation_id` is OpenShell's request ID, so it joins to the supervisor's log. Refer to [Understand Decisions and Findings](../../observability/understand-decisions-and-findings.mdx).
 
 ## Next Steps
 
-- To register the middleware, refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell#register-the-supervisor-middleware).
-- To write the policies it evaluates, refer to [Content Controls](/author-policies/content-controls).
+- To register the middleware, refer to [Add APF to OpenShell](../../get-started/add-apf-to-openshell.mdx#register-the-supervisor-middleware).
+- To write the policies it evaluates, refer to [Content Controls](../../author-policies/content-controls.mdx).

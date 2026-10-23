@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Policy Schema, SandboxPolicy
 position: 1
 ---
 
-This page lists every field of every document kind a bundle can contain. For the bundle manifest itself, refer to [Bundle Specification](/reference/bundle-specification). For how to write each kind, refer to [Author Policies](/author-policies/policy-model).
+This page lists every field of every document kind a bundle can contain. For the bundle manifest itself, refer to [Bundle Specification](bundle-specification.mdx). For how to write each kind, refer to [Author Policies](../author-policies/policy-model.mdx).
 
 ## Schema Files
 
@@ -24,7 +24,7 @@ The repository publishes a JSON Schema for each authored kind in `contracts/json
 | `PolicyEffect` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-effect.v1alpha1.schema.json` |
 | `PolicyFinding` | `nvidia.agent-policy-fabric.policy/v1alpha1` | `policy-finding.v1alpha1.schema.json` |
 
-APF's services do not load these schemas. They describe the documents for authors and tooling, and the runtime applies its own checks, which differ in places. Validate against the schemas before you sign, as described in [Validate and Test Policies](/author-policies/validate-and-test-policies), and read [Schema and Runtime Differences](#schema-and-runtime-differences).
+APF's services do not load these schemas. They describe the documents for authors and tooling, and the runtime applies its own checks, which differ in places. Validate against the schemas before you sign, as described in [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx), and read [Schema and Runtime Differences](#schema-and-runtime-differences).
 
 ## Common Envelope
 
@@ -163,7 +163,7 @@ A provider profile: the endpoints, binaries, and credentials for one external se
 | `aws-sts-assume-role` | `refreshBeforeSeconds`, `maxLifetimeSeconds`, `material`, `additionalOutputs` |
 | `token-grant` | `tokenEndpoint` (required at compile time), `audience`, `jwtSvidAudience`, `scopes`, `cacheTtlSeconds`, `audienceOverrides`, `clientAssertionType` |
 
-`material` entries have `name`, `description`, `required`, and `secret`. `additionalOutputs` entries have `output` and `credential`. For `oauth2`, each `parameters` key is projected as a required material entry, marked secret when its name contains `secret`, `token`, or `key`. The parameter values and the `name` of `host-env` and `external` sources are not projected. Refer to [Credential Integration](/how-it-works/credential-integration).
+`material` entries have `name`, `description`, `required`, and `secret`. `additionalOutputs` entries have `output` and `credential`. For `oauth2`, each `parameters` key is projected as a required material entry, marked secret when its name contains `secret`, `token`, or `key`. The parameter values and the `name` of `host-env` and `external` sources are not projected. Refer to [Credential Integration](../how-it-works/credential-integration.mdx).
 
 ## ProviderProfile
 
@@ -215,7 +215,7 @@ A `ProviderProfile` member is an OpenShell provider profile in OpenShell's own Y
 | `spec.annotations[].rules[].op` | string | Yes | Operation. |
 | `pattern`, `value`, `prefix`, `suffix`, `substring`, `threshold` | string or integer | Per operation | Operands. A `string` output also uses `value` as the output value. |
 
-`threshold_from` is rejected. Every annotation needs at least one rule. For field selectors and operations, refer to [Annotators](/author-policies/annotators).
+`threshold_from` is rejected. Every annotation needs at least one rule. For field selectors and operations, refer to [Annotators](../author-policies/annotators.mdx).
 
 ## PolicyEffect
 
@@ -230,7 +230,7 @@ A `ProviderProfile` member is an OpenShell provider profile in OpenShell's own Y
 | `spec.headers[]` | list | `name`, `action` (`set`, `add`, or `remove`), and `value` or `source`. |
 | `spec.finding` | string or object | A `PolicyFinding` name, or an inline finding with `type`, `severity`, `label`, `label_source`, and `confidence`. |
 
-Set exactly one of `body.replace` and `body.patches`. `source` must have the form `context.annotations.<key>`. Refer to [Effects and Findings](/author-policies/effects-and-findings).
+Set exactly one of `body.replace` and `body.patches`. `source` must have the form `context.annotations.<key>`. Refer to [Effects and Findings](../author-policies/effects-and-findings.mdx).
 
 ## PolicyFinding
 
@@ -274,5 +274,5 @@ Several checks run only when the policy gateway builds its evaluator, not when t
 
 ## Next Steps
 
-- For the manifest that binds these documents, refer to [Bundle Specification](/reference/bundle-specification).
-- To check documents before signing, refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+- For the manifest that binds these documents, refer to [Bundle Specification](bundle-specification.mdx).
+- To check documents before signing, refer to [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx).

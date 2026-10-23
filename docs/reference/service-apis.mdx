@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, gRPC, HTTP API, PolicyServic
 position: 4
 ---
 
-APF exposes three local APIs. The OpenShell extension interfaces that the gateway also serves are covered in [Adapter Contracts](/reference/adapter-contracts).
+APF exposes three local APIs. The OpenShell extension interfaces that the gateway also serves are covered in [Adapter Contracts](adapter-contracts.mdx).
 
 | API | Served by | Transport | Callers |
 |---|---|---|---|
@@ -34,7 +34,7 @@ Package `nvidia.agent_policy_fabric.policy_service.v1alpha1`, file `policy_servi
 |---|---|---|
 | `kind` | string | Surface kind, such as `apf.policy.v1` or `openshell.sandbox.v1`. Required. |
 | `name` | string | Document name, such as `default`. |
-| `runtime_context` | `RuntimeContext` | Caller identity. With the `claims` resolver, `openshell.user_subject` selects a bundle variant, but variants do not work in this release. Refer to [Per-Caller Bundle Variants](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants). |
+| `runtime_context` | `RuntimeContext` | Caller identity. With the `claims` resolver, `openshell.user_subject` selects a bundle variant, but variants do not work in this release. Refer to [Per-Caller Bundle Variants](../manage-policy-bundles/publish-and-distribute.mdx#per-caller-bundle-variants). |
 
 ### GetDocumentResponse
 
@@ -44,7 +44,7 @@ Package `nvidia.agent_policy_fabric.policy_service.v1alpha1`, file `policy_servi
 | `digest` | string | Hex SHA-256 of `body`. Callers must check it before use. |
 | `version` | uint64 | The bundle's `policy_revision`. |
 | `valid_until_ms` | uint64 | Unix milliseconds after which to fetch again. `0` unless `--document-ttl-secs` is set. |
-| `provenance_token` | string | Compact EdDSA JWT binding the document to the bundle. Empty only if minting failed. Refer to [Serving Documents](/how-it-works/policy-service#serving-documents) for its claims. |
+| `provenance_token` | string | Compact EdDSA JWT binding the document to the bundle. Empty only if minting failed. Refer to [Serving Documents](../how-it-works/policy-service.mdx#serving-documents) for its claims. |
 
 Field number 4 is unused. A comment in the contract marks it as reserved.
 
@@ -143,7 +143,7 @@ The request has no body or target, so content controls that read `body_text`, `b
 | Field | Type | Value |
 |---|---|---|
 | `decision` | `Decision` | `DECISION_ALLOW` or `DECISION_DENY`. |
-| `reason` | string | The deny reason, empty on allow. Refer to [Error Reference](/reference/error-reference#deny-reasons). |
+| `reason` | string | The deny reason, empty on allow. Refer to [Error Reference](error-reference.mdx#deny-reasons). |
 | `policy_digest_hex` | string | Digest of the policy set that decided. |
 | `obligations` | list | Always empty in this release. |
 | `rejection_reasons` | list | Always empty in this release. |
@@ -165,5 +165,5 @@ Package `nvidia.agent_policy_fabric.runtime.v1alpha1`, file `runtime/v1alpha1/ru
 
 ## Next Steps
 
-- For the OpenShell interceptor and middleware interfaces, refer to [Adapter Contracts](/reference/adapter-contracts).
-- For the records these APIs write, refer to [Audit Event Schema](/reference/audit-event-schema).
+- For the OpenShell interceptor and middleware interfaces, refer to [Adapter Contracts](adapter-contracts.mdx).
+- For the records these APIs write, refer to [Audit Event Schema](audit-event-schema.mdx).

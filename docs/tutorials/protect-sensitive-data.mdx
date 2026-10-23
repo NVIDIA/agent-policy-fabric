@@ -19,9 +19,9 @@ After completing it, you understand:
 
 ## Prerequisites
 
-- APF running with the demo bundle, or the revision from [Your First Signed Policy](/get-started/your-first-signed-policy), and registered with OpenShell as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell). The demo sandbox policy allows `POST /anything` on `httpbin.org` and routes the host to APF.
+- APF running with the demo bundle, or the revision from [Your First Signed Policy](../get-started/your-first-signed-policy.mdx), and registered with OpenShell as described in [Add APF to OpenShell](../get-started/add-apf-to-openshell.mdx). The demo sandbox policy allows `POST /anything` on `httpbin.org` and routes the host to APF.
 - A workload image with `curl` at `/usr/bin/curl` and a `sandbox` user and group.
-- Terminals set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal), and `jq`.
+- Terminals set up as in [Set Up Each Terminal](../get-started/installation.mdx#set-up-each-terminal), and `jq`.
 
 `httpbin.org/anything` echoes the request it receives, which makes each rewrite visible.
 
@@ -120,5 +120,5 @@ You see four records: two allows with findings, one deny for the failed redactio
 
 ## Next Steps
 
-- To write your own detectors, refer to [Annotators](/author-policies/annotators).
-- To change how detections are handled, refer to [Content Controls](/author-policies/content-controls).
+- To write your own detectors, refer to [Annotators](../author-policies/annotators.mdx).
+- To change how detections are handled, refer to [Content Controls](../author-policies/content-controls.mdx).

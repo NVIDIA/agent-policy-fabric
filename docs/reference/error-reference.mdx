@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Error Codes, Reason Codes, T
 position: 8
 ---
 
-This page lists every code APF writes to its audit records or returns to a caller on the `main` branch. Search it for the code you see. For a diagnostic workflow, refer to [Troubleshooting](/deployment/troubleshooting) and [Investigate a Denied Request](/observability/investigate-a-denied-request).
+This page lists every code APF writes to its audit records or returns to a caller on the `main` branch. Search it for the code you see. For a diagnostic workflow, refer to [Troubleshooting](../deployment/troubleshooting.mdx) and [Investigate a Denied Request](../observability/investigate-a-denied-request.mdx).
 
 ## Policy Service Startup
 
@@ -28,7 +28,7 @@ These failures stop the policy service. The message is printed on standard error
 |---|---|
 | `no audit log directory configured; set --audit-log-dir or APF_AUDIT_LOG_DIR (audit_log_dir in the config file)` | Set the audit directory. |
 | ``trust-root dir <dir> contains no `*.pub` keys`` | Install at least one trust root. `.pem` and `.p256` keys also count. |
-| `load counter store: ...` | Restore or remove the corrupt counter file. Refer to [Backup and Recovery](/deployment/backup-and-recovery). |
+| `load counter store: ...` | Restore or remove the corrupt counter file. Refer to [Backup and Recovery](../deployment/backup-and-recovery.mdx). |
 | `--http-addr requires --http-bearer-token-file; ...` | Provide a token file, or remove `--http-addr`. |
 | `--bundle-path (or APF_BUNDLE_PATH) is required when --policy-source=local` | Set the bundle path. |
 | `--bundle-source-url required when --policy-source=http` | Set the bundle URL. |
@@ -188,7 +188,7 @@ The middleware returns a deny's code to OpenShell without the `middleware.` pref
 | `middleware.evaluation_failed` | Deny | `policy evaluation failed` | The evaluator returned an error. |
 | `middleware.effect_application_failed` | Deny | `policy effects could not be applied` | A patch could not be applied, for example to a missing field or a body that is not JSON. |
 | `middleware.replacement_body_too_large` | Deny | `policy replacement body exceeds middleware limit` | The rewritten body is over 4 MiB. |
-| `middleware.invalid_header_mutation` | Deny | `policy produced an invalid header mutation` | A header mutation breaks the OpenShell header rules. Refer to [Effects and Findings](/author-policies/effects-and-findings#header-rules-on-openshell). |
+| `middleware.invalid_header_mutation` | Deny | `policy produced an invalid header mutation` | A header mutation breaks the OpenShell header rules. Refer to [Effects and Findings](../author-policies/effects-and-findings.mdx#header-rules-on-openshell). |
 | `middleware.invalid_findings` | Deny | `policy produced invalid findings` | More than 32 findings, or one over 4 KiB. |
 | `middleware.invalid_mcp_request` | Deny | `invalid MCP tools/call request` | A malformed `tools/call`, or a JSON-RPC batch that contains one. |
 | `middleware.body_too_large` | Deny | `request body exceeds middleware limit` | The request body is over 4 MiB. |
@@ -218,11 +218,11 @@ The policy's deny reason appears as `reason` on a middleware deny, in `error.mes
 | `no grant for <action>` | A tool call that no capability grant permits. `<action>` is the tool name, or `<tool>::<capability>` from an `EvaluationService` call that sends a `verb`. |
 | `<rule>: conditions not met for <action>` | A tool call that no grant permits, where a capability rule named after the tool exists. |
 | `runtime_error:missing_annotation_source:<path>` | An effect or finding reads an annotation the request did not produce. |
-| `pip_<status>:<provider>` | A policy information provider registered with `on_failure: fail_closed` could not answer. `<status>` is the lookup status, such as `timeout` or `unavailable`, and `<provider>` is the registered name. `pip_invalid_input` denies regardless of the failure mode. Refer to [Policy Information Providers](/integrations/policy-information-providers#failure-modes). |
+| `pip_<status>:<provider>` | A policy information provider registered with `on_failure: fail_closed` could not answer. `<status>` is the lookup status, such as `timeout` or `unavailable`, and `<provider>` is the registered name. `pip_invalid_input` denies regardless of the failure mode. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx#failure-modes). |
 
 ## gRPC Status Codes
 
-The policy service's `PolicyService` and the gateway's `EvaluationService` return these statuses. Refer to [Service APIs](/reference/service-apis) for details.
+The policy service's `PolicyService` and the gateway's `EvaluationService` return these statuses. Refer to [Service APIs](service-apis.mdx) for details.
 
 | Service and RPC | Status | Message |
 |---|---|---|
@@ -245,5 +245,5 @@ The policy service's `PolicyService` and the gateway's `EvaluationService` retur
 
 ## Next Steps
 
-- For the record structure, refer to [Audit Event Schema](/reference/audit-event-schema).
-- To diagnose a failure from its symptom, refer to [Troubleshooting](/deployment/troubleshooting).
+- For the record structure, refer to [Audit Event Schema](audit-event-schema.mdx).
+- To diagnose a failure from its symptom, refer to [Troubleshooting](../deployment/troubleshooting.mdx).

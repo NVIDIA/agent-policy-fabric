@@ -61,7 +61,7 @@ apf-policy-service serve [OPTIONS]
 | `--bundle-source-token-file <PATH>` | `APF_BUNDLE_SOURCE_TOKEN_FILE` | None | File holding the bearer token for the bundle source. Takes precedence over `--bundle-source-token`. An empty file is an error. |
 | `--bundle-source-token <TOKEN>` | `APF_BUNDLE_SOURCE_TOKEN` | None | Bearer token for the bundle source. Prefer the file form. Passing it as an argument records `startup.token_in_process_args`. |
 | `--bundle-source-poll-interval-secs <SECS>` | `APF_BUNDLE_SOURCE_POLL_INTERVAL` | `30` | Seconds between polls of the HTTP source. The environment variable has no `_SECS` suffix. Do not set `0`: the polling task stops, and the service keeps running without updates. |
-| `--resolver <RESOLVER>` | `APF_RESOLVER` | `passthrough` | Document name resolver: `passthrough` or `claims`. Other values are rejected. Refer to [Policy Name Resolution](/how-it-works/policy-service#policy-name-resolution). |
+| `--resolver <RESOLVER>` | `APF_RESOLVER` | `passthrough` | Document name resolver: `passthrough` or `claims`. Other values are rejected. Refer to [Policy Name Resolution](../how-it-works/policy-service.mdx#policy-name-resolution). |
 | `--claims-config <PATH>` | `APF_CLAIMS_CONFIG` | None | JSON file with a `role_map` from user subject to bundle variant. Required with `--resolver claims`. |
 
 #### Document Signing Options
@@ -131,7 +131,7 @@ The configuration file has several limitations in this release:
 - A flag or environment variable whose value equals the built-in default can be overridden by the file.
 - The sample `examples/policy-service.toml` in the repository is out of date and does not work as written.
 
-Refer to [Settings Are Ignored](/deployment/troubleshooting#settings-are-ignored).
+Refer to [Settings Are Ignored](../deployment/troubleshooting.mdx#settings-are-ignored).
 </Warning>
 
 ## apf-policy-gateway
@@ -156,7 +156,7 @@ The gateway has no subcommands and no configuration file. Provider registration 
 
 | Flag | Environment variable | Default | Description |
 |---|---|---|---|
-| `--pip-config <PATH>` | `APF_PIP_CONFIG` | None | YAML registration of the policy information providers the gateway consults in the Enrichment stage. Loaded and validated before any listener binds, and the gateway refuses to start on any error. Without it there is no enrichment. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `--pip-config <PATH>` | `APF_PIP_CONFIG` | None | YAML registration of the policy information providers the gateway consults in the Enrichment stage. Loaded and validated before any listener binds, and the gateway refuses to start on any error. Without it there is no enrichment. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx). |
 | `--pip-stage-budget-ms <MS>` | `APF_PIP_STAGE_BUDGET_MS` | `250` | Hard cap in milliseconds on the whole Enrichment stage. It is the default and the upper bound of every registration's `timeout_ms`, and it must stay below the timeout OpenShell applies to middleware calls. |
 
 ### Provenance Options
@@ -195,7 +195,7 @@ The gateway checks each OpenShell listener before it does anything else:
 - A trust file, certificate, key, or insecure flag without the listener's address is an error.
 - Certificate files must be regular files of at most 1 MiB that are not group or world writable. Key files must be regular files of at most 64 KiB with no group or other permissions. Symbolic links are refused.
 
-Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile format.
+Refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx) for the trust profile format.
 
 ### Audit Files
 
@@ -239,7 +239,7 @@ apf-compile genfixture --template <PATH> --key <PATH> --out <PATH> [OPTIONS]
 The command prints one `manifest  <path>: sha256=<digest>` line per member and `signed bundle written to <path>`.
 
 <Note>
-`genfixture` fills placeholders in the order manifest entries appear, one per entry. Use a placeholder for every entry and nowhere else in the template, including comments. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
+`genfixture` fills placeholders in the order manifest entries appear, one per entry. Use a placeholder for every entry and nowhere else in the template, including comments. Refer to [Compile and Sign](../manage-policy-bundles/compile-and-sign.mdx).
 </Note>
 
 ### compile
@@ -257,7 +257,7 @@ apf-compile compile --bundle-path <PATH> [--trust-root-dir <DIR>] [--verify-only
 
 On success it prints `verified  digest=<sha256> counter=<revision>`, and without `--verify-only`, one `projection  kind=<kind> name=<name> bytes=<n>` line per surface. It produces `apf.policy.v1` and `openshell.provider-profile.v1`, not the OpenShell sandbox projection.
 
-The command uses a new, empty counter store for every run, so it cannot detect a replayed bundle, and it rejects `policy_revision: 0`. It does not build the Cedar evaluator. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+The command uses a new, empty counter store for every run, so it cannot detect a replayed bundle, and it rejects `policy_revision: 0`. It does not build the Cedar evaluator. Refer to [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx).
 
 ## Logging
 
@@ -280,13 +280,13 @@ The repository's `mise.toml` defines development tasks. Run them with `mise run 
 | `e2e:kind` | Installs the Helm chart on a local kind cluster next to an OpenShell gateway, runs the smoke suite, and uninstalls. |
 | `e2e:parity` | Checks that the Compose stack and the Helm chart start both services with the same flags. No stack is started. |
 | `dev-native` | Build and run both services natively. |
-| `docs`, `docs:serve` | `docs` runs `fern check` and `scripts/check_docs_nav.py` to validate the documentation configuration, links, and navigation. `docs:serve` previews the site locally. Both use the Fern CLI version pinned in `fern/fern.config.json` and need Node.js and uv. Refer to [Contributing](/resources/contributing#contribute-to-the-documentation). |
+| `docs`, `docs:serve` | `docs` runs `fern check` and `scripts/check_docs_nav.py` to validate the documentation configuration, links, and navigation. `docs:serve` previews the site locally. Both use the Fern CLI version pinned in `fern/fern.config.json` and need Node.js and uv. Refer to [Contributing](../resources/contributing.mdx#contribute-to-the-documentation). |
 
 <Warning>
-`dev-native` does not start on `main` because it sets no audit directory, which both services require, and passes flags the gateway no longer accepts. Use the commands in [Installation](/get-started/installation) instead.
+`dev-native` does not start on `main` because it sets no audit directory, which both services require, and passes flags the gateway no longer accepts. Use the commands in [Installation](../get-started/installation.mdx) instead.
 </Warning>
 
 ## Next Steps
 
-- To see how these options fit together on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
-- For the HTTP and gRPC interfaces, refer to [Service APIs](/reference/service-apis).
+- To see how these options fit together on a host, refer to [Host and Workstation Deployment](../deployment/host-and-workstation-deployment.mdx).
+- For the HTTP and gRPC interfaces, refer to [Service APIs](service-apis.mdx).

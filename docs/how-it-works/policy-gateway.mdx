@@ -15,7 +15,7 @@ position: 2
 The gateway validates its listener configuration before it does anything else, so a misconfigured listener never reports ready.
 
 1. **Resolve each OpenShell listener.** For the interceptor and the middleware separately, the gateway requires either the full authenticated set (address, extension trust profile, TLS certificate, TLS key) or the address with the explicit insecure flag. Partial sets, conflicting modes, and security files without an address stop startup. The trust profile, certificate, and key are opened without following symlinks, checked for safe permissions, and parsed before any listener starts.
-2. **Load the provider registration** from `--pip-config`, when set, through the same checked file path, and validate every registration. An invalid file stops startup. Without the flag the Enrichment stage is off. Refer to [Policy Information Providers](/integrations/policy-information-providers).
+2. **Load the provider registration** from `--pip-config`, when set, through the same checked file path, and validate every registration. An invalid file stops startup. Without the flag the Enrichment stage is off. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx).
 3. **Connect to the policy service** over its Unix socket and call `Health`. A failed health check is logged and startup continues.
 4. **Fetch the JWKS** from `--jwks-url` to get the policy service's document signing key. The interceptor and the sandbox policy refresher use it to verify provenance tokens. The gateway does not verify the token on the policy set it evaluates. If the fetch fails, startup stops. Without `--jwks-url`, provenance verification is disabled and the gateway logs a warning, and the interceptor cannot be enabled.
 5. **Fetch the policy set.** Call `GetDocument` for `apf.policy.v1/default` and build the Cedar evaluator. If any rule, annotator, effect, or finding fails to compile, startup stops.
@@ -39,7 +39,7 @@ The gateway does not re-verify the bundle signature on this path. The policy ser
 
 ## Decisions
 
-Decisions run in process on the active evaluator. In the current deployment, there is no network call to the policy service on the request path. The only per-request calls go to the policy information providers registered with `--pip-config`, each under a budget. Every request passes four stages: enrichment, annotators, Cedar rules, and effects. Refer to [Request Evaluation](/how-it-works/request-evaluation).
+Decisions run in process on the active evaluator. In the current deployment, there is no network call to the policy service on the request path. The only per-request calls go to the policy information providers registered with `--pip-config`, each under a budget. Every request passes four stages: enrichment, annotators, Cedar rules, and effects. Refer to [Request Evaluation](request-evaluation.mdx).
 
 Two surfaces reach the evaluator.
 
@@ -48,7 +48,7 @@ Two surfaces reach the evaluator.
 | OpenShell supervisor middleware | OpenShell sandbox supervisors, per egress request. | Allow or deny, plus body changes, header changes, and findings. |
 | `EvaluationService.Evaluate` over the gateway's Unix socket | Co-located callers on the same host. | Allow or deny with the deny reason and the policy digest. No obligations or mutations are returned. |
 
-Refer to [Service APIs](/reference/service-apis) for both contracts.
+Refer to [Service APIs](../reference/service-apis.mdx) for both contracts.
 
 ## Provenance Key Rotation
 
@@ -79,6 +79,6 @@ The gateway writes one file per component in `--audit-log-dir`.
 
 ## Next Steps
 
-- To see the evaluation pipeline in detail, refer to [Request Evaluation](/how-it-works/request-evaluation).
-- To configure the OpenShell listeners, refer to [Configure Service Authentication](/deployment/configure-service-authentication).
-- For every flag, refer to [CLI Commands](/reference/cli-commands#apf-policy-gateway).
+- To see the evaluation pipeline in detail, refer to [Request Evaluation](request-evaluation.mdx).
+- To configure the OpenShell listeners, refer to [Configure Service Authentication](../deployment/configure-service-authentication.mdx).
+- For every flag, refer to [CLI Commands](../reference/cli-commands.mdx#apf-policy-gateway).

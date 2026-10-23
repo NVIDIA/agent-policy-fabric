@@ -12,7 +12,7 @@ Signing turns a reviewed set of policy documents into a bundle a policy service 
 
 ## Write the Manifest Template
 
-The template is the manifest with a placeholder in place of each digest. List members in [manifest order](/manage-policy-bundles/bundle-structure#manifest-order) and increase `policy_revision` for every change you publish.
+The template is the manifest with a placeholder in place of each digest. List members in [manifest order](bundle-structure.mdx#manifest-order) and increase `policy_revision` for every change you publish.
 
 ```yaml
 apiVersion: nvidia.agent-policy-fabric.policy/v1alpha1
@@ -88,7 +88,7 @@ Verify the result with the trust roots your hosts use before you publish it:
 verified  digest=<sha256 of the signed file> counter=7
 ```
 
-Then build the evaluator against a local gateway to catch Cedar and annotator errors. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+Then build the evaluator against a local gateway to catch Cedar and annotator errors. Refer to [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx).
 
 ## Package for Distribution
 
@@ -98,7 +98,7 @@ A local policy source reads the signed manifest directly. An HTTP policy source 
 (cd team-bundle && tar czf ../team-bundle.tar.gz *)
 ```
 
-Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute).
+Refer to [Publish and Distribute](publish-and-distribute.mdx).
 
 ## Signing in CI
 
@@ -114,5 +114,5 @@ Any process that produces a correctly signed bundle and publishes it where the p
 
 ## Next Steps
 
-- To deliver the bundle to hosts, refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute).
-- To understand each check the policy service runs, refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate).
+- To deliver the bundle to hosts, refer to [Publish and Distribute](publish-and-distribute.mdx).
+- To understand each check the policy service runs, refer to [Verify and Activate](verify-and-activate.mdx).

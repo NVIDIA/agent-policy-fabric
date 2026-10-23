@@ -32,7 +32,7 @@ This page states precisely what APF governs in this release, so you can decide w
 | Very large bodies | A body over the middleware registration's `max_payload_bytes`, at most 4 MiB, never reaches APF and gets no APF record. OpenShell blocks it if the host's middleware entry is `fail_closed`, and forwards it uninspected if every middleware on the host is `fail_open`. | Use `on_error: fail_closed`, and keep request bodies to governed hosts under the limit. |
 | JSON-RPC batches with tool calls | Denied, because one evaluation carries one tool identity. | Send tool calls individually. |
 | Provider attachment and lifecycle RPCs | APF does not bind `AttachSandboxProvider`, `DetachSandboxProvider`, `DeleteProvider`, `ConfigureProviderRefresh`, or `RotateProviderCredential`. Attaching or detaching a provider changes a sandbox's effective network policy through OpenShell's provider layers. | Restrict who may call these RPCs in OpenShell. |
-| Per-request user identity | OpenShell supplies no user subject on the middleware path, so rules cannot condition on who the agent acts for. | Refer to [Identity and Delegation](/how-it-works/identity-and-delegation). |
+| Per-request user identity | OpenShell supplies no user subject on the middleware path, so rules cannot condition on who the agent acts for. | Refer to [Identity and Delegation](../how-it-works/identity-and-delegation.mdx). |
 | Retiring a bundle before it expires | A bundle is retired by publishing a higher revision. There is no revocation list that reaches a host which has not loaded the new one. | Publish the replacement at a higher revision, keep `expires_at` short, and remove a compromised key's trust root. |
 | Expiry of an active bundle | Not enforced until the next restart or reload. | Renew bundles well before `expires_at`. |
 | Runtime version gating | `runtime_compatibility` is not enforced. | Track OpenShell compatibility in your release process. |
@@ -54,5 +54,5 @@ APF decides on the request body it receives. If another middleware that transfor
 
 ## Next Steps
 
-- To close the gaps you can close today, refer to [Security Best Practices](/security/best-practices).
-- For the status of each capability, refer to [Support and Compatibility](/about/support-and-compatibility).
+- To close the gaps you can close today, refer to [Security Best Practices](best-practices.mdx).
+- For the status of each capability, refer to [Support and Compatibility](../about/support-and-compatibility.mdx).

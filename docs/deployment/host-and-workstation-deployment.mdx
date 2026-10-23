@@ -50,7 +50,7 @@ sudo install -D -m 0644 deploy/systemd/49-apf-service-lockdown.rules /etc/polkit
 
 ## Install Policy and Keys
 
-Install the signed bundle, the trust roots, and the document signing key with the ownership and modes in the table above. Use your own keys. Refer to [Configure a Signing Authority](/manage-policy-bundles/configure-a-signing-authority) and [Signing Keys and Trust Roots](/security/signing-keys-and-trust-roots).
+Install the signed bundle, the trust roots, and the document signing key with the ownership and modes in the table above. Use your own keys. Refer to [Configure a Signing Authority](../manage-policy-bundles/configure-a-signing-authority.mdx) and [Signing Keys and Trust Roots](../security/signing-keys-and-trust-roots.mdx).
 
 Set `APF_DOCUMENT_KEY_ID` to the same value in both env files. The shipped files use `apf-prod`.
 
@@ -87,7 +87,7 @@ The service refuses to start with `APF_HTTP_ADDR` set and no token. `/healthz`, 
 
 The shipped gateway env file enables both OpenShell listeners on loopback, `127.0.0.1:18202` for the interceptor and `127.0.0.1:9099` for the middleware, in authenticated mode. For each enabled surface, install its trust profile, certificate, and private key. The unit loads both private keys as credentials, so both key files must exist. If you do not use a surface, remove its address and file settings from the env file and its `LoadCredential` line and `--openshell-*-tls-key-file` argument from the unit.
 
-Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the trust profile format and how to obtain its values.
+Refer to [Configure Service Authentication](configure-service-authentication.mdx) for the trust profile format and how to obtain its values.
 
 ## Validate and Start
 
@@ -119,12 +119,12 @@ The units run each service with no capabilities, no new privileges, a read-only 
 
 - **Restart through your deploy pipeline only.** The polkit rule denies interactive `systemctl start`, `stop`, `restart`, and `reload` of both units to every local session. It does not restrict `root`. Restrict how administrators reach `root` with a sudoers wrapper, as described in `deploy/systemd/SECURITY.md`.
 - **Configuration is read at startup.** Restart the policy service after changing its env file, trust roots, or keys. The gateway picks up a new bundle through hot swap without a restart.
-- **Bundle updates.** With the local source, replace the bundle files and restart the policy service, or call `POST /v1/refresh` with the bundle path in the JSON body, `{"bundle_path": "/etc/apf/bundle/bundle.yaml"}`. Refer to [Update Policies](/manage-policy-bundles/update-policies).
-- **HTTP bundle source.** Requires more unit changes. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#systemd-hosts).
+- **Bundle updates.** With the local source, replace the bundle files and restart the policy service, or call `POST /v1/refresh` with the bundle path in the JSON body, `{"bundle_path": "/etc/apf/bundle/bundle.yaml"}`. Refer to [Update Policies](../manage-policy-bundles/update-policies.mdx).
+- **HTTP bundle source.** Requires more unit changes. Refer to [Publish and Distribute](../manage-policy-bundles/publish-and-distribute.mdx#systemd-hosts).
 - **Detect tampering.** Add auditd watches on the unit files, `/etc/apf`, and both binaries, and ship them with the units.
-- **Keep OpenShell's agent policy proposals off.** Refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell#turn-off-agent-policy-proposals).
+- **Keep OpenShell's agent policy proposals off.** Refer to [Add APF to OpenShell](../get-started/add-apf-to-openshell.mdx#turn-off-agent-policy-proposals).
 
 ## Next Steps
 
-- To configure caller authentication, refer to [Configure Service Authentication](/deployment/configure-service-authentication).
-- To review the full security checklist, refer to [Security Best Practices](/security/best-practices).
+- To configure caller authentication, refer to [Configure Service Authentication](configure-service-authentication.mdx).
+- To review the full security checklist, refer to [Security Best Practices](../security/best-practices.mdx).

@@ -91,7 +91,7 @@ The contract evolves additively. The gateway rejects an `AttributeStatus` value 
 
 ## The Enrichment Stage
 
-For each evaluation, the gateway runs these steps for every registered provider. Refer to [Request Evaluation](/how-it-works/request-evaluation#stage-1-enrichment) for where the stage sits in the pipeline.
+For each evaluation, the gateway runs these steps for every registered provider. Refer to [Request Evaluation](../how-it-works/request-evaluation.mdx#stage-1-enrichment) for where the stage sits in the pipeline.
 
 1. **Applicability.** `applies_to` lists tool names or action ids. The provider runs when an entry equals the request's tool name or its action id. A registration without `applies_to` applies to every evaluation. A provider that does not apply makes no lookup and records the status `not_applicable`.
 2. **Projection.** The subject is projected to the fields the provider's type allows. Only those fields leave the gateway.
@@ -372,7 +372,7 @@ Every `authorization` record written after the stage ran carries an `extensions.
 }
 ```
 
-`domain` is the registration's `context`. Domains and provider names are values, not keys, so the audit sanitizer's key rules cannot demote the record. An `evidence_ref` the sanitizer rejects is dropped from the entry, not the entry from the record. `latency_ms` is `0` for a provider that did not apply. Both the middleware's `apf-policy-gateway-middleware-audit.jsonl` and the gateway's `apf-policy-gateway-audit.jsonl` carry the extension. Refer to [Audit Event Schema](/reference/audit-event-schema).
+`domain` is the registration's `context`. Domains and provider names are values, not keys, so the audit sanitizer's key rules cannot demote the record. An `evidence_ref` the sanitizer rejects is dropped from the entry, not the entry from the record. `latency_ms` is `0` for a provider that did not apply. Both the middleware's `apf-policy-gateway-middleware-audit.jsonl` and the gateway's `apf-policy-gateway-audit.jsonl` carry the extension. Refer to [Audit Event Schema](../reference/audit-event-schema.mdx).
 
 ## Failure Modes
 
@@ -405,7 +405,7 @@ Two statuses deny regardless of the failure mode. `invalid_input` is a failure t
 - A `forbid` that reads a provider fact without a guard denies the request when the fact is missing, because a forbid that fails to evaluate denies. That is the safe default for a deny rule. To deny explicitly when a provider degraded, test `context.<domain>._meta.degraded`.
 - `degrade` relies on Cedar's missing-attribute behavior. The idiom that ports to any engine is an explicit `_meta.degraded` test, or `fail_closed`.
 
-Refer to [Capability Grants](/author-policies/capability-grants#grants-that-depend-on-provider-facts).
+Refer to [Capability Grants](../author-policies/capability-grants.mdx#grants-that-depend-on-provider-facts).
 
 ## Security
 
@@ -500,13 +500,13 @@ The same shape turns an identity system into a provider. Key the lookup on `user
     timeout_ms: 200
 ```
 
-A grant then reads the facts: `context.user has clearance && context.user.clearance == "elevated"`. The subject is the one the caller asserts on `EvaluationService.Evaluate`; the OpenShell middleware path carries none, which is why the example is scoped with `applies_to`: unscoped, it would deny every sandbox request as `pip_no_data:identity`. Refer to [Identity and Delegation](/how-it-works/identity-and-delegation).
+A grant then reads the facts: `context.user has clearance && context.user.clearance == "elevated"`. The subject is the one the caller asserts on `EvaluationService.Evaluate`; the OpenShell middleware path carries none, which is why the example is scoped with `applies_to`: unscoped, it would deny every sandbox request as `pip_no_data:identity`. Refer to [Identity and Delegation](../how-it-works/identity-and-delegation.mdx).
 
 The repository ships the three registration shapes as annotated files under `examples/pips/`.
 
 ## Next Steps
 
-- For the gateway flags, refer to [CLI Commands](/reference/cli-commands#provider-options).
-- To see where the stage sits in the pipeline, refer to [Request Evaluation](/how-it-works/request-evaluation#stage-1-enrichment).
-- To write grants over provider facts, refer to [Capability Grants](/author-policies/capability-grants#grants-that-depend-on-provider-facts).
-- To read provider provenance in audit records, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+- For the gateway flags, refer to [CLI Commands](../reference/cli-commands.mdx#provider-options).
+- To see where the stage sits in the pipeline, refer to [Request Evaluation](../how-it-works/request-evaluation.mdx#stage-1-enrichment).
+- To write grants over provider facts, refer to [Capability Grants](../author-policies/capability-grants.mdx#grants-that-depend-on-provider-facts).
+- To read provider provenance in audit records, refer to [Understand Decisions and Findings](../observability/understand-decisions-and-findings.mdx).

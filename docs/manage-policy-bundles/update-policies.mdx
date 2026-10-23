@@ -14,8 +14,8 @@ Updating policy means publishing a new signed bundle with a higher `policy_revis
 
 1. Change the policy documents, and review the change.
 2. Increase `policy_revision` in the manifest template.
-3. Sign the bundle. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
-4. Verify it offline and build the evaluator locally. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+3. Sign the bundle. Refer to [Compile and Sign](compile-and-sign.mdx).
+4. Verify it offline and build the evaluator locally. Refer to [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx).
 5. Publish it.
 6. Activate it on each policy service:
    - **HTTP source:** wait for the next poll, or call `POST /v1/refresh` to fetch now. The call returns `200` even when the fetch or verification fails, so confirm the outcome in the audit log or by the `version` in the response.
@@ -34,7 +34,7 @@ Updating policy means publishing a new signed bundle with a higher `policy_revis
      {"status":"refreshed","policy_digest":"<digest>","version":8}
      ```
 
-7. Confirm activation in the audit trail. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate#bundle-states).
+7. Confirm activation in the audit trail. Refer to [Verify and Activate](verify-and-activate.mdx#bundle-states).
 
 ## How Far a Change Reaches
 
@@ -75,5 +75,5 @@ The anti-rollback counter refuses any revision lower than the last accepted one,
 
 ## Next Steps
 
-- To try an update end to end, refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
-- To understand the counter, refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+- To try an update end to end, refer to [Update a Signed Policy](../tutorials/update-a-signed-policy.mdx).
+- To understand the counter, refer to [Expiry and Rollback Protection](expiry-and-rollback-protection.mdx).

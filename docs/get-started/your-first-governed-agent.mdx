@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Tutorial, Governed Agent, Pr
 position: 5
 ---
 
-This walkthrough admits a sandbox under the signed bundle from [Your First Signed Policy](/get-started/your-first-signed-policy) and exercises each layer of the governed path. You use `curl` inside the sandbox as a stand-in for an agent, so no AI model is required.
+This walkthrough admits a sandbox under the signed bundle from [Your First Signed Policy](your-first-signed-policy.mdx) and exercises each layer of the governed path. You use `curl` inside the sandbox as a stand-in for an agent, so no AI model is required.
 
 After completing it, you understand:
 
@@ -23,10 +23,10 @@ This walkthrough demonstrates signed policy projection and the evidence trail fo
 
 ## Prerequisites
 
-- APF running as native processes with the revision 2 bundle from [Your First Signed Policy](/get-started/your-first-signed-policy). The demo bundle at revision 1 also works if you skip the `GET /get` step.
-- APF registered with your OpenShell gateway as both a gateway interceptor and a supervisor middleware, as described in [Add APF to OpenShell](/get-started/add-apf-to-openshell), and the OpenShell gateway restarted.
+- APF running as native processes with the revision 2 bundle from [Your First Signed Policy](your-first-signed-policy.mdx). The demo bundle at revision 1 also works if you skip the `GET /get` step.
+- APF registered with your OpenShell gateway as both a gateway interceptor and a supervisor middleware, as described in [Add APF to OpenShell](add-apf-to-openshell.mdx), and the OpenShell gateway restarted.
 - A workload image with `curl` installed at `/usr/bin/curl` and a `sandbox` user and group, which the demo sandbox policy runs the workload as. The policy lets only `/usr/bin/curl` and `/usr/bin/python3` reach `httpbin.org`.
-- A second terminal set up as in [Set Up Each Terminal](/get-started/installation#set-up-each-terminal), for the host commands.
+- A second terminal set up as in [Set Up Each Terminal](installation.mdx#set-up-each-terminal), for the host commands.
 - `python3` on the host to decode the provenance token.
 
 <Steps toc={true}>
@@ -95,7 +95,7 @@ python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; print(json.dump
 }
 ```
 
-The token is signed with the policy service's document key. Anyone with the public key from `/.well-known/jwks.json` can verify that this sandbox was admitted under revision 2 of `cedar-demo-bundle`. Refer to [Trace Policy Provenance](/observability/trace-policy-provenance) to verify the signature.
+The token is signed with the policy service's document key. Anyone with the public key from `/.well-known/jwks.json` can verify that this sandbox was admitted under revision 2 of `cedar-demo-bundle`. Refer to [Trace Policy Provenance](../observability/trace-policy-provenance.mdx) to verify the signature.
 
 ## Find the Admission Record
 
@@ -208,6 +208,6 @@ openshell sandbox delete apf-demo
 
 ## Next Steps
 
-- To change the policy the right way, refer to [Update a Signed Policy](/tutorials/update-a-signed-policy).
-- To trace any decision back to its rule, refer to [Investigate a Denied Request](/observability/investigate-a-denied-request).
-- To write your own content controls, refer to [Content Controls](/author-policies/content-controls).
+- To change the policy the right way, refer to [Update a Signed Policy](../tutorials/update-a-signed-policy.mdx).
+- To trace any decision back to its rule, refer to [Investigate a Denied Request](../observability/investigate-a-denied-request.mdx).
+- To write your own content controls, refer to [Content Controls](../author-policies/content-controls.mdx).

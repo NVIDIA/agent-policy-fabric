@@ -24,7 +24,7 @@ Make sure the following are in place before you install.
 | Helm 3 and `kubectl` | Yes | The chart is installed from the repository checkout. |
 | Agent Sandbox controller and CRDs | Yes | OpenShell provisions sandboxes through it. The kind harness installs release `v1.0.3`. Refer to [Set Up OpenShell on Kubernetes](https://docs.nvidia.com/openshell/latest/kubernetes/setup#install-agent-sandbox). |
 | Docker | Yes | Builds the two APF images from the Dockerfiles under `deploy/docker`. The kind harness also runs its node in it. |
-| A signed bundle and its public trust key | Yes | The chart ships neither. Refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign). |
+| A signed bundle and its public trust key | Yes | The chart ships neither. Refer to [Compile and Sign](../manage-policy-bundles/compile-and-sign.mdx). |
 | `kind` and `yq` v4 | For the kind harness | `brew install kind kubectl helm yq` installs them together with Helm and `kubectl` on macOS. |
 | OpenShell CLI `0.1.3` | For the kind harness | When the workstation is online, the harness downloads a checksum-verified copy to `e2e/.work/openshell`. Offline, unpack the `openshell` binary from the OpenShell release archive to that path, or set `OPENSHELL_CLI`. |
 | `openssl`, `python3`, `tar`, `shasum`, `curl`, and `cargo` | For the kind harness | Sign the demo bundle, generate the serving certificate, and fetch the CLI. `cargo` builds `apf-compile` when `target/release/apf-compile` is missing. |
@@ -46,7 +46,7 @@ The OpenShell gateway calls the sandbox admission port on the APF Service when a
 
 ### Co-Located Topology
 
-The chart runs the policy service and the policy gateway as two containers in one pod sharing a Unix socket. This is the co-located model described in [Deployment Models](/deployment/deployment-models), and it is the only topology the chart offers: the gateway fetches documents only over the socket, so the two containers always share a pod and the Deployment runs one replica. With the default state PVC, the Deployment uses `Recreate` so one pod owns the anti-rollback counter; refer to [Persistence](#persistence).
+The chart runs the policy service and the policy gateway as two containers in one pod sharing a Unix socket. This is the co-located model described in [Deployment Models](deployment-models.mdx), and it is the only topology the chart offers: the gateway fetches documents only over the socket, so the two containers always share a pod and the Deployment runs one replica. With the default state PVC, the Deployment uses `Recreate` so one pod owns the anti-rollback counter; refer to [Persistence](#persistence).
 
 ## Install Order
 
@@ -137,7 +137,7 @@ gatewayConfig:
       timeout: 10s
 ```
 
-The gateway embeds the CA into the egress request policy registration it sends to supervisors, so supervisors need no mounted file. Leave out the `openshell.supervisor.middleware` entry when `policyGateway.openshell.egress.enabled` is false. The registration semantics are the same as on a host; refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell).
+The gateway embeds the CA into the egress request policy registration it sends to supervisors, so supervisors need no mounted file. Leave out the `openshell.supervisor.middleware` entry when `policyGateway.openshell.egress.enabled` is false. The registration semantics are the same as on a host; refer to [Add APF to OpenShell](../get-started/add-apf-to-openshell.mdx).
 
 </Steps>
 
@@ -185,9 +185,9 @@ leeway_secs = 60
 EOF
 ```
 
-Repeat with the `middleware` audience for the egress request policy Secret. Each listener trusts one key, so coordinate an OpenShell signing-key change with an APF rollout. Refer to [Configure Service Authentication](/deployment/configure-service-authentication) for the caller rules.
+Repeat with the `middleware` audience for the egress request policy Secret. Each listener trusts one key, so coordinate an OpenShell signing-key change with an APF rollout. Refer to [Configure Service Authentication](configure-service-authentication.mdx) for the caller rules.
 
-The audiences above follow the OpenShell gateway ID because the registration in [Register APF through the OpenShell chart](#register-apf-through-the-openshell-chart) sets `audience` to it explicitly; the gateway ID, which also forms the `issuer`, is the OpenShell release fullname unless the OpenShell values set another one (`server.sandboxJwt.gatewayId`). A registration that omits `audience` gets OpenShell's default, derived from the registration name rather than the gateway ID, which is why the trust profile on [Configure Service Authentication](/deployment/configure-service-authentication#the-trust-profile) carries `urn:openshell:extension:middleware:apf-content-policy`. Whichever form a registration resolves to, its `trust.toml` must carry that exact value: APF advertises the trust-profile audience in its manifest, and the OpenShell gateway refuses to start when it differs from the registration.
+The audiences above follow the OpenShell gateway ID because the registration in [Register APF through the OpenShell chart](#register-apf-through-the-openshell-chart) sets `audience` to it explicitly; the gateway ID, which also forms the `issuer`, is the OpenShell release fullname unless the OpenShell values set another one (`server.sandboxJwt.gatewayId`). A registration that omits `audience` gets OpenShell's default, derived from the registration name rather than the gateway ID, which is why the trust profile on [Configure Service Authentication](configure-service-authentication.mdx#the-trust-profile) carries `urn:openshell:extension:middleware:apf-content-policy`. Whichever form a registration resolves to, its `trust.toml` must carry that exact value: APF advertises the trust-profile audience in its manifest, and the OpenShell gateway refuses to start when it differs from the registration.
 
 ## Persistence
 
@@ -208,7 +208,7 @@ The default state PVC needs a default StorageClass or `persistence.state.storage
 
 ## Verify Locally with kind
 
-The verification harness under `e2e/` brings the full stack up on a local kind cluster, runs the smoke suite, and uninstalls both releases. It needs the two APF images, `apf-policy-service:dev` and `apf-policy-gateway:dev`, built locally from the Dockerfiles under `deploy/docker/`; `mise run dev` on the [Installation](/get-started/installation) page builds them. The harness loads them into the kind node itself and never pulls them.
+The verification harness under `e2e/` brings the full stack up on a local kind cluster, runs the smoke suite, and uninstalls both releases. It needs the two APF images, `apf-policy-service:dev` and `apf-policy-gateway:dev`, built locally from the Dockerfiles under `deploy/docker/`; `mise run dev` on the [Installation](../get-started/installation.mdx) page builds them. The harness loads them into the kind node itself and never pulls them.
 
 ```shell
 e2e/with-kind-stack.sh e2e/suites/smoke.sh          # bring the stack up, run the smoke suite, uninstall both releases
@@ -216,7 +216,7 @@ e2e/with-kind-stack.sh --pip e2e/suites/smoke.sh    # also run a provider stub a
 e2e/with-kind-stack.sh --down --cluster             # also delete the kind cluster
 ```
 
-`mise run e2e:kind` runs the first command. Refer to [Contributing](/resources/contributing) for the harness tasks that cover the Compose stack and the static flag-parity check.
+`mise run e2e:kind` runs the first command. Refer to [Contributing](../resources/contributing.mdx) for the harness tasks that cover the Compose stack and the static flag-parity check.
 
 A run creates the kind cluster `apf-e2e` when it is missing, with `kind-apf-e2e` as its `kubectl` context, installs the Agent Sandbox controller, installs the OpenShell chart as a fixture, signs the demo bundle with the development keys, derives the trust profiles from the OpenShell JWT Secret, installs this chart, registers APF through the OpenShell chart's `gatewayConfig`, and creates a sandbox through the OpenShell CLI. The smoke suite proves that the chart renders a working pod, that the policy service verified exactly the document the harness signed, that a decision comes back over the gateway socket, that the OpenShell gateway accepted APF's `Describe` for both listeners, and that sandbox admission injected APF's sandbox policy. Egress request policy is registered but not exercised: the test sandbox makes no outbound request.
 
@@ -238,6 +238,6 @@ Every setting is an environment variable with a default. `OPENSHELL_IMAGE_TAG` (
 
 ## Related Pages
 
-- [Helm Configuration](/reference/helm-configuration)
-- [Configure Service Authentication](/deployment/configure-service-authentication)
-- [Add APF to OpenShell](/get-started/add-apf-to-openshell)
+- [Helm Configuration](../reference/helm-configuration.mdx)
+- [Configure Service Authentication](configure-service-authentication.mdx)
+- [Add APF to OpenShell](../get-started/add-apf-to-openshell.mdx)

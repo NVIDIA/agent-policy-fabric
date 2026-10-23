@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, Audit, Schema, apf.audit.eve
 position: 7
 ---
 
-Every APF audit record is one JSON object on one line, valid against `contracts/audit/apf.audit.event.v1.schema.json`, a JSON Schema draft 2020-12 document. Components validate each record against the schema before writing it. For how to read and ship records, refer to [Access Audit Events](/observability/access-audit-events).
+Every APF audit record is one JSON object on one line, valid against `contracts/audit/apf.audit.event.v1.schema.json`, a JSON Schema draft 2020-12 document. Components validate each record against the schema before writing it. For how to read and ship records, refer to [Access Audit Events](../observability/access-audit-events.mdx).
 
 ## Files
 
@@ -39,7 +39,7 @@ Every record carries these fields.
 | `component.instance_id` | id | Yes | `<enforcement_point_id>@<hostname>`, or the enforcement point ID if the host name is unusable. |
 | `reason` | string | No | Free text, up to 1024 characters. Set on degraded records, on records written with no active bundle, and on `counter_not_newer` refusals, where it is `http_bundle_source_poll`. |
 
-The schema also defines `causation_id`, `trace_id`, `span_id`, `device_id`, `deployment_profile`, `component.workload_identity`, `delivery`, and `extensions`. Of these, only `extensions` is set: an `authorization` record written after the Enrichment stage ran carries `extensions.x_apf_pip`, listing what each policy information provider contributed. Refer to [Policy Information Providers](/integrations/policy-information-providers#audit-extension).
+The schema also defines `causation_id`, `trace_id`, `span_id`, `device_id`, `deployment_profile`, `component.workload_identity`, `delivery`, and `extensions`. Of these, only `extensions` is set: an `authorization` record written after the Enrichment stage ran carries `extensions.x_apf_pip`, listing what each policy information provider contributed. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx#audit-extension).
 
 ### String Profiles
 
@@ -75,7 +75,7 @@ Every event type rejects fields it does not allow. `authentication` and `policy_
 | Field | Type | Description |
 |---|---|---|
 | `outcome` | enum | `success`, `failure`, or `refused`. On every event type except `authorization` and `policy_service_startup`. `failure` is an operational error. `refused` is a deliberate rejection. |
-| `reason_code` | reason code | Why the record was written. Refer to [Error Reference](/reference/error-reference). |
+| `reason_code` | reason code | Why the record was written. Refer to [Error Reference](error-reference.mdx). |
 | `error.code` | reason code | The same value as `reason_code`. |
 | `error.message` | string | Detail, up to 1024 bytes. Long detail is truncated with ` [+N more]` or an ellipsis. |
 | `error.retryable` | boolean | Whether retrying could succeed. |
@@ -114,7 +114,7 @@ What `bundle_digest` identifies depends on the component.
 | Any record with no active bundle | `none`, with an explanatory `reason`. | Omitted. |
 | A degraded gateway, interceptor, or middleware record | `unrecordable`. | Kept. |
 
-Use `policy_revision` to relate records across components, not `bundle_digest`. Only policy service records carry `bundle_id`. Refer to [Trace Policy Provenance](/observability/trace-policy-provenance).
+Use `policy_revision` to relate records across components, not `bundle_digest`. Only policy service records carry `bundle_id`. Refer to [Trace Policy Provenance](../observability/trace-policy-provenance.mdx).
 
 ### Resource and Verb
 
@@ -196,5 +196,5 @@ Before writing, every string is scanned. A record that contains a private key bl
 
 ## Next Steps
 
-- For every `reason_code`, refer to [Error Reference](/reference/error-reference).
-- For example records and queries, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+- For every `reason_code`, refer to [Error Reference](error-reference.mdx).
+- For example records and queries, refer to [Understand Decisions and Findings](../observability/understand-decisions-and-findings.mdx).

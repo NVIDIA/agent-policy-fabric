@@ -9,13 +9,19 @@
 # ]
 # ///
 
-"""Check that the published docs navigation mirrors the docs folder structure.
+"""Check that the published docs navigation mirrors the docs folder structure,
+and that links between pages work both on GitHub and in Fern.
 
 Fern does not build page URLs from file paths. It uses, in order, the page's
 frontmatter `slug`, the nav entry's `slug`, or the nav label, and it splits
 camel case in labels, so "TypeScript" becomes `type-script`. Pages in a
 `folder:` section use their file names. A URL can therefore drift away from
 where its file lives without any link breaking.
+
+Pages link to each other's .mdx files with relative paths. GitHub follows the
+file path, and Fern rewrites a link to an .mdx file into that page's URL when
+it builds the site. A site path such as `/about/architecture` works only in
+Fern, and a relative path without `.mdx` is not rewritten.
 
 This check fails when:
 
@@ -24,9 +30,11 @@ This check fails when:
 - a nav page's sidebar name, its `sidebar-title` or else its `title`, differs
   from its nav label. Fern shows the sidebar name but builds the URL from the
   label, so the two must agree;
-- a docs page is not reachable from the navigation; or
+- a docs page is not reachable from the navigation;
 - a redirect for this docs version points to a URL that does not exist, or its
-  source is still a live page.
+  source is still a live page; or
+- a docs page links to a site path, or to a relative path that is not a file
+  under docs/.
 """
 
 from __future__ import annotations
@@ -41,6 +49,13 @@ import yaml
 
 # Files under docs/ that are intentionally not published as pages.
 UNPUBLISHED = {"CONTRIBUTING.mdx"}
+
+# Link targets in Markdown, `[text](target)`, and in JSX `href` and `src` props.
+LINK = re.compile(r"\]\(([^)\s]+)|\b(?:href|src)=[\"']([^\"']+)")
+FENCE = re.compile(r"^\s*(```|~~~)")
+INLINE_CODE = re.compile(r"(`+).*?\1")
+# URL schemes, protocol-relative URLs, and same-page anchors.
+NOT_A_PAGE_LINK = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|//|#)", re.I)
 
 
 def fern_slug(label: str) -> str:
@@ -158,6 +173,44 @@ class NavCheck:
                 continue
             self.issues.append(f"{rel}: not reachable from docs/index.yml")
 
+    def check_links(self) -> None:
+        docs_root = self.docs_root.resolve()
+        for page in sorted(self.docs_root.rglob("*.mdx")):
+            rel = page.relative_to(self.docs_root).as_posix()
+            in_fence = False
+            lines = page.read_text(encoding="utf-8").splitlines()
+            for lineno, line in enumerate(lines, 1):
+                if FENCE.match(line):
+                    in_fence = not in_fence
+                    continue
+                if in_fence:
+                    continue
+                for match in LINK.finditer(INLINE_CODE.sub("", line)):
+                    target = match.group(1) or match.group(2)
+                    if NOT_A_PAGE_LINK.match(target):
+                        continue
+                    path = target.split("#", 1)[0]
+                    where = f"{rel}:{lineno}: link {target}"
+                    if path.startswith("/"):
+                        self.issues.append(
+                            f"{where} is a site path, which GitHub cannot follow. "
+                            "Link to the page's .mdx file with a relative path."
+                        )
+                        continue
+                    resolved = (page.parent / path).resolve()
+                    if docs_root not in resolved.parents:
+                        self.issues.append(
+                            f"{where} leaves docs/, which Fern does not publish. "
+                            "Name the file in code formatting instead."
+                        )
+                    elif not resolved.is_file():
+                        hint = (
+                            " Add the .mdx extension."
+                            if resolved.with_name(resolved.name + ".mdx").is_file()
+                            else ""
+                        )
+                        self.issues.append(f"{where} is not a file.{hint}")
+
     def check_redirects(self, redirects: list, prefix: str) -> None:
         live = set(self.urls) | {""}
         for redirect in redirects or []:
@@ -197,6 +250,7 @@ def run(repo_root: Path) -> list[str]:
         check.reachable.add(landing)
     check.walk(nav.get("navigation", []), "")
     check.check_orphans()
+    check.check_links()
     fern_file = repo_root / "fern" / "docs.yml"
     if fern_file.exists():
         fern_config = yaml.safe_load(fern_file.read_text(encoding="utf-8"))
@@ -208,7 +262,8 @@ def run(repo_root: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Check that the published docs navigation mirrors the docs folder structure."
+        description="Check that the published docs navigation mirrors the docs "
+        "folder structure and that page links point to .mdx files."
     )
     parser.add_argument(
         "--repo-root", type=Path, default=Path(__file__).resolve().parents[1]
@@ -220,7 +275,9 @@ def main() -> int:
     if issues:
         print(f"docs nav: {len(issues)} problem(s) found", file=sys.stderr)
         return 1
-    print("docs nav: every page URL matches its file path")
+    print(
+        "docs nav: every page URL matches its file path and every link points to a file"
+    )
     return 0
 
 

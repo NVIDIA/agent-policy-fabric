@@ -40,7 +40,7 @@ With `--policy-source http`, the service fetches a gzipped tarball of the bundle
 - **Initial load.** The first fetch happens at startup and fails closed.
 - **Polling.** A background task polls every `--bundle-source-poll-interval-secs` seconds, 30 by default. It sends a `HEAD` request first, and a failed `HEAD` request fails the poll. It skips the download when the `x-checksum-sha256` or `ETag` header equals the hex SHA-256 of the archive it already has, so a quoted or opaque `ETag` never skips. A polling download is retried up to three times with backoff.
 - **Hot swap.** A fetched bundle replaces the served projections only if it verifies and its revision passes the counter check. A failed poll leaves the current bundle in place.
-- **Variants.** The source code supports a `{variant}` placeholder in the URL for per-caller bundles, but the service does not load variants in this release. Use a literal URL. Refer to [Publish and Distribute](/manage-policy-bundles/publish-and-distribute#per-caller-bundle-variants).
+- **Variants.** The source code supports a `{variant}` placeholder in the URL for per-caller bundles, but the service does not load variants in this release. Use a literal URL. Refer to [Publish and Distribute](../manage-policy-bundles/publish-and-distribute.mdx#per-caller-bundle-variants).
 
 <Warning>
 The service accepts a plain `http://` bundle source URL without a warning. Use `https://`. A compromised or misconfigured origin cannot get an unsigned bundle accepted, but the transport and its token are still part of the trust boundary.
@@ -48,9 +48,9 @@ The service accepts a plain `http://` bundle source URL without a warning. Use `
 
 ## Verification
 
-The service verifies a bundle once, when it ingests it. It checks the signature first and stops if the signature fails or the payload does not parse. It then checks every manifest member's digest, the validity window, the syntax of the `runtime_compatibility` entries, and the anti-rollback counter, and reports every failure at once. The service presents no runtime versions, so no compatibility comparison happens in this release. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate) for each check and its rejection reason.
+The service verifies a bundle once, when it ingests it. It checks the signature first and stops if the signature fails or the payload does not parse. It then checks every manifest member's digest, the validity window, the syntax of the `runtime_compatibility` entries, and the anti-rollback counter, and reports every failure at once. The service presents no runtime versions, so no compatibility comparison happens in this release. Refer to [Verify and Activate](../manage-policy-bundles/verify-and-activate.mdx) for each check and its rejection reason.
 
-The counter advances only after the bundle compiles, so a bundle that fails compilation never consumes a revision. Compilation here parses the documents and produces the projections. It does not build the Cedar evaluator, so a Cedar or annotator error passes the policy service and consumes the revision. Refer to [Validate and Test Policies](/author-policies/validate-and-test-policies).
+The counter advances only after the bundle compiles, so a bundle that fails compilation never consumes a revision. Compilation here parses the documents and produces the projections. It does not build the Cedar evaluator, so a Cedar or annotator error passes the policy service and consumes the revision. Refer to [Validate and Test Policies](../author-policies/validate-and-test-policies.mdx).
 
 ## Compilation and Projection
 
@@ -65,7 +65,7 @@ A verified bundle is compiled into surfaces. Each surface is a document kind tha
 
 `--surfaces` limits which surface kinds the service serves. A request for any other kind is refused with `kind '<kind>' is not served by this instance`. The policy gateway needs `apf.policy.v1`, and the interceptor needs `openshell.sandbox.v1` and `openshell.provider-profile.v1`.
 
-Refer to [Policy Projection](/how-it-works/policy-projection) for how each surface is built.
+Refer to [Policy Projection](policy-projection.mdx) for how each surface is built.
 
 ## Serving Documents
 
@@ -118,9 +118,9 @@ The token is compared in constant time. A missing or wrong token returns `401` a
 
 ## Audit Events
 
-The policy service writes `policy_service_startup`, `policy_verification`, `policy_activation`, `policy_distribution`, `policy_refresh`, `provenance_signing`, and `authentication` records. Refer to [Audit Event Schema](/reference/audit-event-schema).
+The policy service writes `policy_service_startup`, `policy_verification`, `policy_activation`, `policy_distribution`, `policy_refresh`, `provenance_signing`, and `authentication` records. Refer to [Audit Event Schema](../reference/audit-event-schema.mdx).
 
 ## Next Steps
 
-- To see how the gateway consumes these documents, refer to [Policy Gateway](/how-it-works/policy-gateway).
-- For every flag and environment variable, refer to [CLI Commands](/reference/cli-commands#apf-policy-service).
+- To see how the gateway consumes these documents, refer to [Policy Gateway](policy-gateway.mdx).
+- For every flag and environment variable, refer to [CLI Commands](../reference/cli-commands.mdx#apf-policy-service).

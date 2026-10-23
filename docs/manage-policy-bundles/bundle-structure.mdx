@@ -55,11 +55,11 @@ manifest:
 | `metadata` | No | Reserved for future envelope fields. |
 | `id` | Yes | Stable identifier for the bundle. Recorded as `bundle_id` in the policy service's audit events and as `apf/bundle-id` in provenance tokens. Start with a letter or digit, use only letters, digits, and `. _ : @ / + - =`, and stay within 512 characters, because the policy service refuses a bundle whose `id` it cannot record. |
 | `description` | No | Human-readable purpose of the bundle. |
-| `policy_revision` | Yes | Monotonic revision. It must increase with every published change. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection). |
+| `policy_revision` | Yes | Monotonic revision. It must increase with every published change. Refer to [Expiry and Rollback Protection](expiry-and-rollback-protection.mdx). |
 | `not_before` | Yes | RFC 3339 time before which the bundle is not valid. |
 | `expires_at` | Yes | RFC 3339 time after which the bundle is not valid. |
 | `manifest` | No | Ordered list of members, each with a relative `path` and the hex `sha256` of the file's bytes on disk. A bundle without members carries no policy. |
-| `runtime_compatibility` | No | Map of runtime adapter name to `min_version` and `max_version`. Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate#runtime-compatibility). |
+| `runtime_compatibility` | No | Map of runtime adapter name to `min_version` and `max_version`. Refer to [Verify and Activate](verify-and-activate.mdx#runtime-compatibility). |
 
 The verifying key ID is not a manifest field. It travels in the signature document.
 
@@ -130,5 +130,5 @@ Create the archive from inside the bundle directory, so member paths stay relati
 
 ## Next Steps
 
-- To sign a bundle, refer to [Compile and Sign](/manage-policy-bundles/compile-and-sign).
-- For the protobuf and JSON Schema definitions, refer to [Bundle Specification](/reference/bundle-specification).
+- To sign a bundle, refer to [Compile and Sign](compile-and-sign.mdx).
+- For the protobuf and JSON Schema definitions, refer to [Bundle Specification](../reference/bundle-specification.mdx).

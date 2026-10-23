@@ -37,7 +37,7 @@ Validate the configuration, links, and navigation without starting a server:
 mise run docs
 ```
 
-`mise run docs` runs `fern check` and `scripts/check_docs_nav.py`. The navigation check fails when a page URL differs from its file path, when a navigation label differs from the page's sidebar title, or when a page is missing from the navigation. `mise run docs:clean` removes the local Fern cache. See [docs/CONTRIBUTING.mdx](../docs/CONTRIBUTING.mdx) for the authoring and style guide.
+`mise run docs` runs `fern check` and `scripts/check_docs_nav.py`. `fern check` fails on links that do not resolve to a page, through the `broken-links` rule in `fern/docs.yml`. The navigation check fails when a page URL differs from its file path, when a navigation label differs from the page's sidebar title, when a page is missing from the navigation, or when a page links to a site path such as `/about/architecture` instead of a relative `.mdx` file path such as `../about/architecture.mdx`. `mise run docs:clean` removes the local Fern cache. See [docs/CONTRIBUTING.mdx](../docs/CONTRIBUTING.mdx) for the authoring and style guide.
 
 ## Continuous integration
 

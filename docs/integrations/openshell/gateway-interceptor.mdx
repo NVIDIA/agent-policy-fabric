@@ -8,7 +8,7 @@ keywords: "Generative AI, Cybersecurity, AI Agents, OpenShell, Gateway Intercept
 position: 1
 ---
 
-APF's gateway interceptor puts OpenShell's control plane under signed policy. It injects the signed sandbox policy at admission, refreshes it on running sandboxes, and refuses direct policy edits, agent-authored proposals, draft approvals, and provider and profile changes outside the bundle. It does not bind every OpenShell RPC that can affect a sandbox. Refer to [Enforcement Coverage and Limitations](/security/enforcement-coverage-and-limitations). It runs inside `apf-policy-gateway` and implements OpenShell's `openshell.gateway_interceptor.v1.GatewayInterceptor` service.
+APF's gateway interceptor puts OpenShell's control plane under signed policy. It injects the signed sandbox policy at admission, refreshes it on running sandboxes, and refuses direct policy edits, agent-authored proposals, draft approvals, and provider and profile changes outside the bundle. It does not bind every OpenShell RPC that can affect a sandbox. Refer to [Enforcement Coverage and Limitations](../../security/enforcement-coverage-and-limitations.mdx). It runs inside `apf-policy-gateway` and implements OpenShell's `openshell.gateway_interceptor.v1.GatewayInterceptor` service.
 
 ## Manifest
 
@@ -47,7 +47,7 @@ Every RPC uses the `openshell.v1.OpenShell/` service prefix. Register APF with O
 
 ## Governance Decisions
 
-Governance decisions write an audit record to `apf-policy-gateway-interceptor-audit.jsonl`. A few outcomes write none: a refresh denied because the served projection has no provenance token, a sandbox creation or refresh that fails because the policy service is unreachable, a successful configuration validation, an allowed settings-only update, and post-commit calls. Provider operations do record an unreachable policy service, as `interceptor.govern_denied.policy_service_unavailable`. Admission decisions are listed on [Sandbox Admission](/how-it-works/sandbox-admission#admission-outcomes). The others are:
+Governance decisions write an audit record to `apf-policy-gateway-interceptor-audit.jsonl`. A few outcomes write none: a refresh denied because the served projection has no provenance token, a sandbox creation or refresh that fails because the policy service is unreachable, a successful configuration validation, an allowed settings-only update, and post-commit calls. Provider operations do record an unreachable policy service, as `interceptor.govern_denied.policy_service_unavailable`. Admission decisions are listed on [Sandbox Admission](../../how-it-works/sandbox-admission.mdx#admission-outcomes). The others are:
 
 | Reason code | Operation | Message returned to OpenShell |
 |---|---|---|
@@ -82,7 +82,7 @@ The snapshot revision is a hash of the verified content, the bundle identity and
 
 ## Caller Authentication
 
-Only the OpenShell gateway may call the interceptor. In authenticated mode, every call must carry a valid OpenShell extension JWT for the interceptor's audience, and APF rejects supervisor credentials. Refer to [Configure Service Authentication](/deployment/configure-service-authentication).
+Only the OpenShell gateway may call the interceptor. In authenticated mode, every call must carry a valid OpenShell extension JWT for the interceptor's audience, and APF rejects supervisor credentials. Refer to [Configure Service Authentication](../../deployment/configure-service-authentication.mdx).
 
 The interceptor accepts gRPC messages up to 8 MiB.
 
@@ -97,5 +97,5 @@ The interceptor accepts gRPC messages up to 8 MiB.
 
 ## Next Steps
 
-- To register the interceptor, refer to [Add APF to OpenShell](/get-started/add-apf-to-openshell).
-- To see the admission flow in detail, refer to [Sandbox Admission](/how-it-works/sandbox-admission).
+- To register the interceptor, refer to [Add APF to OpenShell](../../get-started/add-apf-to-openshell.mdx).
+- To see the admission flow in detail, refer to [Sandbox Admission](../../how-it-works/sandbox-admission.mdx).

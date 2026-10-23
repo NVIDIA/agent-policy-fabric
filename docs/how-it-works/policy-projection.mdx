@@ -82,7 +82,7 @@ An APF `Provider` document is composed into an OpenShell provider profile YAML d
 
 A bundle may also carry OpenShell-native provider profiles, either as `kind: ProviderProfile` documents or as profiles with a top-level `id` and `endpoints` and no `kind`. These pass through unchanged. If a `Provider` and a passthrough profile share a name, the composed `Provider` wins.
 
-Refer to [Credential Integration](/how-it-works/credential-integration) for how credential sources are projected.
+Refer to [Credential Integration](credential-integration.mdx) for how credential sources are projected.
 
 ## What Is Not Projected
 
@@ -91,9 +91,9 @@ Refer to [Credential Integration](/how-it-works/credential-integration) for how 
 
 ## Adding a Runtime
 
-A new runtime needs a new projector that implements the `Projector` trait from `apf-compiler` and is registered with the compiler in the policy service. The frontend, the passes, and the other projectors do not change. Refer to [APF Adapter](/integrations/apf-adapter).
+A new runtime needs a new projector that implements the `Projector` trait from `apf-compiler` and is registered with the compiler in the policy service. The frontend, the passes, and the other projectors do not change. Refer to [APF Adapter](../integrations/apf-adapter.mdx).
 
 ## Next Steps
 
-- To see how the sandbox projection reaches OpenShell, refer to [Sandbox Admission](/how-it-works/sandbox-admission).
-- To author the documents that are projected, refer to [Sandbox Policies](/author-policies/sandbox-policies).
+- To see how the sandbox projection reaches OpenShell, refer to [Sandbox Admission](sandbox-admission.mdx).
+- To author the documents that are projected, refer to [Sandbox Policies](../author-policies/sandbox-policies.mdx).

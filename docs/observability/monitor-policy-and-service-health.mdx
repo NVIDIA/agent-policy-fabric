@@ -34,9 +34,9 @@ A host is enforcing the policy you published when the same revision appears at e
 | Active in the gateway | The latest `policy_activation` record in `apf-policy-gateway-audit.jsonl`. |
 | Applied to a sandbox | The sandbox's `apf.nvidia.com/policy-version` annotation. |
 
-A gateway revision that stays lower than the policy service revision for longer than the gateway's refresh interval has several possible causes. The update changed no rules, annotators, effects, or findings, so the gateway saw no change, which is expected. The gateway could not fetch, decode, or build the new policy set; check its log for `get_document failed on hot-swap`, `PolicySet decode failed on hot-swap`, or `evaluator rebuild failed`. The change landed before the gateway's first poll after startup. Or bundle refresh is disabled with `--bundle-refresh-interval-secs 0`, or the gateway cannot reach the policy service; check its log for `digest watcher: get_document failed`. Refer to [Policy Updates Do Not Take Effect](/deployment/troubleshooting#policy-updates-do-not-take-effect). Sandboxes with a lower revision were admitted before the update and have not been refreshed.
+A gateway revision that stays lower than the policy service revision for longer than the gateway's refresh interval has several possible causes. The update changed no rules, annotators, effects, or findings, so the gateway saw no change, which is expected. The gateway could not fetch, decode, or build the new policy set; check its log for `get_document failed on hot-swap`, `PolicySet decode failed on hot-swap`, or `evaluator rebuild failed`. The change landed before the gateway's first poll after startup. Or bundle refresh is disabled with `--bundle-refresh-interval-secs 0`, or the gateway cannot reach the policy service; check its log for `digest watcher: get_document failed`. Refer to [Policy Updates Do Not Take Effect](../deployment/troubleshooting.mdx#policy-updates-do-not-take-effect). Sandboxes with a lower revision were admitted before the update and have not been refreshed.
 
-Also track `expires_at` for the active bundle. APF does not warn before a bundle expires. Refer to [Expiry and Rollback Protection](/manage-policy-bundles/expiry-and-rollback-protection).
+Also track `expires_at` for the active bundle. APF does not warn before a bundle expires. Refer to [Expiry and Rollback Protection](../manage-policy-bundles/expiry-and-rollback-protection.mdx).
 
 ## Signals to Alert On
 
@@ -67,5 +67,5 @@ Some conditions appear only in the services' logs, which go to standard output a
 
 ## Next Steps
 
-- To act on these signals, refer to [Troubleshooting](/deployment/troubleshooting).
-- To ship audit records to your monitoring system, refer to [Export Audit Events](/observability/export-audit-events).
+- To act on these signals, refer to [Troubleshooting](../deployment/troubleshooting.mdx).
+- To ship audit records to your monitoring system, refer to [Export Audit Events](export-audit-events.mdx).

@@ -18,7 +18,7 @@ npx --yes "fern-api@${FERN_VERSION}" check
 """
 
 ["docs:nav"]
-description = "Check that docs page URLs match their file paths"
+description = "Check that docs page URLs match their file paths and page links point to .mdx files"
 run = "uv run scripts/check_docs_nav.py"
 
 ["docs:serve"]

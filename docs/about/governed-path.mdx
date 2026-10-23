@@ -56,7 +56,7 @@ sequenceDiagram
   end
 ```
 
-Refer to [Verify and Activate](/manage-policy-bundles/verify-and-activate) for each check and its rejection reason.
+Refer to [Verify and Activate](../manage-policy-bundles/verify-and-activate.mdx) for each check and its rejection reason.
 
 ## Sandbox Admission
 
@@ -101,7 +101,7 @@ sequenceDiagram
   end
 ```
 
-Refer to [Sandbox Admission](/how-it-works/sandbox-admission) for the annotations and denial reasons.
+Refer to [Sandbox Admission](../how-it-works/sandbox-admission.mdx) for the annotations and denial reasons.
 
 ## Per-Action Layers
 
@@ -160,14 +160,14 @@ Layer 2 never sees provider credentials. The `PRE_CREDENTIALS` hook fires after 
 
 ## How Running Sandboxes Pick Up a New Policy
 
-A new bundle reaches per-request evaluation as soon as the gateway notices that the served policy set changed and swaps its evaluator. Refer to [Hot Swap](/how-it-works/policy-gateway#hot-swap) for when that can be delayed. The containment projection inside a running sandbox changes only when OpenShell processes an `UpdateConfig` for that sandbox.
+A new bundle reaches per-request evaluation as soon as the gateway notices that the served policy set changed and swaps its evaluator. Refer to [Hot Swap](../how-it-works/policy-gateway.mdx#hot-swap) for when that can be delayed. The containment projection inside a running sandbox changes only when OpenShell processes an `UpdateConfig` for that sandbox.
 
 When the gateway is started with `--openshell-gateway-url` and `--jwks-url`, and bundle refresh is enabled, its sandbox policy refresher sends a bare `UpdateConfig` to each Ready or Provisioning sandbox in the default workspace when the served policy set changes. APF's interceptor injects the newly served policy and provenance into that request. The trigger is a change to the bundle's rules, annotators, effects, or findings. A bundle that changes only the sandbox policy does not trigger a refresh. OpenShell rejects the whole update if the new sandbox policy changes a field it fixes at creation, such as `process` or `landlock`. Without those flags, running sandboxes keep their admitted projection, and new sandboxes receive the new projection at admission.
 
-Refer to [Update Policies](/manage-policy-bundles/update-policies) for the full update procedure.
+Refer to [Update Policies](../manage-policy-bundles/update-policies.mdx) for the full update procedure.
 
 ## Next Steps
 
-- To see each component's role in detail, refer to [How It Works](/how-it-works/policy-service).
-- To write the rules evaluated at Layer 2, refer to [Policy Model](/author-policies/policy-model).
-- To walk the path yourself, refer to [Your First Governed Agent](/get-started/your-first-governed-agent).
+- To see each component's role in detail, refer to [How It Works](../how-it-works/policy-service.mdx).
+- To write the rules evaluated at Layer 2, refer to [Policy Model](../author-policies/policy-model.mdx).
+- To walk the path yourself, refer to [Your First Governed Agent](../get-started/your-first-governed-agent.mdx).

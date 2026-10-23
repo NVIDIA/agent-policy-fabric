@@ -60,7 +60,7 @@ The Cedar context is a record with these attributes:
 | `args` | Record | Tool arguments. For each string argument `x`, APF also adds `x_len`, its length in characters, and `x_num`, its integer value when it parses as one. JSON nulls are dropped. |
 | `annotations` | Record | Values produced by the annotator stage. |
 | `data` | Record | The evaluating rule's own `spec.data` block. Each rule sees only its own data. |
-| `<domain>` | Record | Facts from the policy information provider registered for that domain, plus its `_meta` provenance record. One record per registered domain. Refer to [Policy Information Providers](/integrations/policy-information-providers). |
+| `<domain>` | Record | Facts from the policy information provider registered for that domain, plus its `_meta` provenance record. One record per registered domain. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx). |
 | `<domain>._meta` | Record | Provenance for the domain: `provider`, `verified`, `age_seconds`, `degraded`, `cached`, `status`, and `evidence_ref`. A record whose provider degraded or supplied nothing holds only `_meta`. |
 
 APF evaluates Cedar with an empty entity store. Conditions read from the context, not from entity attributes or hierarchies.
@@ -96,7 +96,7 @@ Without registered providers the Enrichment stage does nothing, and the pipeline
 
 ### Stage 1, Enrichment
 
-Before the evaluator runs, the gateway consults the policy information providers registered with `--pip-config` and writes their facts into the context. Refer to [Policy Information Providers](/integrations/policy-information-providers) for the registration file and the provider contract.
+Before the evaluator runs, the gateway consults the policy information providers registered with `--pip-config` and writes their facts into the context. Refer to [Policy Information Providers](../integrations/policy-information-providers.mdx) for the registration file and the provider contract.
 
 - A provider is consulted when it applies to the request. `applies_to` lists tool names or action ids, and an entry matches when it equals the request's tool name or its action id. On the OpenShell path both are the bare MCP tool name. On the `EvaluationService` path the tool name is `resource.class` and the action id is `<resource.class>::<verb>`. One entry covers both surfaces only when callers use the same tool name on both; otherwise list both forms. A registration without `applies_to` is consulted on every evaluation.
 - The gateway sends each applicable provider only what its type allows, the identity and action fields of the subject to a `grpc` provider and the request fields its lookup keys read to an `http` provider. It looks the facts up within the provider's `timeout_ms`, validates the answer, and writes it to `context.<domain>` together with a `_meta` provenance record. The whole stage runs under `--pip-stage-budget-ms`, 250 ms by default.
@@ -162,10 +162,10 @@ An evaluation error returns `evaluation_failed`. The engine's error text is not 
 | Policy deny | `DENY` with reason code `policy_denied`, the deny reason truncated to 4 KiB, and the forbid's findings. A fail-closed provider denial from the Enrichment stage uses the same reason code with the reason `pip_<status>:<provider>`. |
 | Adapter deny | `DENY` with one of the reason codes above. |
 
-OpenShell blocks a denied request or applies the changes, and only then injects provider credentials and forwards the request. Every decision writes one `authorization` record to the middleware audit file. When providers are registered, the record carries an `extensions.x_apf_pip` object listing what each provider contributed. Refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
+OpenShell blocks a denied request or applies the changes, and only then injects provider credentials and forwards the request. Every decision writes one `authorization` record to the middleware audit file. When providers are registered, the record carries an `extensions.x_apf_pip` object listing what each provider contributed. Refer to [Understand Decisions and Findings](../observability/understand-decisions-and-findings.mdx).
 
 ## Next Steps
 
-- To write rules for this pipeline, refer to [Policy Model](/author-policies/policy-model).
-- To see the middleware contract, refer to [Supervisor Middleware](/integrations/openshell/supervisor-middleware).
-- To register providers for the Enrichment stage, refer to [Policy Information Providers](/integrations/policy-information-providers).
+- To write rules for this pipeline, refer to [Policy Model](../author-policies/policy-model.mdx).
+- To see the middleware contract, refer to [Supervisor Middleware](../integrations/openshell/supervisor-middleware.mdx).
+- To register providers for the Enrichment stage, refer to [Policy Information Providers](../integrations/policy-information-providers.mdx).

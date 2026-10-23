@@ -61,7 +61,7 @@ The schema defines 14 event types. Eleven have producers today.
 | `runtime_substrate` | `openshell` for the gateway's components, and `none` for the policy service. |
 | `component` | `name`, `version`, and `instance_id`. The instance ID includes the host name, so records from several hosts stay distinguishable in one pipeline. |
 
-Operation events add `outcome` (`success`, `failure`, or `refused`) and `reason_code`. Authorization events add `decision` and `reason_code` instead, and the startup event adds `security_state` and `reason_code`. Policy identity fields, `bundle_digest`, `bundle_id`, `policy_revision`, and `trust_root_id`, appear where a policy is in force. Refer to [Audit Event Schema](/reference/audit-event-schema) for every field.
+Operation events add `outcome` (`success`, `failure`, or `refused`) and `reason_code`. Authorization events add `decision` and `reason_code` instead, and the startup event adds `security_state` and `reason_code`. Policy identity fields, `bundle_digest`, `bundle_id`, `policy_revision`, and `trust_root_id`, appear where a policy is in force. Refer to [Audit Event Schema](../reference/audit-event-schema.mdx) for every field.
 
 ## Read and Filter Records
 
@@ -93,7 +93,7 @@ Whether a failed write stops the operation depends on the event, not the compone
 
 ## Sanitized and Degraded Records
 
-Every string is scanned for credential-shaped content before a record is written, and fields that come from callers are length-capped and coerced to their schema patterns. When a record cannot be written safely, the gateway, interceptor, and middleware, and the policy service for document requests, write a reduced record instead. The event type, the decision or outcome, and the reason code survive. Caller-supplied detail is replaced with sentinel values such as `unspecified` or `unrecordable`, and the record notes the degradation in `reason`. Other policy service records have no reduced form: they are lost with a logged warning, or the operation stops. Do not treat sentinel values as real identities. Refer to [Degraded Records](/reference/audit-event-schema#degraded-records).
+Every string is scanned for credential-shaped content before a record is written, and fields that come from callers are length-capped and coerced to their schema patterns. When a record cannot be written safely, the gateway, interceptor, and middleware, and the policy service for document requests, write a reduced record instead. The event type, the decision or outcome, and the reason code survive. Caller-supplied detail is replaced with sentinel values such as `unspecified` or `unrecordable`, and the record notes the degradation in `reason`. Other policy service records have no reduced form: they are lost with a logged warning, or the operation stops. Do not treat sentinel values as real identities. Refer to [Degraded Records](../reference/audit-event-schema.mdx#degraded-records).
 
 ## Gaps in the Record
 
@@ -106,9 +106,9 @@ Some outcomes leave no audit record. Collect service logs alongside audit record
 
 Activation records need care too. A local `POST /v1/refresh` records `policy.bundle_loaded`, not `policy.bundle_hot_swapped`. An HTTP poll records `policy.bundle_loaded` before it decides whether to swap, so the record can be followed by `policy.bundle_rejected.counter_not_newer` for a bundle that never took effect. Treat the last record for a revision as authoritative.
 
-Refer to [Monitor Policy and Service Health](/observability/monitor-policy-and-service-health).
+Refer to [Monitor Policy and Service Health](monitor-policy-and-service-health.mdx).
 
 ## Next Steps
 
-- To read decisions and findings, refer to [Understand Decisions and Findings](/observability/understand-decisions-and-findings).
-- To ship records to a SIEM, refer to [Export Audit Events](/observability/export-audit-events).
+- To read decisions and findings, refer to [Understand Decisions and Findings](understand-decisions-and-findings.mdx).
+- To ship records to a SIEM, refer to [Export Audit Events](export-audit-events.mdx).

@@ -51,7 +51,7 @@ leeway_secs = 60
 | `max_lifetime_secs` | The longest token lifetime APF accepts, from 1 to 3600. |
 | `leeway_secs` | Allowed clock skew, at most 300. |
 
-Obtain the issuer, key ID, and public key from your OpenShell gateway's configuration. Refer to [OpenShell extension authentication](https://docs.nvidia.com/openshell/latest/extensibility/overview#authenticating-extensions). On Kubernetes, the OpenShell chart's pre-install Job writes the key ID and public key to the `<fullname>-jwt-keys` Secret as `kid` and `public.pem`; refer to [Trust Profiles](/deployment/kubernetes#trust-profiles).
+Obtain the issuer, key ID, and public key from your OpenShell gateway's configuration. Refer to [OpenShell extension authentication](https://docs.nvidia.com/openshell/latest/extensibility/overview#authenticating-extensions). On Kubernetes, the OpenShell chart's pre-install Job writes the key ID and public key to the `<fullname>-jwt-keys` Secret as `kid` and `public.pem`; refer to [Trust Profiles](kubernetes.mdx#trust-profiles).
 
 APF accepts exactly one `authorization: Bearer <JWT>` value and requires `alg` `EdDSA`, `typ` `openshell-ext+jwt`, the configured `kid`, the exact issuer and audience, a non-empty `jti`, and a bounded, unexpired lifetime.
 
@@ -90,7 +90,7 @@ apf-policy-gateway \
 
 The interceptor needs `--jwks-url` to verify provenance tokens, and the gateway refuses to start the interceptor without it.
 
-Each flag has an environment variable equivalent, for example `APF_OPENSHELL_MIDDLEWARE_AUTH_TRUST_FILE`. Refer to [CLI Commands](/reference/cli-commands#apf-policy-gateway).
+Each flag has an environment variable equivalent, for example `APF_OPENSHELL_MIDDLEWARE_AUTH_TRUST_FILE`. Refer to [CLI Commands](../reference/cli-commands.mdx#apf-policy-gateway).
 
 ### File Checks
 
@@ -122,5 +122,5 @@ With the HTTP policy source, put the artifact store token in a file and pass `--
 
 ## Next Steps
 
-- To deploy these files on a host, refer to [Host and Workstation Deployment](/deployment/host-and-workstation-deployment).
-- To see where each boundary sits, refer to [Trust Boundaries](/security/trust-boundaries).
+- To deploy these files on a host, refer to [Host and Workstation Deployment](host-and-workstation-deployment.mdx).
+- To see where each boundary sits, refer to [Trust Boundaries](../security/trust-boundaries.mdx).

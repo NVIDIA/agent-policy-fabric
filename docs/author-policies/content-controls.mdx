@@ -67,7 +67,7 @@ when {
 };
 ```
 
-Refer to [Annotators](/author-policies/annotators).
+Refer to [Annotators](annotators.mdx).
 
 ### Traffic Type
 
@@ -89,7 +89,7 @@ when {
 
 ### Tool Arguments
 
-`context.args` carries MCP tool arguments, with `_len` and `_num` fields derived for string arguments. Refer to [Capability Grants](/author-policies/capability-grants#constraining-arguments).
+`context.args` carries MCP tool arguments, with `_len` and `_num` fields derived for string arguments. Refer to [Capability Grants](capability-grants.mdx#constraining-arguments).
 
 ## Choosing a Response
 
@@ -112,10 +112,10 @@ Prefer a whole-body replacement when you cannot predict the body's shape.
 
 ## Scope
 
-Content controls see the request only. APF binds the supervisor middleware's request operation, so it does not inspect responses or WebSocket messages, and it never sees credentials, which OpenShell injects after APF decides. Refer to [Enforcement Coverage and Limitations](/security/enforcement-coverage-and-limitations).
+Content controls see the request only. APF binds the supervisor middleware's request operation, so it does not inspect responses or WebSocket messages, and it never sees credentials, which OpenShell injects after APF decides. Refer to [Enforcement Coverage and Limitations](../security/enforcement-coverage-and-limitations.mdx).
 
 ## Next Steps
 
-- To write the detectors these rules read, refer to [Annotators](/author-policies/annotators).
-- To define rewrites and findings, refer to [Effects and Findings](/author-policies/effects-and-findings).
-- To try these controls end to end, refer to [Protect Sensitive Data](/tutorials/protect-sensitive-data).
+- To write the detectors these rules read, refer to [Annotators](annotators.mdx).
+- To define rewrites and findings, refer to [Effects and Findings](effects-and-findings.mdx).
+- To try these controls end to end, refer to [Protect Sensitive Data](../tutorials/protect-sensitive-data.mdx).
