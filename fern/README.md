@@ -31,6 +31,8 @@ Start a local Fern server from the repository root:
 mise run docs:serve
 ```
 
+The site is served at `http://localhost:3000/agent-policy-fabric`. The task runs `fern docs dev --legacy`, because the default preview server in the pinned Fern CLI shows **Something went wrong!** on every page, and the legacy server renders them. When you update the pinned version, try the task without `--legacy`, and remove the flag if pages render.
+
 Validate the configuration, links, and navigation without starting a server:
 
 ```shell
