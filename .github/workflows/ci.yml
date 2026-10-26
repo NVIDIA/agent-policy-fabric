@@ -114,6 +114,15 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise run third-party-notices
 
+  license-page:
+    name: License page
+    runs-on: linux-amd64-cpu8
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-mise
+      - run: mise run license-page
+
   python-tests:
     name: Script tests
     runs-on: linux-amd64-cpu8

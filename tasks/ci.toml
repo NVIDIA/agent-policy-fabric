@@ -25,6 +25,7 @@ depends = [
   "rust:deny:policy",
   "license-headers",
   "third-party-notices",
+  "license-page",
   "python:test",
   "contracts:jsonschema",
   "contracts:lint",
