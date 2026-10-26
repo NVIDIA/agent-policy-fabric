@@ -1,0 +1,3 @@
+["chart:render"]
+description = "Lint, render, and package the Helm chart, and check the packaged chart carries the license text"
+run = "sh deploy/helm/apf/tests/render.sh"

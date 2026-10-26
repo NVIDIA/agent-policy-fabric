@@ -148,3 +148,12 @@ jobs:
       # The pushed pull-request/<N> head can be behind main; compare against the
       # merge base so later main changes do not show up as deletions.
       - run: APF_BREAKING_BASE="$(git merge-base origin/main HEAD)" mise run contracts:breaking
+
+  helm-chart:
+    name: Helm chart (lint, render, packaged license)
+    runs-on: linux-amd64-cpu8
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-mise
+      - run: mise run chart:render

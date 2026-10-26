@@ -45,7 +45,7 @@ out of scope for this repository and belong to the network egress gateway.
 ## Build and test
 
 ```bash
-mise install --locked        # pinned tools: buf, protoc, Python, cargo-deny, cargo-nextest
+mise install --locked        # pinned tools: buf, protoc, Python, cargo-deny, cargo-nextest, Helm, yq
 mise run ci                  # every check CI runs on a pull request (tasks/*.toml)
 cargo build                  # open-source build, no private features
 cargo nextest run            # full test suite

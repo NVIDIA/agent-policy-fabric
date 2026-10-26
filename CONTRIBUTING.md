@@ -226,6 +226,7 @@ mise run lint            # cargo fmt --check and cargo clippy -D warnings
 mise run test            # cargo nextest run
 mise run dag-guard       # crate dependency DAG
 mise run contracts:lint  # buf lint contracts/
+mise run chart:render    # Helm chart lint, render cases, packaged license
 ```
 
 For documentation-only changes, run the documentation checks below instead,

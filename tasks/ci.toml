@@ -29,6 +29,7 @@ depends = [
   "contracts:jsonschema",
   "contracts:lint",
   "contracts:vendor:check",
+  "chart:render",
 ]
 
 [all]
