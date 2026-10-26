@@ -319,6 +319,11 @@ release versions without changing source. Use an application version published
 for both service images. Packaging includes the license, generated README,
 values schema, and runtime templates, and excludes development/test files.
 
+The chart's `LICENSE` is a symbolic link to the repository's root `LICENSE`,
+so install or package the chart from a repository checkout. To copy the chart
+elsewhere, use `cp -RL` so the copy holds the license text rather than the
+link; Helm refuses to load a chart whose `LICENSE` link points nowhere.
+
 ## Chart validation
 
 ```sh
