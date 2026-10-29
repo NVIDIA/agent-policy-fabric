@@ -827,6 +827,34 @@ async fn main() -> anyhow::Result<()> {
                 event_tx.subscribe(),
             );
         }
+
+        // Sandbox-surface watcher: changes that touch only the sandbox
+        // projection (e.g. `network_middlewares` / egress) do not alter the
+        // apf.policy.v1 PolicySet digest, so the watcher above never observes
+        // them. Watch `openshell.sandbox.v1` on a dedicated event channel and
+        // drive a second refresher, so sandbox-policy-only changes still reach
+        // running sandboxes -- without triggering a Cedar evaluator rebuild.
+        if let (Some(gw_url), Some(key)) = (&args.openshell_gateway_url, &verifying_key) {
+            use apf_openshell_interceptor::refresher::{RefresherConfig, spawn_policy_refresher};
+            let (sandbox_event_tx, _sandbox_event_rx) = bundle_event_channel();
+            spawn_digest_watcher(
+                DigestWatcherConfig {
+                    document_kind: "openshell.sandbox.v1".to_string(),
+                    document_name: "default".to_string(),
+                    interval: Duration::from_secs(args.bundle_refresh_interval_secs),
+                },
+                policy_client.clone(),
+                sandbox_event_tx.clone(),
+            );
+            spawn_policy_refresher(
+                RefresherConfig {
+                    gateway_endpoint: gw_url.clone(),
+                    gateway_tls: None,
+                    verifying_key: Arc::clone(key),
+                },
+                sandbox_event_tx.subscribe(),
+            );
+        }
     }
 
     let eval_svc = EvaluationServiceServer::new(EvaluationServiceImpl {
