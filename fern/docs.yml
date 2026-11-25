@@ -15,6 +15,13 @@ title: NVIDIA Agent Policy Fabric
 
 global-theme: nvidia
 
+# Shows a GitHub button in the header of every page. It gives readers a way to
+# the source and gives search engines a link to the repository from each page.
+# The global theme replaces this list if the theme sets navbar links of its own.
+navbar-links:
+  - type: github
+    value: https://github.com/NVIDIA/agent-policy-fabric
+
 # Fail `fern check` on links that do not resolve to a page. Pages link to each
 # other's .mdx files, which Fern rewrites to page URLs at build time.
 check:
