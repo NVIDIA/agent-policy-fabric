@@ -30,6 +30,8 @@ and evaluated without a cloud round-trip on the hot path.
 
 ## Documentation
 
+The APF documentation is published at [docs.nvidia.com/agent-policy-fabric](https://docs.nvidia.com/agent-policy-fabric). Its source is in this repository:
+
 - [Developer guide](docs/index.mdx) — the APF documentation: overview, getting started, policy authoring, bundle management, OpenShell integration, operations, and reference. Navigation is defined in [docs/index.yml](docs/index.yml)
 - [Documentation contributor guide](docs/CONTRIBUTING.mdx) — conventions for writing and reviewing the developer guide
 - [AGENTS.md](AGENTS.md) — for agents and contributors working in this codebase
